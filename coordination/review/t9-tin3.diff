@@ -1,0 +1,1024 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 30cb84d3..132a720e 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,16 @@
+ # Changelog
+ 
++## 1.167.36
++
++Train 9, tin 3: display accuracy and direct-build mode.
++- Stage order: stage ids sort numerically (S1, S2, ..., S10) in the Cockpit stage rule and every stage list, instead of string order (S1, S10, S2);
++- Done 24h: the Hive reads real ticket completions from each project's ticket log (unique tickets marked done in the last 24 hours) and shows 0 when there were none, instead of an em dash;
++- Direct-build mode: a project entry with directBuild true hides its swarm ticket counts in the Hive and Cockpit (header, tiles and totals), is skipped by the needs-you inbox, and still appears as a project; needs-you also auto-hides superseded or cancelled ticket rows and blockers older than 48 hours;
++- Cancelled note: the Cockpit footer now states that cancelled tickets are not counted in the live ticket total or the percent (57 percent is 230 of 407, and the 407 already excludes the 13 cancelled); the Hive tooltip says live tickets;
++- Tests: numeric stage order, ticket-log done-24h count and snapshot sum, direct-build inbox/totals/card/Cockpit tiles, stale/superseded inbox filtering, and the cancelled note;
++- Hive ring: at window heights under 1000 px the ring shrinks (narrow-layout canvas 300 px; desktop stage capped) so the first row of project cards is visible without scrolling; large screens keep the full ring;
++- Version 1.167.36.
++
+ ## 1.167.35
+ 
+ Train 9, tin 2: one source for all counts.
+diff --git a/README.md b/README.md
+index adcf8d35..7ebe1cf8 100644
+--- a/README.md
++++ b/README.md
+@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
+ need to match the orchestrator. Paste this into your agent at project start:
+ 
+ ```text
+-Use Project Swarm 1.167.35 for this project. Read docs/kickoff.md in the toolkit
++Use Project Swarm 1.167.36 for this project. Read docs/kickoff.md in the toolkit
+ and perform its kickoff workflow. Ask me up front which model providers may
+ receive project code and what spend ceiling applies; wait before model calls.
+-Install from tag v1.167.35 in ~/.project-swarm, run tools/install.mjs --user,
++Install from tag v1.167.36 in ~/.project-swarm, run tools/install.mjs --user,
+ link this project, run doctor, validate and run the read-only and writing smoke
+ jobs, inspect and integrate the reviewed writing output. Read the installed
+ SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
+diff --git a/package-lock.json b/package-lock.json
+index 61310792..d8b5d4d2 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.35",
++  "version": "1.167.36",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "project-swarm",
+-      "version": "1.167.35",
++      "version": "1.167.36",
+       "license": "Apache-2.0",
+       "devDependencies": {
+         "acorn": "8.18.0",
+diff --git a/package.json b/package.json
+index 1f13457a..841300db 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.35",
++  "version": "1.167.36",
+   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
+   "private": true,
+   "type": "module",
+diff --git a/tests/board-inbox.test.mjs b/tests/board-inbox.test.mjs
+index 7f045fe5..9f6a12ea 100644
+--- a/tests/board-inbox.test.mjs
++++ b/tests/board-inbox.test.mjs
+@@ -412,3 +412,49 @@ test('feedback 5: test and temp projects are left out by default (lanes, totals,
+   assert.match(html, /id="scratch"/);
+   assert.match(await fs.readFile(path.join(assets, 'board.js'), 'utf8'), /scratch=1/);
+ });
++
++test('direct-build projects are omitted from needs-you inbox', async (t) => {
++  const home = await tmp(t);
++  const A = proj(home, 'shop');
++  const direct = { ...proj(home, 'parts'), directBuild: true };
++  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
++  const collect = async ([root]) => (root === A.root
++    ? [{ kind: 'human', id: 'h-1', title: 'Real task', steps: [], unblocks: 1, since: new Date(NOW).toISOString() }]
++    : [{ kind: 'human', id: 'h-2', title: 'Should not appear', steps: [], unblocks: 1, since: new Date(NOW).toISOString() }]);
++  const inbox = await boardInbox({ projects: [A, direct], now: NOW, collect, ledgerOf: async () => null, phoneDirectory: path.join(home, 'none') });
++  assert.deepEqual(inbox.items.map(i => i.id), ['h-1']);
++  assert.equal(inbox.total, 1);
++});
++
++test('needs-you auto-hide drops stale blockers and superseded ticket rows', async (t) => {
++  const home = await tmp(t);
++  const A = proj(home, 'a');
++  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
++  const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
++  const eightDaysAgo = new Date(NOW - 8 * 86400000).toISOString();
++  const threeDaysAgo = new Date(NOW - 3 * 86400000).toISOString();
++  const twoDaysAgo = new Date(NOW - 2 * 86400000).toISOString();
++  const oneDayAgo = new Date(NOW - 86400000).toISOString();
++  const ledger = createLedger({
++    scope,
++    tickets: [
++      tk('T-9001', 'superseded'),
++      tk('T-9002', 'blocked', { blockReason: 'manual', holdQuestion: 'Still need you?' }),
++    ],
++  });
++  ledger.updatedAt = twoDaysAgo;
++  await writeLedger(A.root, ledger);
++  const collect = async () => [
++    { kind: 'blocker', id: 'old-block', title: 'Stale', since: eightDaysAgo, unblocks: 0 },
++    { kind: 'blocker', id: 'block-3d', title: 'Three days', since: threeDaysAgo, unblocks: 0 },
++    { kind: 'blocker', id: 'block-1d', title: 'One day', since: oneDayAgo, unblocks: 0 },
++  ];
++  const inbox = await boardInbox({
++    projects: [A],
++    now: NOW,
++    collect,
++    ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null),
++    phoneDirectory: path.join(home, 'none'),
++  });
++  assert.deepEqual(inbox.items.map(i => i.id).sort(), ['T-9002', 'block-1d']);
++});
+diff --git a/tests/cc-cockpit-mount.test.mjs b/tests/cc-cockpit-mount.test.mjs
+index 706d3e96..7ddb5c3b 100644
+--- a/tests/cc-cockpit-mount.test.mjs
++++ b/tests/cc-cockpit-mount.test.mjs
+@@ -11,7 +11,7 @@ import {
+   orchestratorHeadState,
+   orchestratorCaption,
+ } from '../tools/watch-assets/cockpit-view.js';
+-import { emptyReadyExplanation, STAGE_COLOURS } from '../tools/watch-assets/cockpit-lists.js';
++import { emptyReadyExplanation, STAGE_COLOURS, renderStackSummaryTiles } from '../tools/watch-assets/cockpit-lists.js';
+ import { renderProjectCockpit } from '../tools/watch-assets/cc-cockpit-mount.js';
+ 
+ const NOW = Date.UTC(2026, 9, 26, 20, 0, 0);
+@@ -452,3 +452,78 @@ test('renderProjectCockpit view tabs use bare paths without window or defaultVie
+   view.destroy();
+   globalThis.document = prevDocument;
+ });
++
++test('cockpit footer explains cancelled tickets are outside live total and percent', async () => {
++  const board = fakeBoard({
++    counts: {
++      total: 407,
++      done: 230,
++      ready: 0,
++      review: 0,
++      blocked: 0,
++      todo: 177,
++      cancelled: 13,
++      proposed: 0,
++      superseded: 0,
++      remaining: 177,
++      percentDone: 57,
++      counted: 407,
++      needsYou: 0,
++      source: 'counts',
++    },
++    total: 407,
++    done: 230,
++    percentDone: 57,
++  });
++  const project = buildProjectCockpit(board, 'alpha');
++  const { document, host, mountRobotHead } = setup();
++  const prevDocument = globalThis.document;
++  globalThis.document = document;
++  const view = renderProjectCockpit(host, project, { document, now: () => NOW, glitch: () => false, mountRobotHead });
++  const foot = textOf(host.querySelector('.ck-foot span'));
++  assert.match(foot, /13 cancelled, not counted in the 407 live tickets or the percent/);
++  view.destroy();
++  globalThis.document = prevDocument;
++});
++
++test('direct-build cockpit hides headline swarm counts', async () => {
++  const board = fakeBoard({
++    directBuild: true,
++    counts: {
++      total: 407, done: 230, ready: 40, review: 0, blocked: 0, todo: 137,
++      cancelled: 13, proposed: 0, superseded: 0, remaining: 177, percentDone: 57, counted: 407,
++      needsYou: 0,
++      source: 'counts',
++    },
++    total: 407,
++    done: 230,
++    percentDone: 57,
++  });
++  const project = buildProjectCockpit(board, 'alpha');
++  assert.equal(project.directBuild, true);
++  const { document, host, mountRobotHead } = setup();
++  const prevDocument = globalThis.document;
++  globalThis.document = document;
++  const view = renderProjectCockpit(host, project, { document, now: () => NOW, glitch: () => false, mountRobotHead });
++  assert.match(textOf(host.querySelector('.sub2')), /SWARM COUNTS HIDDEN/);
++  assert.equal(host.querySelector('.cnt .v[data-k="tickets"]').textContent, '—');
++  assert.match(textOf(host.querySelector('.ck-foot span')), /direct build: swarm counts hidden/);
++  assert.equal(textOf(host.querySelector('.stack .n')), '—');
++  // renderStackSummaryTiles: label in children[0], count in children[1] (.cockpit-metric-tile)
++  const tileValues = Object.fromEntries(
++    host.querySelectorAll('.cc-cockpit-stack-tiles .cockpit-metric-tile').map(t => [
++      textOf(t.children[0]).toLowerCase(),
++      textOf(t.children[1]),
++    ]),
++  );
++  assert.equal(tileValues.ready, '0');
++  assert.equal(tileValues.review, '0');
++  assert.equal(tileValues.waiting, '0');
++  assert.equal(tileValues['to do'], '0');
++  assert.equal(tileValues.done, '0');
++  assert.equal(tileValues.running, undefined);
++  assert.notEqual(tileValues.ready, '40');
++  assert.notEqual(tileValues.done, '230');
++  view.destroy();
++  globalThis.document = prevDocument;
++});
+diff --git a/tests/cc-hive-mount.test.mjs b/tests/cc-hive-mount.test.mjs
+index 90217d30..8a658671 100644
+--- a/tests/cc-hive-mount.test.mjs
++++ b/tests/cc-hive-mount.test.mjs
+@@ -482,3 +482,67 @@ test('cc-hive.css scopes every selector under .hive-body or .hive-shell and load
+   }
+   assert.deepEqual(bad, []);
+ });
++
++test('cc-hive.css short viewport shrinks the ring without changing large-screen layout', async () => {
++  const css = await fs.readFile(hiveCssPath, 'utf8');
++  const narrowStart = css.indexOf('@media (max-height:1000px) and (max-width:1340px)');
++  const desktopStart = css.indexOf('@media (max-height:1000px) and (min-width:1341px)');
++  assert.ok(narrowStart >= 0, 'narrow short-viewport block');
++  assert.ok(desktopStart > narrowStart, 'desktop short-viewport block');
++  const narrow = css.slice(narrowStart, desktopStart);
++  const desktopEnd = css.indexOf('/* motion:', desktopStart);
++  const desktop = css.slice(desktopStart, desktopEnd >= 0 ? desktopEnd : undefined);
++  assert.match(narrow, /min\(100%,\s*300px\)/);
++  assert.match(narrow, /gap:\s*10px/);
++  assert.match(narrow, /padding:\s*2px\s+0\s+6px/);
++  assert.match(desktop, /clamp\(440px,\s*calc\(100vh\s*-\s*140px\),\s*680px\)/);
++});
++
++test('direct-build hive card hides swarm counts and percent tooltip names live tickets', async () => {
++  const dom = createFakeDom();
++  globalThis.document = dom.document;
++  await ensureHivePanels(dom.document);
++  const board = {
++    at: iso(NOW),
++    machine: { agents: { total: 0 } },
++    projects: [{
++      id: 'parts',
++      name: 'parts-request-app',
++      directBuild: true,
++      agents: { total: 1, jobs: { running: 1 } },
++      card: { blocked: { needYou: 0 }, now: { buildingTickets: 1 }, next: {} },
++      counts: {
++        total: 407, done: 230, ready: 0, blocked: 0, review: 0, todo: 177,
++        cancelled: 13, proposed: 0, superseded: 0, remaining: 177, percentDone: 57, counted: 407,
++      },
++    }],
++  };
++  const snap = buildCommandCenterSnapshot(board);
++  const { host, handle } = await mount(dom, snap);
++  const cardText = collectText(host.querySelector('.hive-node'));
++  assert.match(cardText, /direct build/i);
++  assert.doesNotMatch(cardText, /tickets407/i);
++  assert.doesNotMatch(cardText, /50%/);
++
++  const boardPct = {
++    at: iso(NOW),
++    machine: { agents: { total: 0 } },
++    projects: [{
++      id: 'swarm',
++      name: 'swarm',
++      card: { blocked: { needYou: 0 }, now: {}, next: {} },
++      counts: {
++        total: 407, done: 230, ready: 0, blocked: 0, review: 0, todo: 177,
++        cancelled: 13, proposed: 0, superseded: 0, remaining: 177, percentDone: 57, counted: 407,
++      },
++    }],
++  };
++  handle.destroy();
++  const snap2 = buildCommandCenterSnapshot(boardPct, { now: NOW });
++  const mounted = await mount(dom, snap2);
++  assert.match(collectText(mounted.host.querySelector('.hive-node')), /57%/);
++  const tipEl = mounted.host.querySelector('em[data-tip]');
++  assert.ok(tipEl, 'percent tooltip element');
++  assert.match(tipEl.getAttribute('data-tip') ?? '', /live tickets; cancelled not counted/);
++  mounted.handle.destroy();
++});
+diff --git a/tests/command-center-counts.test.mjs b/tests/command-center-counts.test.mjs
+index 0afd5aba..86f2ade4 100644
+--- a/tests/command-center-counts.test.mjs
++++ b/tests/command-center-counts.test.mjs
+@@ -167,3 +167,92 @@ test('stripped commandCenterLedger plus server counts: counts win for card shape
+   const fromLedger = mergeCardTicketCounts({ ...project, counts: undefined }, 0);
+   assert.notEqual(fromLedger?.total, 9, 'ledger fallback is distinguishable');
+ });
++
++test('direct-build project cards omit ticket totals and hive sums skip them', () => {
++  const board = {
++    at: '2026-10-26T12:00:00.000Z',
++    machine: { agents: { total: 0 } },
++    projects: [
++      {
++        id: 'swarm',
++        name: 'swarm',
++        directBuild: false,
++        card: { blocked: { needYou: 0 }, now: {}, next: {} },
++        counts: {
++          total: 10, done: 5, ready: 1, review: 0, blocked: 0, todo: 4,
++          cancelled: 0, proposed: 0, superseded: 0, remaining: 5, percentDone: 50, counted: 10,
++        },
++      },
++      {
++        id: 'parts',
++        name: 'parts-request-app',
++        directBuild: true,
++        card: { blocked: { needYou: 9 }, now: {}, next: { ready: 40 } },
++        counts: {
++          total: 400, done: 200, ready: 40, review: 0, blocked: 0, todo: 160,
++          cancelled: 0, proposed: 0, superseded: 0, remaining: 200, percentDone: 50, counted: 400,
++        },
++        agents: { total: 2 },
++      },
++    ],
++  };
++  const snap = buildCommandCenterSnapshot(board);
++  const parts = snap.projects.find(p => p.id === 'parts');
++  assert.equal(parts.lane, 'control');
++  assert.equal(parts.ticketCounts, undefined);
++  assert.equal(parts.percentDone, undefined);
++  assert.equal(snap.totals.tickets, 10);
++  assert.equal(snap.totals.done, 5);
++});
++
++test('hive.doneLast24h sums board project doneLast24h fields', () => {
++  const board = {
++    at: '2026-10-26T12:00:00.000Z',
++    machine: { agents: { total: 0 } },
++    projects: [{
++      id: 'p',
++      name: 'P',
++      doneLast24h: 3,
++      card: { blocked: { needYou: 0 }, now: {}, next: {} },
++      counts: { total: 1, done: 0, ready: 0, review: 0, blocked: 0, todo: 1, cancelled: 0, proposed: 0, superseded: 0, remaining: 1, percentDone: 0, counted: 1 },
++      ledger: { tickets: [{ id: 'T-1', status: 'done', doneAt: '2026-10-26T11:00:00.000Z' }] },
++    }],
++  };
++  const snap = buildCommandCenterSnapshot(board);
++  assert.equal(snap.hive.doneLast24h, 3);
++});
++
++test('hive extras omit direct-build doneLast24h and ticket events', () => {
++  const board = {
++    at: '2026-10-26T12:00:00.000Z',
++    machine: { agents: { total: 0 } },
++    projects: [
++      {
++        id: 'swarm',
++        name: 'Swarm',
++        doneLast24h: 3,
++        card: { blocked: { needYou: 0 }, now: {}, next: {} },
++        counts: {
++          total: 1, done: 0, ready: 0, review: 1, blocked: 0, todo: 0,
++          cancelled: 0, proposed: 0, superseded: 0, remaining: 1, percentDone: 0, counted: 1,
++        },
++        ledger: { tickets: [{ id: 'R-swarm', title: 'Swarm review', status: 'review' }] },
++      },
++      {
++        id: 'parts',
++        name: 'parts-request-app',
++        directBuild: true,
++        doneLast24h: 5,
++        agents: { total: 1 },
++        card: { blocked: { needYou: 0 }, now: {}, next: {} },
++        ledger: { tickets: [{ id: 'R-parts', title: 'Parts review', status: 'review' }] },
++      },
++    ],
++  };
++  const snap = buildCommandCenterSnapshot(board);
++  assert.equal(snap.hive.doneLast24h, 3, 'direct-build doneLast24h must not inflate the Hive counter');
++  const reviewEvents = snap.hive.events.filter(e => e.kind === 'review');
++  assert.equal(reviewEvents.length, 1);
++  assert.equal(reviewEvents[0].id, 'R-swarm');
++  assert.equal(reviewEvents[0].project, 'Swarm');
++});
+diff --git a/tests/command-center-lists.test.mjs b/tests/command-center-lists.test.mjs
+index 0b66c6f6..48a2a520 100644
+--- a/tests/command-center-lists.test.mjs
++++ b/tests/command-center-lists.test.mjs
+@@ -27,6 +27,7 @@ import {
+   stageColour,
+   STAGE_COLOURS,
+ } from '../tools/watch-assets/cockpit-lists.js';
++import { compareStageIds, stageRingProgress } from '../tools/watch-assets/cockpit-view.js';
+ import {
+   renderRunStream,
+   readRunStreamWrapStyle,
+@@ -365,3 +366,15 @@ test('ticket card helpers: short names, ages, states and stage colours', () => {
+   assert.equal(stageColour('S10'), STAGE_COLOURS[3]);
+   assert.equal(stageColour(undefined), STAGE_COLOURS[0]);
+ });
++
++test('stageRingProgress orders S1, S2, S10 numerically when stages come from ticket keys', () => {
++  const rings = stageRingProgress({
++    tickets: [
++      { id: 'T-1', status: 'todo', stage: 'S10' },
++      { id: 'T-2', status: 'todo', stage: 'S1' },
++      { id: 'T-3', status: 'todo', stage: 'S2' },
++    ],
++  });
++  assert.deepEqual(rings.map(r => r.id), ['S1', 'S2', 'S10']);
++  assert.deepEqual(['S1', 'S2', 'S10'].sort(compareStageIds), ['S1', 'S2', 'S10']);
++});
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index 5d48f842..a7bfe8e2 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.35', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.167.36', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.167.35');
++  assert.equal(pkg.version, '1.167.36');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.167\.35/);
+-  assert.match(readme, /Install from tag v1\.167\.35/);
++  assert.match(readme, /Use Project Swarm 1\.167\.36/);
++  assert.match(readme, /Install from tag v1\.167\.36/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.35\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.36\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index a091c9b6..6732555c 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.167.35', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.35 while 1.46.1 history remains', async () => {
++describe('release: 1.167.36', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.36 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.167.35');
+-    assert.equal(lock.version, '1.167.35');
+-    assert.equal(lock.packages[''].version, '1.167.35');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.35\n/);
++    assert.equal(pkg.version, '1.167.36');
++    assert.equal(lock.version, '1.167.36');
++    assert.equal(lock.packages[''].version, '1.167.36');
++    assert.match(changelog, /^# Changelog\n\n## 1\.167\.36\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index f7fa7539..01e671c9 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.35');
+-  assert.equal(lock.version, '1.167.35');
+-  assert.equal(lock.packages[''].version, '1.167.35');
++  assert.equal(pkg.version, '1.167.36');
++  assert.equal(lock.version, '1.167.36');
++  assert.equal(lock.packages[''].version, '1.167.36');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.35\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.36\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index dc7a6eb5..20d8a0c0 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.167.35 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.167.36 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.35');
+-  assert.equal(lock.version, '1.167.35');
+-  assert.equal(lock.packages[''].version, '1.167.35');
++  assert.equal(pkg.version, '1.167.36');
++  assert.equal(lock.version, '1.167.36');
++  assert.equal(lock.packages[''].version, '1.167.36');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.35\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.36\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.167.35',
++    'README.md': '1.167.36',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.167.35',
+-    'tests/field-lessons-batch-x.test.mjs': '1.167.35',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.35',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.35',
++    'tests/field-lesson-t80-cli.test.mjs': '1.167.36',
++    'tests/field-lessons-batch-x.test.mjs': '1.167.36',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.36',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.36',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index a04cb6a4..8021f9c4 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -366,14 +366,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.167.35', () => {
+-  test('package.json and package-lock.json are both at 1.167.35', async () => {
++describe('release: 1.167.36', () => {
++  test('package.json and package-lock.json are both at 1.167.36', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.167.35');
+-    assert.equal(lock.version, '1.167.35');
+-    assert.equal(lock.packages[''].version, '1.167.35');
++    assert.equal(pkg.version, '1.167.36');
++    assert.equal(lock.version, '1.167.36');
++    assert.equal(lock.packages[''].version, '1.167.36');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index c5474737..be481a40 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.167.35');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.35\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.167.36');
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.36\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
+diff --git a/tools/board-data.mjs b/tools/board-data.mjs
+index 2270673a..c0ad8281 100644
+--- a/tools/board-data.mjs
++++ b/tools/board-data.mjs
+@@ -614,7 +614,7 @@ export function ticketDoneAtMs(value) {
+   return Number.isFinite(at) ? at : NaN;
+ }
+ 
+-export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process.env } = {}) {
++async function familyRootsForTicketLog(roots, { env = process.env } = {}) {
+   const scanRoots = new Set();
+   const addRoot = async candidate => {
+     if (!candidate) return;
+@@ -626,7 +626,7 @@ export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process
+     try {
+       for (const member of await worktreeFamily(anchor, { all: true, env })) await addRoot(member);
+     } catch (error) {
+-      console.error('[tools/board-data.mjs] lastTicketFinishedAt worktreeFamily:', error?.message ?? error);
++      console.error('[tools/board-data.mjs] familyRootsForTicketLog worktreeFamily:', error?.message ?? error);
+     }
+     const scratch = env?.SWARM_SCRATCH_ROOT || env?.SWARM_SCRATCH_DIR;
+     if (scratch) {
+@@ -637,14 +637,43 @@ export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process
+           try {
+             if ((await fs.stat(candidate)).isDirectory()) await addRoot(candidate);
+           } catch (error) {
+-            if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] lastTicketFinishedAt scratch entry:', error?.message ?? error);
++            if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] familyRootsForTicketLog scratch entry:', error?.message ?? error);
+           }
+         }
+       } catch (error) {
+-        if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] lastTicketFinishedAt readdir scratch:', error?.message ?? error);
++        if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] familyRootsForTicketLog readdir scratch:', error?.message ?? error);
++      }
++    }
++  }
++  return scanRoots;
++}
++
++const DONE_LOG_FUTURE_MS = 5 * 60 * 1000;
++
++/** Unique ticket ids marked done in tickets.log within the last 24 hours (family roots, same scan as lastTicketFinishedAt). */
++export async function doneLast24hCount(roots, { now = Date.now(), env = process.env } = {}) {
++  let scanRoots;
++  try { scanRoots = await familyRootsForTicketLog(roots, { env }); } catch { return 0; }
++  const merged = new Map();
++  for (const root of scanRoots) {
++    try {
++      for (const [id, at] of await doneTimes(root)) {
++        const ms = ticketDoneAtMs(at);
++        if (id && Number.isFinite(ms)) merged.set(String(id), Math.max(merged.get(String(id)) ?? 0, ms));
+       }
++    } catch (error) {
++      if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] doneLast24hCount doneTimes:', error?.message ?? error);
+     }
+   }
++  const since = now - DAY;
++  const until = now + DONE_LOG_FUTURE_MS;
++  let count = 0;
++  for (const ms of merged.values()) if (ms >= since && ms <= until) count += 1;
++  return count;
++}
++
++export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process.env } = {}) {
++  const scanRoots = await familyRootsForTicketLog(roots, { env });
+   const doneIds = new Set();
+   for (const ledger of ledgers) for (const ticket of ledger?.tickets ?? []) if (ticket?.status === 'done' && ticket.id) doneIds.add(String(ticket.id));
+   let newest = 0;
+@@ -999,6 +1028,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
+   const agents = agentsOf(liveRunsForAgents, liveIds, now);
+   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
+   const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers, { env });
++  const doneLast24h = await doneLast24hCount(roots, { now, env });
+   const ticketFinishedMs = Date.parse(ticketFinishedAt ?? '') || 0;
+   const lastActivityMs = Math.max(
+     0,
+@@ -1047,6 +1077,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
+   const installedVersion = await swarmPackageVersion();
+   return {
+     id: project.id, name: txt(project.name, 80), root: project.root,
++    directBuild: Boolean(project.directBuild),
+     machine: os.hostname(),
+     version: installedVersion,
+     pinnedVersion,
+@@ -1066,6 +1097,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
+     lastRunAt: lastRun?.startedAt ?? null,
+     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
+     lastTicketFinishedAt: ticketFinishedAt,
++    doneLast24h,
+     checkouts: roots.length,
+     activity,
+     idle,
+@@ -1343,6 +1375,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
+   const pinnedVersion = await pinnedVersionFor(project.root);
+   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
+   const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers, { env });
++  const doneLast24h = await doneLast24hCount(roots, { now, env });
+   const progressFinished = progress?.finished ?? false;
+   const recentJobCounts = runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state?.jobs) ? r.state.jobs.length : 0));
+   let card = await buildWatchCard({
+@@ -1385,6 +1418,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
+   ).full;
+   return {
+     id: project.id, name: txt(project.name, 80), root: project.root,
++    directBuild: Boolean(project.directBuild),
+     machine: os.hostname(),
+     version: installedVersion,
+     pinnedVersion,
+@@ -1408,6 +1442,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
+     lastRunAt: lastRun?.startedAt ?? null,
+     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
+     lastTicketFinishedAt: ticketFinishedAt,
++    doneLast24h,
+     checkouts: roots.length,
+     untracked: untrackedOnDisk,
+     splitQuality: split,
+diff --git a/tools/board-inbox.mjs b/tools/board-inbox.mjs
+index fb6be4f5..c55b9086 100644
+--- a/tools/board-inbox.mjs
++++ b/tools/board-inbox.mjs
+@@ -31,6 +31,7 @@ const deadline = (promise, ms, label) => {
+ };
+ const quote = s => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`);
+ const MAX_PER_PROJECT = 50;
++const INBOX_BLOCKER_MAX_AGE_MS = 2 * 86400000;
+ const stepsOf = ({ commands, next }) => ({ commands, command: commands[0]?.cmd ?? null, next });
+ 
+ export function ticketReleaseAllowed(ticket, ledger) {
+@@ -123,6 +124,18 @@ function phoneRecordScratch(rec, scratchOpts) {
+   return isScratchRoot(root, { strict: true, ...scratchOpts });
+ }
+ 
++function hideStaleNeedsYouItem(item, ledger, now) {
++  if (item.kind === 'blocker' && item.since) {
++    const at = Date.parse(item.since);
++    if (Number.isFinite(at) && now - at > INBOX_BLOCKER_MAX_AGE_MS) return true;
++  }
++  const id = item?.id;
++  if (!id || !ledger?.tickets) return false;
++  const ticket = ledger.tickets.find(t => t?.id != null && String(t.id) === String(id));
++  if (!ticket) return false;
++  return ticket.status === 'superseded' || ticket.status === 'cancelled';
++}
++
+ export async function boardInbox({ projects, now = Date.now(), env = process.env, home = os.homedir(), collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS, ownerInbox, forOwner, phoneSyncDeps = null } = {}) {
+   const scratchOpts = { env, home: env.HOME ?? home };
+   const ownerProjects = filterScratchFromInbox(projects, ownerInbox, { forOwner, scratchOpts });
+@@ -143,6 +156,7 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
+   const problems = [];
+   // Every project is read at the same time with its own time limit: one that hangs is named and does not hold up the rest.
+   const perProject = await Promise.all(ownerProjects.map(async project => {
++    if (project.directBuild) return { project, mine: [] };
+     const read = async () => {
+       const mine = [];
+       for (const it of await collect([project.root], deps)) {
+@@ -202,9 +216,13 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
+           phone: null,
+         });
+       }
+-      return mine;
++      return { mine, ledger };
+     };
+-    try { return { project, mine: await deadline(read(), projectMs, `reading ${project.name}`) }; }
++    try {
++      const { mine: collected, ledger } = await deadline(read(), projectMs, `reading ${project.name}`);
++      const mine = collected.filter(it => !hideStaleNeedsYouItem(it, ledger, now));
++      return { project, mine };
++    }
+     catch (error) { problems.push({ project: txt(project.name, 80), problem: txt(error.message, 120) }); return { project, mine: [] }; }
+   }));
+   const items = [];
+diff --git a/tools/command-center-snapshot.mjs b/tools/command-center-snapshot.mjs
+index e390c540..d2217edb 100644
+--- a/tools/command-center-snapshot.mjs
++++ b/tools/command-center-snapshot.mjs
+@@ -20,6 +20,7 @@ function textField(label, value, source, explanation) {
+ }
+ 
+ function projectLane(p) {
++  if (p.directBuild) return 'control';
+   if ((p.card?.blocked?.needYou ?? 0) > 0) return 'safety';
+   if ((p.card?.now?.buildingTickets ?? 0) > 0) return 'context';
+   if ((p.readyTickets ?? 0) > 0) return 'route';
+@@ -172,6 +173,19 @@ function buildProjectCard(p, index) {
+     name: p.name ?? null,
+     lane: projectLane(p),
+   };
++  if (p.directBuild) {
++    card.directBuild = true;
++    const live = field('Live agents', p.agents?.total, 'count', `${prefix}.agents.total`, 'Running agent jobs in live runs for this project.');
++    if (live) card.liveAgents = live;
++    if (typeof p.machine === 'string' && p.machine.length) {
++      card.machine = textField('Machine', p.machine, `${prefix}.machine`, 'Host name where this project root lives.');
++    }
++    const out = p.agents?.jobs?.running;
++    if (typeof out === 'number' && Number.isFinite(out)) {
++      card.out = textField('Out', String(out), `${prefix}.agents.jobs.running`, 'Agent jobs currently running for this project.');
++    }
++    return card;
++  }
+   const live = field('Live agents', p.agents?.total, 'count', `${prefix}.agents.total`, 'Running agent jobs in live runs for this project.');
+   if (live) card.liveAgents = live;
+   const need = field('Needs you', p.card?.blocked?.needYou, 'count', `${prefix}.card.blocked.needYou`, 'Inbox items waiting for the owner on this project.');
+@@ -284,16 +298,24 @@ function openPrs(board) {
+ /** Server-side extras for the Hive panels; every key is left out when the board payload cannot back it. */
+ function buildHiveExtras(board, projects, nowMs) {
+   const hive = {};
+-  const hours = throughput24h(projects, nowMs);
+-  if (hours) {
+-    hive.throughput24h = hours;
+-    hive.doneLast24h = hours.reduce((a, v) => a + v, 0);
++  const swarmProjects = projects.filter(p => !p.directBuild);
++  const hours = throughput24h(swarmProjects, nowMs);
++  if (hours) hive.throughput24h = hours;
++  let doneSum = 0;
++  let anyDoneLast24h = false;
++  for (const p of swarmProjects) {
++    if (typeof p?.doneLast24h === 'number' && Number.isFinite(p.doneLast24h)) {
++      doneSum += p.doneLast24h;
++      anyDoneLast24h = true;
++    }
+   }
++  if (anyDoneLast24h) hive.doneLast24h = doneSum;
++  else if (hours) hive.doneLast24h = hours.reduce((a, v) => a + v, 0);
+   const lanes = laneStats(board);
+   if (lanes) hive.lanes = lanes;
+   const prs = openPrs(board);
+   hive.prs = prs;
+-  const events = hiveEvents(projects, prs, nowMs);
++  const events = hiveEvents(swarmProjects, prs, nowMs);
+   if (events.length) hive.events = events;
+   return hive;
+ }
+@@ -429,6 +451,7 @@ export function buildProjectCockpit(board, projectId) {
+   return {
+     id: project.id,
+     name: project.name ?? null,
++    directBuild: Boolean(project.directBuild),
+     ledger,
+     sessions: project.orchestrator?.sessions ?? [],
+     meta: {
+diff --git a/tools/watch-assets/cc-cockpit-mount.js b/tools/watch-assets/cc-cockpit-mount.js
+index 9ecfc9fd..534e98d0 100644
+--- a/tools/watch-assets/cc-cockpit-mount.js
++++ b/tools/watch-assets/cc-cockpit-mount.js
+@@ -92,6 +92,15 @@ function serverCounts(project) {
+ 
+ /** Header counters, each with the ledger field it is read from. */
+ function headerCounters(project, rowCounts) {
++  const directBuild = project?.directBuild === true;
++  if (directBuild) {
++    return [
++      { label: 'tickets', value: '—', tip: 'Swarm ticket counts hidden for direct-build projects.' },
++      { label: 'agents', value: rowCounts.running, color: rowCounts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
++      { label: 'done', value: '—', color: 'var(--blue)', tip: 'Swarm ticket counts hidden for direct-build projects.' },
++      { label: 'need you', value: '—', color: '', tip: 'Swarm ticket counts hidden for direct-build projects.' },
++    ];
++  }
+   const c = serverCounts(project);
+   if (c) {
+     const needsYou = typeof c.needsYou === 'number' && Number.isFinite(c.needsYou)
+@@ -611,14 +620,15 @@ export function renderProjectCockpit(host, project, deps) {
+     paintSignature = signature;
+     const ledger = p?.ledger ?? { tickets: [] };
+     const headline = serverCounts(p);
++    const directBuild = p?.directBuild === true;
+     const model = renderCockpit(titleHost, {
+       ledger,
+       sessions: p?.sessions ?? [],
+       meta: p?.meta ?? {},
+       name: p?.name,
+       id: p?.id,
+-      done: headline?.done ?? p?.done,
+-      total: headline?.total ?? p?.total,
++      done: directBuild ? 0 : (headline?.done ?? p?.done),
++      total: directBuild ? 0 : (headline?.total ?? p?.total),
+     }, { now: at });
+     const readyFn = projectReadyFn(p);
+     // one ordered ledger list drives both columns, the NOW card, the header, the stream count and the stack
+@@ -627,7 +637,7 @@ export function renderProjectCockpit(host, project, deps) {
+     const orch = model.orchestrator;
+     const allDone = model.total > 0 && model.done >= model.total;
+     const cats = cockpitCategories(ledger);
+-    const stackCounts = headline ? {
++    let stackCounts = headline ? {
+       ready: headline.ready,
+       running: columns.counts.running,
+       review: headline.review,
+@@ -637,12 +647,28 @@ export function renderProjectCockpit(host, project, deps) {
+       cancelled: headline.cancelled,
+       proposed: headline.proposed ?? 0,
+     } : columns.counts;
++    if (directBuild) {
++      stackCounts = {
++        ready: 0,
++        running: 0,
++        review: 0,
++        blocked: 0,
++        todo: 0,
++        done: 0,
++        cancelled: 0,
++        proposed: 0,
++      };
++    }
+     // the NOW RUNNING card, the highlighted row and the dotted path all follow this one ticket
+     const lead = columns.left[0];
+     activeId = lead && ['running', 'ready'].includes(lead.state) ? lead.ticket.id : null;
+ 
+     text(crumbProject, model.name);
+     paintCounters(headerCounters(p, counts));
++    if (directBuild) {
++      const sub2 = titleHost.querySelector('.sub2');
++      if (sub2) text(sub2, '— · SWARM COUNTS HIDDEN');
++    }
+     text(metaDate, utcDate(at));
+ 
+     patchPanel(colL, col => columns.left.length
+@@ -662,7 +688,7 @@ export function renderProjectCockpit(host, project, deps) {
+     patchPanel(wgrid, host => renderWorkerCards(host, cards));
+     text(wCount, cards.length ? `${cards.length} LATEST · ${stackCounts.done} DONE` : '0 DONE');
+ 
+-    text(stackN, model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS');
++    text(stackN, directBuild ? '—' : (model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS'));
+     text(stackSub, cats.field && cats.names.length
+       ? cats.names.join(' / ')
+       : 'no lane or type recorded on these tickets');
+@@ -677,7 +703,12 @@ export function renderProjectCockpit(host, project, deps) {
+     const big = Math.max(...tiles.map(t => t.value));
+     for (const t of tiles) t.hi = big > 0 && t.value === big;
+     patchPanel(tilesHost, host => renderStackSummaryTiles(host, tiles));
+-    text(footNote, `${stackCounts.cancelled} cancelled, left out of the percent${stackCounts.proposed ? ` · ${stackCounts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
++    const liveTotal = headline?.total ?? model.total;
++    const cancelClause = stackCounts.cancelled > 0
++      ? `${stackCounts.cancelled} cancelled, not counted in the ${liveTotal} live tickets or the percent · `
++      : '';
++    const directFoot = directBuild ? 'direct build: swarm counts hidden · ' : '';
++    text(footNote, `${directFoot}${cancelClause}${stackCounts.proposed ? `${stackCounts.proposed} proposed, not counted · ` : ''}data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
+ 
+     layoutWire();
+     if (firstPaint) {
+diff --git a/tools/watch-assets/cc-hive-mount.js b/tools/watch-assets/cc-hive-mount.js
+index ed394a37..583025e5 100644
+--- a/tools/watch-assets/cc-hive-mount.js
++++ b/tools/watch-assets/cc-hive-mount.js
+@@ -852,7 +852,7 @@ export function renderHive(host, snapshot, deps) {
+     const defs = [
+       ['projects', 'Registered top-level projects on this board.', 'stats.projectsTotal'],
+       ['agents', 'Workers running right now, from the run folders.', 'stats.agentsLive'],
+-      ['done 24h', 'Tickets the ledger marks done in the last 24 hours (some are bulk marks of work merged earlier).', 'hive.doneLast24h'],
++      ['done 24h', 'Tickets marked done in the last 24 hours from the project tickets log (when the board reports doneLast24h).', 'hive.doneLast24h'],
+       ['need you', 'Open items waiting for you on the board.', 'stats.needsYouCount'],
+     ];
+     const els = {};
+@@ -930,6 +930,7 @@ export function renderHive(host, snapshot, deps) {
+   }
+ 
+   function buildCard(p, index) {
++    const directBuild = p.raw?.directBuild === true;
+     const card = h(doc, 'div', 'hive-card hive-node');
+     card.style.setProperty('--c', p.color);
+     card.tabIndex = 0;
+@@ -955,7 +956,14 @@ export function renderHive(host, snapshot, deps) {
+     const pills = h(doc, 'span', 'pills');
+     if (p.needs > 0) pills.appendChild(h(doc, 'b', 'hive-pill hive-pill--need', `${p.needs} need you`));
+     if (p.agents > 0) pills.appendChild(h(doc, 'b', 'hive-pill hive-pill--live', `${p.agents} live`));
+-    if (c) {
++    if (directBuild) {
++      bd.appendChild(h(doc, 'p', 'hive-muted', 'direct build'));
++      if (pills.firstChild) {
++        const row = h(doc, 'div', 'r');
++        row.appendChild(pills);
++        bd.appendChild(row);
++      }
++    } else if (c) {
+       const rows = [
+         ['tickets', c.total],
+         ['done', `${c.done} of ${p.counted}`],
+@@ -969,7 +977,7 @@ export function renderHive(host, snapshot, deps) {
+         if (i === 0 && pills.firstChild) row.appendChild(pills);
+         bd.appendChild(row);
+       });
+-    } else {
++    } else if (!directBuild) {
+       bd.appendChild(h(doc, 'p', 'hive-muted', 'no ledger numbers yet'));
+       if (pills.firstChild) {
+         const row = h(doc, 'div', 'r');
+@@ -977,7 +985,7 @@ export function renderHive(host, snapshot, deps) {
+         bd.appendChild(row);
+       }
+     }
+-    if (p.pct !== null) {
++    if (!directBuild && p.pct !== null) {
+       // p(done) / bar / value, like the target's p(label) rows; the percent stays readable for screen readers.
+       const pb = h(doc, 'div', 'pb');
+       pb.appendChild(h(doc, 'b', null, 'p(done)'));
+@@ -988,7 +996,7 @@ export function renderHive(host, snapshot, deps) {
+       pb.appendChild(track);
+       const em = h(doc, 'em', 'has-tip', padPct(p.pct));
+       em.setAttribute('tabindex', '0');
+-      em.setAttribute('data-tip', `${p.pct}% done: done divided by tickets that still count (cancelled left out).`);
++      em.setAttribute('data-tip', `${p.pct}% done: done divided by live tickets; cancelled not counted.`);
+       pb.appendChild(em);
+       pb.appendChild(h(doc, 'span', 'hive-sr', `${p.pct}% done`));
+       bd.appendChild(pb);
+diff --git a/tools/watch-assets/cc-hive.css b/tools/watch-assets/cc-hive.css
+index 8d11bb79..2bcc72e0 100644
+--- a/tools/watch-assets/cc-hive.css
++++ b/tools/watch-assets/cc-hive.css
+@@ -260,6 +260,14 @@
+   .hive-shell .hive-nav{min-width:min(220px,calc(100vw - 32px))}
+ }
+ 
++@media (max-height:1000px) and (max-width:1340px){
++  .hive-shell .hive-stage{gap:10px;padding:2px 0 6px}
++  .hive-shell .hive-stage canvas{width:min(100%,300px)}
++}
++@media (max-height:1000px) and (min-width:1341px){
++  .hive-shell .hive-stage{height:clamp(440px,calc(100vh - 140px),680px)}
++}
++
+ /* motion: off when the tab is hidden (the loop stops), paused by the user, or reduced motion is requested */
+ .hive-body.motion-off *,.hive-body.motion-off *::before,.hive-body.motion-off *::after{animation:none!important;transition:none!important}
+ @media (prefers-reduced-motion:reduce){.hive-body *,.hive-body *::before,.hive-body *::after{animation:none!important;transition:none!important}}
+diff --git a/tools/watch-assets/cockpit-view.js b/tools/watch-assets/cockpit-view.js
+index 6d5265ea..c9b34662 100644
+--- a/tools/watch-assets/cockpit-view.js
++++ b/tools/watch-assets/cockpit-view.js
+@@ -128,6 +128,15 @@ export function orchestratorCaption(label, allDone) {
+   return l ? `${l.toUpperCase()} · NO SESSION ACTIVE` : 'NO SESSION ACTIVE';
+ }
+ 
++export function compareStageIds(a, b) {
++  const ma = /^S(\d+)$/.exec(String(a ?? ''));
++  const mb = /^S(\d+)$/.exec(String(b ?? ''));
++  if (ma && mb) return Number(ma[1]) - Number(mb[1]) || String(a).localeCompare(String(b));
++  if (ma) return -1;
++  if (mb) return 1;
++  return String(a).localeCompare(String(b));
++}
++
+ export function stageRingProgress(ledger) {
+   const tickets = (ledger?.tickets ?? []).filter(t => !HIDDEN_STATUSES.includes(t.status));
+   const byStage = {};
+@@ -142,7 +151,9 @@ export function stageRingProgress(ledger) {
+     : Array.isArray(ledger?.stages)
+       ? ledger.stages
+       : [];
+-  const ids = stages.length ? stages.map(s => (typeof s === 'string' ? s : s.id)).filter(Boolean) : Object.keys(byStage).filter(k => k !== 'none').sort();
++  const ids = stages.length
++    ? stages.map(s => (typeof s === 'string' ? s : s.id)).filter(Boolean).sort(compareStageIds)
++    : Object.keys(byStage).filter(k => k !== 'none').sort(compareStageIds);
+   return ids.map(id => {
+     const row = byStage[id] ?? { total: 0, done: 0 };
+     const total = row.total || 0;

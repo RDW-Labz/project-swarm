@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-stale48",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Change the needs-you blocker staleness rule for the 1.167.36 release from 7 days to 48 hours. In tools/board-inbox.mjs set INBOX_BLOCKER_MAX_AGE_MS to 2 * 86400000 (48 hours). Keep the existing scope: only blocker items are age-filtered; held and proposed items are never hidden by age, only when their ledger ticket is superseded or cancelled. In tests/board-inbox.test.mjs extend the auto-hide test so a 3-day blocker is hidden, a 1-day blocker stays, and a 2-day held ticket stays (the existing 8-day blocker remains hidden). In CHANGELOG.md change the 1.167.36 bullet phrase \"blockers older than 7 days\" to \"blockers older than 48 hours\"; change nothing else. Verify: node --import ./tests/_isolate-config.mjs --test tests/board-inbox.test.mjs -> pass.",
+      "context": [
+        "tools/board-inbox.mjs",
+        "tests/board-inbox.test.mjs",
+        "CHANGELOG.md",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/board-inbox.mjs",
+        "tests/board-inbox.test.mjs",
+        "CHANGELOG.md"
+      ],
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/update.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/registry-round2.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/t101-release.test.mjs"
+      ],
+      "ignoreTestsReason": "Focused inbox test runs here; the listed suites run in the full suite after integration.",
+      "timeoutMs": 900000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-stale48",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/board-inbox.test.mjs"
+      ]
+    }
+  ]
+}
