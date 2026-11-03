@@ -362,7 +362,8 @@ export function buildCommandCenterSnapshot(board, options = {}) {
   const nowMs = Number.isFinite(Date.parse(at)) ? Date.parse(at) : (options.now ?? Date.now());
   const machines = Array.isArray(board?.machines) ? board.machines : null;
   const drift = board?.drift && typeof board.drift === 'object' && !Array.isArray(board.drift) ? board.drift : null;
-  return { at, stats, projects: cards, totals, machines, drift, hive: buildHiveExtras(board, projects, nowMs) };
+  const machineRegistry = board?.machineRegistry && typeof board.machineRegistry === 'object' && !Array.isArray(board.machineRegistry) ? board.machineRegistry : null;
+  return { at, stats, projects: cards, totals, machines, machineRegistry, drift, hive: buildHiveExtras(board, projects, nowMs) };
 }
 
 /** Update only changed cards; aggregates are cheap reductions over the cached rows. */

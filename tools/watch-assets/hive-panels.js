@@ -962,6 +962,9 @@
       if (!m || typeof m !== 'object') { continue; }
       var label = m.name ? String(m.name) : 'unknown';
       if (m.version) { label += ' ' + versionDisplay(m.version); }
+      if (m.slots !== undefined) { label += ' · ' + m.slots + ' slots'; }
+      if (m.freeDiskGb !== undefined) { label += ' · ' + m.freeDiskGb + ' GB'; }
+      if (m.state) { label += ' · ' + m.state; }
       if (m.ok === false) { label += ' (unreachable)'; }
       parts.push(label);
     }
@@ -1078,6 +1081,21 @@
         if (seen[key]) { continue; }
         seen[key] = true;
         machines.push({ name: host, version: ver, ok: true, error: null });
+      }
+    }
+    var registryView = snap.machineRegistry && typeof snap.machineRegistry === 'object' && !Array.isArray(snap.machineRegistry) ? snap.machineRegistry : null;
+    if (registryView && Array.isArray(registryView.machines)) {
+      for (var ri = 0; ri < registryView.machines.length; ri += 1) {
+        var reg = registryView.machines[ri];
+        if (!reg || typeof reg !== 'object' || !reg.name) { continue; }
+        var target = null;
+        for (var mj = 0; mj < machines.length; mj += 1) { if (machines[mj].name === reg.name) { target = machines[mj]; break; } }
+        if (!target) { target = { name: String(reg.name), version: '', ok: reg.health !== 'unreachable', error: reg.health === 'unreachable' ? 'unreachable' : null, projectCount: null }; machines.push(target); }
+        if (reg.role && reg.role !== 'brain') { target.role = reg.role; }
+        if (typeof reg.slots === 'number') { target.slots = reg.slots; }
+        if (typeof reg.freeDiskGb === 'number') { target.freeDiskGb = reg.freeDiskGb; }
+        if (reg.health && reg.health !== 'ok') { target.ok = false; target.error = reg.health; }
+        if (reg.state) { target.state = reg.state; }
       }
     }
     var drift = snap.drift && typeof snap.drift === 'object' && !Array.isArray(snap.drift) ? snap.drift : null;
