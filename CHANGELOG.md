@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.167.38
+
+Train 9 upgrade A: one board for both Macs, machine tags everywhere.
+- The Command Center carries the board machines and versions: project cards, ticket events and the Cockpit title show the machine and version; the Hive machines line lists every machine with its version, marks unreachable peers and flags version drift;
+- Remote projects from a tailnet peer board keep their own machine tag and drift state; local totals stay this machine only; the peer list and merge are unchanged;
+- Tests: snapshot machines/drift; two-machine Hive cards, machines line and session-log tags; Cockpit title tag; peer merge still green;
+- Machine harness: `swarm machine add/login/doctor/list/remove`, pull-based workers with leases and heartbeats, brain move/lock/failover, lane plugins (claude, codex, gemini, opencode, cursor), brain repo mirrors, measured-only Machines view; see `docs/machines.md`;
+- Version 1.167.38.
+
 ## 1.167.37
 
 Train 9 hotfix: the Cockpit ticket-stack stage list sorts numerically.
