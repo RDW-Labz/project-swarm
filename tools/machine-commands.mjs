@@ -994,7 +994,7 @@ export async function runWorkerCommand(args, deps = {}) {
       const result = await iteration();
       return out(`${JSON.stringify(result)}\n`);
     }
-    process.stdout.write(`worker ${name}: pulling from ${brain.user}@${brain.host}\n`);
+    process.stdout.write(`worker ${name}: pulling from ${firstBrain.user}@${firstBrain.host}\n`);
     for (;;) {
       const result = await iteration();
       process.stdout.write(`${new Date().toISOString()} ${result.action}${result.reason ? ` ${result.reason}` : ''}${result.item ? ` ${result.item.id}` : ''}\n`);
