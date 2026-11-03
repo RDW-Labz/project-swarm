@@ -34,7 +34,7 @@ export const MACHINE_USAGE = [
   '  swarm brain move <name> [--force] | swarm brain watch | swarm brain status',
   '  swarm worker queue add <manifest> [--project P] [--lane L] | queue list | sweep',
   '  swarm worker next --lanes a,b | claim ID --holder H | renew ID --holder H | report ID --holder H --report B',
-  '  swarm worker run [--once] | install | uninstall | status',
+  '  swarm worker run [--once] | install | status | bench <manifest> [--workers N]',
 ].join('\n') + '\n';
 
 export const WORKER_USAGE = [
@@ -861,6 +861,7 @@ export async function runMachineCommand(root, args, deps = {}) {
   if (command === 'doctor') return runMachineDoctor(rest, deps);
   if (command === 'list') return runMachineList(rest, deps);
   if (command === 'remove') return runMachineRemove(rest, deps);
+  if (command === 'bench') return runWorkerCommand(['bench', ...rest], deps);
   if (command === 'remote' && rest[0] === 'setup') return runRemoteSetup(rest.slice(1), deps);
   return bad(MACHINE_USAGE);
 }
