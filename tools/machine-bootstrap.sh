@@ -2,6 +2,7 @@
 # Idempotent worker bootstrap used by `swarm machine add`. Safe to run again.
 set -uo pipefail
 
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$HOME/.local/bin:$PATH"
 NAME="${SWARM_MACHINE_NAME:?missing machine name}"
 MODE="${SWARM_MACHINE_MODE:-worker}"
 BRAIN_HOST="${SWARM_BRAIN_HOST:-}"

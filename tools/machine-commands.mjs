@@ -141,7 +141,7 @@ export async function runBootstrap({ target, key, name, role, brainHost, brainUs
     `export SWARM_BRAIN_USER=${JSON.stringify(brainUser ?? '')}`,
   ].join('\n');
   const script = `${head}\n${await readBootstrapScript()}`;
-  const argv = sshCommandArgv(target, 'bash -s', { key, tty: true });
+  const argv = sshCommandArgv(target, 'bash -s', { key, tty: false });
   let buffer = '';
   const onData = onProgress ? chunk => {
     buffer += chunk;
@@ -355,7 +355,7 @@ export async function lockSshToKey({ target, key, run = defaultRunInput } = {}) 
     'sudo launchctl kickstart -k system/com.openssh.sshd >/dev/null 2>&1 || true',
     'echo SSH_KEY_ONLY',
   ].join('\n');
-  const argv = sshCommandArgv(target, 'bash -s', { key, tty: true });
+  const argv = sshCommandArgv(target, 'bash -s', { key, tty: false });
   const result = await run(argv[0], argv.slice(1), { input: `${script}\n`, timeout: 60000 });
   const stdout = String(result.stdout ?? '');
   if (/SSH_KEY_ONLY/.test(stdout)) return { keyOnly: true };
