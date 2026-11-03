@@ -123,6 +123,21 @@ if command -v cursor-agent >/dev/null 2>&1; then ok "cursor-agent"; else
   if command -v curl >/dev/null 2>&1; then curl -fsS https://cursor.com/install | bash >/dev/null 2>&1 && ok "cursor-agent" || warn "cursor-agent install failed"; else warn "cursor-agent missing and curl not found"; fi
 fi
 
+step "swarm CLI"
+if [ -f "$HOME/.project-swarm/current/tools/swarm.mjs" ]; then
+  mkdir -p "$HOME/.local/bin"
+  NODE_BIN="$(command -v node 2>/dev/null || true)"
+  if [ -n "$NODE_BIN" ]; then
+    printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$NODE_BIN" "$HOME/.project-swarm/current/tools/swarm.mjs" > "$HOME/.local/bin/swarm"
+    chmod +x "$HOME/.local/bin/swarm"
+    ok "swarm CLI at ~/.local/bin/swarm"
+  else
+    warn "node not found; swarm CLI not installed"
+  fi
+else
+  warn "runner not present at ~/.project-swarm/current; swarm CLI not installed"
+fi
+
 step "worker folders"
 mkdir -p "$HOME/swarm-worker/repos" "$HOME/swarm-worker/worktrees" "$HOME/swarm-worker/logs"
 ok "$HOME/swarm-worker"
