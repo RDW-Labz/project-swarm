@@ -289,9 +289,11 @@ export async function probeMachine(name, { registry, run = defaultRunInput, home
   const addresses = await localAddresses({ run: defaultRun }).catch(() => ({}));
   const localNames = new Set([os.hostname(), os.hostname().replace(/\.local$/, ''), addresses.ip, addresses.tailscaleHost].filter(Boolean));
   if (localNames.has(machine.host) || (machine.ip && localNames.has(machine.ip))) {
-    return { ...machine, ...(await probeLocal({ run: defaultRun, home, env, now })) };
+    const local = await probeLocal({ run: defaultRun, home, env, now });
+    return { ...machine, ...local, host: machine.host, ip: machine.ip ?? machine.host };
   }
-  return { ...machine, ...(await probeRemote({ ...machine, key: path.join(home, '.ssh', 'swarm_ed25519') }, { run, now })) };
+  const probed = await probeRemote({ ...machine, key: path.join(home, '.ssh', 'swarm_ed25519') }, { run, now });
+  return { ...machine, ...probed, host: machine.host, ip: machine.ip ?? machine.host };
 }
 
 export function doctorLines(machine, { laneChecks = true } = {}) {
