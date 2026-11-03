@@ -2,7 +2,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 export const DEFAULT_WORKER_LEASE_MS = 15 * 60 * 1000;
 export const MIN_FREE_DISK_GB = 20;
@@ -134,9 +134,10 @@ export async function readWorkerQueue({ file = workerQueueFile(), env, home } = 
   return readQueue(file);
 }
 
-export function itemId(manifestPath, jobId) {
+export function itemId(manifestPath, jobId, project = '') {
   const base = path.basename(String(manifestPath)).replace(/[^A-Za-z0-9._-]+/g, '-');
-  return `${base}:${jobId}`.slice(0, 120);
+  const digest = createHash('sha256').update(`${project}\0${path.resolve(String(manifestPath))}\0${jobId}`).digest('hex').slice(0, 16);
+  return `${String(project).replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 32) || 'project'}-${base}:${jobId}-${digest}`.slice(0, 160);
 }
 
 export async function enqueueManifest({ manifestPath, manifest, project, laneOverride = null, file = workerQueueFile(), env, home, now = Date.now } = {}) {
@@ -150,7 +151,7 @@ export async function enqueueManifest({ manifestPath, manifest, project, laneOve
   const added = [];
   for (const job of data.jobs) {
     if (!job || typeof job.id !== 'string' || !job.id) continue;
-    const id = itemId(manifestPath, job.id);
+    const id = itemId(manifestPath, job.id, project);
     if (queue.items[id] && queue.items[id].status !== 'failed') continue;
     queue.items[id] = {
       id,
@@ -160,7 +161,7 @@ export async function enqueueManifest({ manifestPath, manifest, project, laneOve
       lane: laneOverride ?? job.agent,
       model: job.model ?? null,
       title: job.title ?? job.prompt?.slice(0, 80) ?? job.id,
-      manifestData: data,
+      manifestData: laneOverride ? { ...data, jobs: data.jobs.map(entry => entry.id === job.id ? { ...entry, agent: laneOverride } : entry) } : data,
       status: 'queued',
       attempts: 0,
       lease: null,
@@ -211,14 +212,22 @@ export async function nextWorkerItem({ lanes = [], machine = null, file = worker
   return candidates[0] ?? null;
 }
 
-export async function claimWorkerItem(id, holder, { file = workerQueueFile(), env, home, now = Date.now, leaseMs = DEFAULT_WORKER_LEASE_MS } = {}) {
+export async function claimWorkerItem(id, holder, { file = workerQueueFile(), env, home, now = Date.now, leaseMs = DEFAULT_WORKER_LEASE_MS, machine = null, lanes = null, lanesFile } = {}) {
+  const lanesFileResolved = lanesFile ?? workerLanesFile({ env, home });
   if (typeof holder !== 'string' || !holder.trim()) throw fail('worker-holder-invalid', 'a worker holder is required');
+  if (await workerQueuePaused({ file: workerPauseFile({ env, home }) })) throw fail('worker-queue-paused', 'the worker queue is paused');
   const queue = await readQueue(file);
   const at = now();
   normalizeExpired(queue, at);
   const item = queue.items[id];
   if (!item) throw fail('worker-item-unknown', `no work item ${id}`);
   if (item.status !== 'queued') throw fail('worker-lease-held', `${id} is ${item.status}`);
+  if (Array.isArray(lanes) && item.lane && !lanes.includes(item.lane)) throw fail('worker-lane-mismatch', `${id} needs lane ${item.lane}`);
+  if (machine && item.lane) {
+    const health = await readCooldowns(lanesFileResolved);
+    const entry = health.lanes[cooldownKey(machine, item.lane)];
+    if (entry && Date.parse(entry.until) > at) throw fail('worker-lane-cooling', `${item.lane} is cooling on ${machine}`);
+  }
   item.status = 'leased';
   item.lease = { holder, expiresAt: new Date(at + leaseMs).toISOString() };
   item.attempts = (item.attempts ?? 0) + 1;
@@ -244,7 +253,8 @@ export async function reportWorkerItem(id, holder, { status, report = null, file
   const queue = await readQueue(file);
   const item = queue.items[id];
   if (!item) throw fail('worker-item-unknown', `no work item ${id}`);
-  if (item.status === 'leased' && item.lease?.holder !== holder) throw fail('worker-lease-lost', `${id} is not leased to ${holder}`);
+  if (item.status !== 'leased' || item.lease?.holder !== holder) throw fail('worker-lease-lost', `${id} is not leased to ${holder}`);
+  if (item.lease?.expiresAt && Date.parse(item.lease.expiresAt) <= now()) throw fail('worker-lease-lost', `${id} lease expired`);
   if (status === 'requeue') {
     item.status = 'queued';
     item.attempts = (item.attempts ?? 0) + 1;

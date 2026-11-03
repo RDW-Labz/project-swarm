@@ -12,9 +12,11 @@ warn() { printf '\033[33mWARN\033[0m %s\n' "$*"; }
 step() { printf '\n== %s ==\n' "$*"; }
 
 SUDO=""
-if command -v sudo >/dev/null 2>&1; then
-  if sudo -n true >/dev/null 2>&1; then SUDO="sudo -n"; else sudo -v && SUDO="sudo -n"; fi
-fi
+if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then SUDO="sudo -n"; fi
+need_sudo() {
+  if [ -z "$SUDO" ]; then warn "$* needs sudo by hand; skipped"; return 1; fi
+  return 0
+}
 
 step "name"
 CURRENT_HOST=""
@@ -22,25 +24,29 @@ if command -v scutil >/dev/null 2>&1; then CURRENT_HOST="$(scutil --get LocalHos
 if [ "$CURRENT_HOST" = "$NAME" ]; then
   ok "name already $NAME"
 else
-  if [ "$MODE" = "worker" ] && command -v scutil >/dev/null 2>&1; then
-    $SUDO scutil --set ComputerName "$NAME" >/dev/null 2>&1 || warn "ComputerName not set"
+  if need_sudo "set the machine name"; then
+    if [ "$MODE" = "worker" ] && command -v scutil >/dev/null 2>&1; then
+      $SUDO scutil --set ComputerName "$NAME" >/dev/null 2>&1 || warn "ComputerName not set"
+    fi
+    if command -v scutil >/dev/null 2>&1; then
+      $SUDO scutil --set LocalHostName "$NAME" >/dev/null 2>&1 || warn "LocalHostName not set"
+      $SUDO scutil --set HostName "$NAME" >/dev/null 2>&1 || warn "HostName not set"
+    else
+      $SUDO hostnamectl set-hostname "$NAME" >/dev/null 2>&1 || warn "hostname not set"
+    fi
+    ok "$NAME"
   fi
-  if command -v scutil >/dev/null 2>&1; then
-    $SUDO scutil --set LocalHostName "$NAME" >/dev/null 2>&1 || warn "LocalHostName not set"
-    $SUDO scutil --set HostName "$NAME" >/dev/null 2>&1 || warn "HostName not set"
-  else
-    $SUDO hostnamectl set-hostname "$NAME" >/dev/null 2>&1 || warn "hostname not set"
-  fi
-  ok "$NAME"
 fi
 
 step "power"
 if command -v pmset >/dev/null 2>&1; then
   CURRENT_POWER="$(pmset -g custom 2>/dev/null || true)"
+  AC_SLEEP=$(printf '%s' "$CURRENT_POWER" | awk '/^AC Power:/{ac=1;next}/^Battery Power:/{ac=0} ac&&/^ *sleep /{print $2; exit}')
+  AC_DISKSLEEP=$(printf '%s' "$CURRENT_POWER" | awk '/^AC Power:/{ac=1;next}/^Battery Power:/{ac=0} ac&&/^ *disksleep /{print $2; exit}')
   if [ "$MODE" = "worker" ]; then
-    if printf '%s' "$CURRENT_POWER" | grep -q 'disablesleep *1'; then
+    if printf '%s' "$CURRENT_POWER" | grep -q 'disablesleep *1' && [ "${AC_SLEEP:-1}" = "0" ] && [ "${AC_DISKSLEEP:-1}" = "0" ]; then
       ok "power already set (never sleep)"
-    else
+    elif need_sudo "set worker power settings"; then
       $SUDO pmset -a disablesleep 1 >/dev/null 2>&1 || warn "disablesleep not set"
       $SUDO pmset -c sleep 0 >/dev/null 2>&1 || warn "sleep not set"
       $SUDO pmset -c disksleep 0 >/dev/null 2>&1 || true
@@ -51,12 +57,16 @@ if command -v pmset >/dev/null 2>&1; then
       ok "awake on charger, sleep disabled"
     fi
   else
-    $SUDO pmset -a disablesleep 0 >/dev/null 2>&1 || true
-    $SUDO pmset -c sleep 0 >/dev/null 2>&1 || warn "sleep not set"
-    $SUDO pmset -c disksleep 0 >/dev/null 2>&1 || true
-    $SUDO pmset -c displaysleep 10 >/dev/null 2>&1 || true
-    $SUDO pmset -c tcpkeepalive 1 >/dev/null 2>&1 || true
-    ok "awake on charger only"
+    if [ "${AC_SLEEP:-1}" = "0" ] && [ "${AC_DISKSLEEP:-1}" = "0" ]; then
+      ok "power already set (awake on charger only)"
+    elif need_sudo "set ghost power settings"; then
+      $SUDO pmset -a disablesleep 0 >/dev/null 2>&1 || true
+      $SUDO pmset -c sleep 0 >/dev/null 2>&1 || warn "sleep not set"
+      $SUDO pmset -c disksleep 0 >/dev/null 2>&1 || true
+      $SUDO pmset -c displaysleep 10 >/dev/null 2>&1 || true
+      $SUDO pmset -c tcpkeepalive 1 >/dev/null 2>&1 || true
+      ok "awake on charger only"
+    fi
   fi
 fi
 
@@ -65,7 +75,7 @@ if [ "$MODE" = "worker" ] && command -v defaults >/dev/null 2>&1; then
   CURRENT_UPDATE="$(defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates 2>/dev/null || echo missing)"
   if [ "$CURRENT_UPDATE" = "0" ]; then
     ok "macOS auto-install already off"
-  else
+  elif need_sudo "turn off macOS auto-install"; then
     $SUDO defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false >/dev/null 2>&1 || warn "update setting not changed"
     ok "macOS auto-install off"
   fi
@@ -91,8 +101,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     for pkg in git node gh jq tmux; do
       if brew list --formula "$pkg" >/dev/null 2>&1; then ok "$pkg"; else brew install "$pkg" >/dev/null 2>&1 && ok "$pkg" || warn "$pkg install failed"; fi
     done
-    if ! brew list --cask aldente >/dev/null 2>&1; then brew install --cask aldente >/dev/null 2>&1 && ok "AlDente" || warn "AlDente optional install failed"; else ok "AlDente"; fi
-    warn "AlDente: set the charge limit to 80% in the app once"
+    if brew list --cask aldente >/dev/null 2>&1; then ok "AlDente"; warn "AlDente: set the charge limit to 80% in the app once"; else warn "AlDente not installed (optional); install it by hand and set 80%"; fi
     PATH_LINE="export PATH=\"$BREW_PREFIX/bin:$BREW_PREFIX/sbin:\$HOME/.local/bin:\$PATH\"  # swarm-worker"
     if ! grep -q "# swarm-worker" "$HOME/.zshenv" 2>/dev/null; then printf '%s\n' "$PATH_LINE" >> "$HOME/.zshenv"; fi
     export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:$HOME/.local/bin:$PATH"

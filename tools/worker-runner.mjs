@@ -59,37 +59,50 @@ export function sshArgs(machine, remoteCommand, { key } = {}) {
   ];
 }
 
+export function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
 export function createSshTransport({ brain, runner = '~/.project-swarm/current/tools/swarm.mjs', run = spawnCapture, key } = {}) {
-  const remote = (args) => `node ${runner} worker ${args.map(arg => JSON.stringify(String(arg))).join(' ')}`;
+  const runnerExpr = runner.startsWith('~/') ? `"$HOME/${runner.slice(2)}"` : shellQuote(runner);
+  const hosts = () => [...new Set([brain.host, ...(Array.isArray(brain.hosts) ? brain.hosts : [])].filter(Boolean))];
+  const invoke = host => sshArgs({ ...brain, host }, `node ${runnerExpr} worker-rpc`, { key }).slice(1);
+  const call = async (request) => {
+    const errors = [];
+    for (const host of hosts()) {
+      const result = await run('ssh', invoke(host), { input: `${JSON.stringify(request)}\n`, timeout: 60000 });
+      if (result.code !== 0) { errors.push(`${host}: ${String(result.stderr ?? '').trim()}`); continue; }
+      const text = String(result.stdout ?? '').trim().split('\n').filter(Boolean).at(-1) ?? '{}';
+      const parsed = JSON.parse(text);
+      if (parsed && parsed.error) { errors.push(`${host}: ${parsed.message ?? parsed.error}`); continue; }
+      brain.host = host;
+      brain.hosts = [host, ...hosts().filter(entry => entry !== host)];
+      return parsed;
+    }
+    throw Object.assign(new Error(`brain rpc failed: ${errors.at(-1) ?? 'no brain host'}`), { code: 'worker-transport' });
+  };
   return {
-    async next({ lanes, machine }) {
-      const result = await run('ssh', sshArgs(brain, remote(['next', '--json', '--lanes', lanes.join(','), ...(machine ? ['--machine', machine] : [])]), { key }));
-      if (result.code !== 0) throw Object.assign(new Error(`brain next failed: ${result.stderr.trim()}`), { code: 'worker-transport' });
-      const text = result.stdout.trim().split('\n').filter(Boolean).at(-1) ?? '';
-      return text ? JSON.parse(text) : null;
-    },
-    async claim(item, holder) {
-      const result = await run('ssh', sshArgs(brain, remote(['claim', item.id, '--holder', holder]), { key }));
-      if (result.code !== 0) throw Object.assign(new Error(`brain claim failed: ${result.stderr.trim()}`), { code: 'worker-transport' });
-      return JSON.parse(result.stdout.trim().split('\n').filter(Boolean).at(-1) ?? '{}');
-    },
-    async renew(item, holder) {
-      const result = await run('ssh', sshArgs(brain, remote(['renew', item.id, '--holder', holder]), { key }));
-      if (result.code !== 0) throw Object.assign(new Error(`brain renew failed: ${result.stderr.trim()}`), { code: 'worker-transport' });
-      return JSON.parse(result.stdout.trim().split('\n').filter(Boolean).at(-1) ?? '{}');
-    },
-    async report(item, holder, report) {
-      const encoded = Buffer.from(JSON.stringify(report)).toString('base64');
-      const result = await run('ssh', sshArgs(brain, remote(['report', item.id, '--holder', holder, '--report', encoded]), { key }));
-      if (result.code !== 0) throw Object.assign(new Error(`brain report failed: ${result.stderr.trim()}`), { code: 'worker-transport' });
-      return JSON.parse(result.stdout.trim().split('\n').filter(Boolean).at(-1) ?? '{}');
-    },
+    next: ({ lanes, machine }) => call({ op: 'next', lanes, machine, epoch: brain.epoch }),
+    claim: (item, holder, { machine = null, lanes = null } = {}) => call({ op: 'claim', id: item.id, holder, machine, lanes, epoch: brain.epoch }),
+    renew: (item, holder) => call({ op: 'renew', id: item.id, holder, epoch: brain.epoch }),
+    report: (item, holder, report) => call({ op: 'report', id: item.id, holder, report, epoch: brain.epoch }),
+    heartbeat: ({ machine, ip }) => call({ op: 'heartbeat', machine, ip, epoch: brain.epoch }),
   };
 }
 
-export function spawnCapture(command, args, { input = '', timeout = 60 * 60 * 1000, cwd = process.cwd(), env = process.env } = {}) {
+export function spawnCapture(command, args, { input = '', timeout = 60 * 60 * 1000, cwd = process.cwd(), env = process.env, signal } = {}) {
   return new Promise(resolve => {
     const child = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    let killed = false;
+    const kill = () => {
+      if (killed) return;
+      killed = true;
+      try { child.kill('SIGTERM'); } catch {}
+      const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+      if (typeof timer.unref === 'function') timer.unref();
+    };
+    const onAbort = () => kill();
+    if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -97,7 +110,7 @@ export function spawnCapture(command, args, { input = '', timeout = 60 * 60 * 10
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.on('error', error => { clearTimeout(timer); resolve({ code: 1, stdout, stderr: `${stderr}${error.message}` }); });
-    child.on('close', code => { clearTimeout(timer); resolve({ code: timedOut ? 124 : (code ?? 1), stdout, stderr }); });
+    child.on('close', code => { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); resolve({ code: timedOut ? 124 : (code ?? 1), stdout, stderr }); });
     child.stdin.end(input);
   });
 }
@@ -123,15 +136,16 @@ export async function mirrorRepo({ source, name, home = os.homedir(), run = spaw
 }
 
 export async function ensureRepo({ repo, project, brain, key, home = os.homedir(), run = spawnCapture } = {}) {
+  const gitEnv = { ...process.env, ...(key ? { GIT_SSH_COMMAND: `ssh -i ${key} -o BatchMode=yes -o StrictHostKeyChecking=accept-new` } : {}) };
   const exists = await fs.stat(path.join(repo, '.git')).then(() => true, () => false);
   if (exists) {
-    const fetched = await run('git', ['-C', repo, 'fetch', '--all', '--prune'], { timeout: 10 * 60 * 1000 });
+    const fetched = await run('git', ['-C', repo, 'fetch', '--all', '--prune'], { timeout: 10 * 60 * 1000, env: gitEnv });
     return { cloned: false, fetched: fetched.code === 0 };
   }
   if (!brain) throw Object.assign(new Error('repo is missing and no brain is configured'), { code: 'repo-missing' });
   const remote = `${brain.user}@${brain.host}:~/.project-swarm/mirrors/${project}.git`;
   await fs.mkdir(path.dirname(repo), { recursive: true, mode: 0o700 });
-  const cloned = await run('git', ['clone', remote, repo], { timeout: 60 * 60 * 1000 });
+  const cloned = await run('git', ['clone', remote, repo], { timeout: 60 * 60 * 1000, env: gitEnv });
   if (cloned.code !== 0) throw Object.assign(new Error(`repo clone failed: ${cloned.stderr.trim()}`), { code: 'repo-clone-failed' });
   return { cloned: true, fetched: true };
 }
@@ -162,9 +176,14 @@ export async function latestRunReport(worktree) {
 }
 
 export async function prepareWorktree({ item, repo, worktrees, base = 'origin/main', machine = os.hostname(), run = spawnCapture } = {}) {
-  const branch = `worker/${machine.replace(/[^A-Za-z0-9._-]/g, '-')}/${String(item.id).replace(/[^A-Za-z0-9._-]/g, '-')}`.slice(0, 120);
-  const dir = path.join(worktrees, String(item.id).replace(/[^A-Za-z0-9._-]/g, '-'));
+  const safeId = String(item.id).replace(/[^A-Za-z0-9._-]/g, '-');
+  const attempt = String(item.attempts ?? 0);
+  const branch = `worker/${machine.replace(/[^A-Za-z0-9._-]/g, '-')}/${safeId}-${attempt}`.slice(0, 180);
+  const dir = path.join(worktrees, `${safeId}-${attempt}`);
   await fs.mkdir(worktrees, { recursive: true });
+  await run('git', ['-C', repo, 'worktree', 'remove', '--force', dir], { timeout: 60000 }).catch(() => ({}));
+  await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  await run('git', ['-C', repo, 'worktree', 'prune'], { timeout: 60000 }).catch(() => ({}));
   const add = await run('git', ['-C', repo, 'worktree', 'add', '-B', branch, dir, base], { timeout: 120000 });
   if (add.code !== 0) throw Object.assign(new Error(`worktree-add-failed: ${add.stderr.trim()}`), { code: 'worktree-add-failed' });
   return { dir, branch };
@@ -192,20 +211,27 @@ async function writeManifest(worktree, item) {
   return file;
 }
 
-export async function executeItem({ item, holder, paths, runner, run = spawnCapture, heartbeatMs = DEFAULT_HEARTBEAT_MS, renew = null, now = Date.now, prepare = prepareWorktree, latest = latestRunReport, brain = null, key = null, ensure = ensureRepo } = {}) {
-  const repo = path.join(paths.repos, item.project);
-  await ensure({ repo, project: item.project, brain, key, run });
-  const worktree = await prepare({ item, repo, worktrees: paths.worktrees, run });
-  const manifestFile = await writeManifest(worktree.dir, item);
+export async function executeItem({ item, holder, paths, runner, run = spawnCapture, heartbeatMs = DEFAULT_HEARTBEAT_MS, renew = null, now = Date.now, prepare = prepareWorktree, latest = latestRunReport, brain = null, key = null, ensure = ensureRepo, signal = null } = {}) {
+  const controller = new AbortController();
+  const onExternal = () => controller.abort();
+  if (signal) { if (signal.aborted) controller.abort(); else signal.addEventListener('abort', onExternal, { once: true }); }
+  let renewError = null;
   let alive = true;
   let timer = null;
   if (typeof renew === 'function') {
-    timer = setInterval(() => { if (alive) renew().catch(() => {}); }, heartbeatMs);
+    timer = setInterval(() => { if (alive) renew().catch(error => { renewError = error; controller.abort(); }); }, heartbeatMs);
     if (typeof timer.unref === 'function') timer.unref();
   }
   try {
-    const result = await run(process.execPath, [runner, 'run', manifestFile, '--jobs', item.job], { cwd: worktree.dir, timeout: 4 * 60 * 60 * 1000 });
+    const repo = path.join(paths.repos, item.project);
+    await ensure({ repo, project: item.project, brain, key, run });
+    const worktree = await prepare({ item, repo, worktrees: paths.worktrees, run });
+    const manifestFile = await writeManifest(worktree.dir, item);
+    const result = await run(process.execPath, [runner, 'run', manifestFile, '--jobs', item.job], { cwd: worktree.dir, timeout: 4 * 60 * 60 * 1000, signal: controller.signal });
     const report = await latest(worktree.dir);
+    if (renewError) {
+      return { ok: false, state: 'lease-lost', exitCode: result.code, report: { status: 'fail', retry: true, lane: item.lane, model: item.model, run: report?.run ?? null, summary: report?.summary ?? null, stderr: String(renewError.message ?? renewError) }, worktree };
+    }
     const outcome = detectLaneOutcome({ lane: item.lane, exitCode: result.code, stdout: result.stdout, stderr: result.stderr });
     const ok = result.code === 0 && outcome.state === 'ok';
     return {
@@ -228,10 +254,11 @@ export async function executeItem({ item, holder, paths, runner, run = spawnCapt
   } finally {
     alive = false;
     if (timer) clearInterval(timer);
+    if (signal) signal.removeEventListener('abort', onExternal);
   }
 }
 
-export async function runWorkerOnce({ lanes, holder, paths, runner, run = spawnCapture, transport, maxSlots = 1, freeDiskGb, role, onCharger, lidOpen, brainReachable, userActive, now = Date.now, brain = null, key = null, ensure = ensureRepo } = {}) {
+export async function runWorkerOnce({ lanes, holder, paths, runner, run = spawnCapture, transport, maxSlots = 1, freeDiskGb, role, onCharger, lidOpen, brainReachable, userActive, now = Date.now, brain = null, key = null, ensure = ensureRepo, monitor = null, monitorMs = 30000 } = {}) {
   const disk = diskGuard(freeDiskGb);
   if (!disk.ok) return { action: 'stop', reason: `disk-below-${disk.min}gb`, freeDiskGb };
   const gate = ghostGate({ role, onCharger, lidOpen, brainReachable });
@@ -241,11 +268,30 @@ export async function runWorkerOnce({ lanes, holder, paths, runner, run = spawnC
   let item;
   try { item = await transport.next({ lanes, machine: String(holder).split('/')[0] }); } catch (error) { return { action: 'error', reason: error.message }; }
   if (!item) return { action: 'idle' };
-  try { await transport.claim(item, holder); } catch (error) { return { action: error.code === 'worker-lease-held' ? 'retry' : 'error', reason: error.message }; }
+  try { await transport.claim(item, holder, { machine: String(holder).split('/')[0], lanes }); } catch (error) { return { action: ['worker-lease-held', 'worker-queue-paused', 'worker-lane-cooling', 'worker-lane-mismatch'].includes(error.code) ? 'retry' : 'error', reason: error.message }; }
   let renew = null;
   if (typeof transport.renew === 'function') renew = () => transport.renew(item, holder);
-  const result = await executeItem({ item, holder, paths, runner, run, renew, now, brain, key, ensure });
-  await transport.report(item, holder, result.report);
+  const controller = new AbortController();
+  let monitorError = null;
+  let monitorTimer = null;
+  if (typeof monitor === 'function') {
+    monitorTimer = setInterval(async () => {
+      const verdict = await monitor().catch(error => ({ ok: false, reason: error.message }));
+      if (!verdict?.ok && !controller.signal.aborted) { monitorError = verdict?.reason ?? 'monitor-failed'; controller.abort(); }
+    }, monitorMs);
+    if (typeof monitorTimer.unref === 'function') monitorTimer.unref();
+  }
+  let result;
+  try {
+    result = await executeItem({ item, holder, paths, runner, run, renew, now, brain, key, ensure, signal: controller.signal });
+  } catch (error) {
+    result = { ok: false, state: 'error', report: { status: 'fail', retry: true, lane: item.lane, model: item.model, error: error.message } };
+  } finally {
+    if (monitorTimer) clearInterval(monitorTimer);
+  }
+  if (monitorError) result = { ...result, ok: false, state: 'aborted', report: { ...(result.report ?? {}), status: 'fail', retry: true, lane: item.lane, model: item.model, error: monitorError } };
+  try { await transport.report(item, holder, result.report); }
+  catch (error) { return { action: 'ran', item, ...result, reportError: error.message }; }
   return { action: 'ran', item, ...result };
 }
 

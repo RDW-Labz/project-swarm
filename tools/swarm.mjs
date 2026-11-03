@@ -3049,6 +3049,13 @@ async function mainInner() {
     if(res.exitCode)process.exitCode=res.exitCode;
     return;
   }
+  if(args[0]==='worker-rpc'){
+    const {runWorkerRpc}=await import('./machine-commands.mjs');
+    const res=await runWorkerRpc({env:process.env,home:os.homedir()});
+    process.stdout.write(res.stdout);
+    if(res.exitCode)process.exitCode=res.exitCode;
+    return;
+  }
   if(args[0]==='attach'){
     const {runAttach}=await import('./machine-commands.mjs');
     const res=await runAttach(args.slice(1),{env:process.env,home:os.homedir()});

@@ -30,7 +30,7 @@ function fail(code, message = code) {
 }
 
 export function emptyRegistry() {
-  return { version: REGISTRY_VERSION, brain: null, order: [...DEFAULT_FAILOVER_ORDER], machines: {} };
+  return { version: REGISTRY_VERSION, brain: null, order: [...DEFAULT_FAILOVER_ORDER], epoch: 0, machines: {} };
 }
 
 function isPlainObject(value) {
@@ -52,6 +52,7 @@ export function validateRegistry(data) {
   if (!isPlainObject(data) || data.version !== REGISTRY_VERSION) throw fail('machines-corrupt', 'machines.json is not version 1');
   if (!isPlainObject(data.machines)) throw fail('machines-corrupt', 'machines.json has no machines object');
   if (data.brain !== null && typeof data.brain !== 'string') throw fail('machines-corrupt', 'machines.json brain must be null or a name');
+  if (data.epoch !== undefined && (!Number.isInteger(data.epoch) || data.epoch < 0)) throw fail('machines-corrupt', 'machines.json epoch must be a non-negative integer');
   if (!Array.isArray(data.order) || data.order.some(name => typeof name !== 'string')) throw fail('machines-corrupt', 'machines.json order must be a list of names');
   for (const [name, machine] of Object.entries(data.machines)) validateMachine(name, machine);
   if (data.brain !== null && !data.machines[data.brain]) throw fail('machines-corrupt', `brain ${data.brain} is not registered`);

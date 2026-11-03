@@ -77,3 +77,14 @@ export async function syncStateToPeer({ stateDir = machineStateDir(), target, ke
   if (result.code !== 0) throw Object.assign(new Error(`state sync failed: ${String(result.stderr ?? '').trim()}`), { code: 'state-sync-failed' });
   return { synced: true };
 }
+
+export async function snapshotCatalog({ stateDir = machineStateDir(), env = process.env, home = env.HOME } = {}) {
+  const dest = path.join(stateDir, 'catalog');
+  await fs.mkdir(dest, { recursive: true, mode: 0o700 });
+  const copied = [];
+  for (const name of ['projects.json', 'machines.json']) {
+    const source = path.join(env.SWARM_HOME || path.join(home, '.project-swarm'), name);
+    if (await copyFileOrDir(source, path.join(dest, name))) copied.push(name);
+  }
+  return { dest, copied };
+}

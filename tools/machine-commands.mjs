@@ -7,17 +7,17 @@ import {
   addMachine, acquireBrainLock, brainPointerFile, failoverOrder, machinesFile, MACHINE_NAME_RE, nextBrain,
   readBrainPointer, readRegistry, releaseBrainLock, removeMachine, setBrain, writeBrainPointer, writeRegistry,
 } from './machine-registry.mjs';
-import { measuredOnly, parseRemoteProbe, probeLocal, probeRemote, defaultRun, defaultRunInput, sshProbeArgv, WORKER_LANE_CLIS } from './machine-probe.mjs';
+import { measuredOnly, parseRemoteProbe, probeLocal, probeRemote, defaultRun, defaultRunInput, sshProbeArgv, localAddresses, WORKER_LANE_CLIS } from './machine-probe.mjs';
 import { laneLoginHint, laneLoginFiles, WORKER_LANE_NAMES } from './lane-plugins.mjs';
 import {
   claimWorkerItem, clearFinishedWorkerItems, enqueueManifest, listWorkerItems, nextWorkerItem,
-  pauseWorkerQueue, releaseExpiredWorkerItems, renewWorkerItem, reportWorkerItem, resumeWorkerQueue, workerQueueFile,
+  pauseWorkerQueue, releaseExpiredWorkerItems, renewWorkerItem, reportWorkerItem, resumeWorkerQueue, workerPauseFile, workerQueueFile,
 } from './worker-queue.mjs';
 import {
   cleanWorktrees, createSshTransport, ensureRepo, executeItem, ghostState, mirrorRepo, readWorkerLanes, runWorkerOnce, slotsForMachine, workerPaths,
 } from './worker-runner.mjs';
 import { projectSwarmHome } from './machine-registry.mjs';
-import { snapshotProjectState, machineStateDir } from './state-sync.mjs';
+import { snapshotProjectState, snapshotCatalog, machineStateDir } from './state-sync.mjs';
 import { runBench, benchSummary } from './worker-bench.mjs';
 import { listProjects, projectsFile } from './projects.mjs';
 
@@ -108,8 +108,8 @@ export async function copyKey(target, key, { run = spawnInherit } = {}) {
 async function keyWorks(target, key, { run = defaultRun } = {}) {
   try {
     const argv = sshCommandArgv(target, 'true', { key });
-    await run(argv[0], argv.slice(1), { timeout: 12000 });
-    return true;
+    const result = await run(argv[0], argv.slice(1), { timeout: 12000 });
+    return result?.code === 0;
   } catch { return false; }
 }
 
@@ -119,7 +119,7 @@ export async function syncRunner({ target, key, installRoot, home = os.homedir()
     try { runnerVersion = JSON.parse(await fs.readFile(path.join(installRoot, 'package.json'), 'utf8')).version; } catch { runnerVersion = 'current'; }
   }
   const remoteHome = `.project-swarm/versions/${runnerVersion}`;
-  const argv = ['rsync', '-a', '--delete', '-e', `ssh -T -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i ${key}`, `${installRoot}/`, `${target.user}@${target.host}:~/${remoteHome}/`];
+  const argv = ['rsync', '-a', '--delete', '--timeout=600', '-e', `ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -i ${key}`, `${installRoot}/`, `${target.user}@${target.host}:~/${remoteHome}/`];
   const result = await run(argv[0], argv.slice(1), { timeout: 10 * 60 * 1000 });
   if (result.code !== 0) throw Object.assign(new Error(`runner sync failed: ${String(result.stderr ?? '').trim()}`), { code: 'machine-runner-sync-failed' });
   const link = `mkdir -p ~/.project-swarm && ln -sfn "$HOME/${remoteHome}" ~/.project-swarm/current`;
@@ -132,7 +132,7 @@ export async function readBootstrapScript() {
   return fs.readFile(new URL('./machine-bootstrap.sh', import.meta.url), 'utf8');
 }
 
-export async function runBootstrap({ target, key, name, role, brainHost, brainUser, run = defaultRunInput } = {}) {
+export async function runBootstrap({ target, key, name, role, brainHost, brainUser, run = defaultRunInput, onProgress = null } = {}) {
   const mode = role === 'remote+worker' || role === 'both' ? 'both' : 'worker';
   const head = [
     `export SWARM_MACHINE_NAME=${JSON.stringify(name)}`,
@@ -142,19 +142,28 @@ export async function runBootstrap({ target, key, name, role, brainHost, brainUs
   ].join('\n');
   const script = `${head}\n${await readBootstrapScript()}`;
   const argv = sshCommandArgv(target, 'bash -s', { key, tty: true });
-  const result = await run(argv[0], argv.slice(1), { input: script, timeout: 30 * 60 * 1000 });
+  let buffer = '';
+  const onData = onProgress ? chunk => {
+    buffer += chunk;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) if (line.trim()) onProgress(line);
+  } : undefined;
+  const result = await run(argv[0], argv.slice(1), { input: script, timeout: 10 * 60 * 1000, onData });
+  if (buffer.trim()) onProgress?.(buffer.trim());
   const stdout = String(result.stdout ?? '');
   if (!/MACHINE_SETUP_OK/.test(stdout)) throw Object.assign(new Error(`bootstrap did not finish: ${stdout.slice(-800)}`), { code: 'machine-bootstrap-failed' });
   return { stdout, warnings: stdout.split('\n').filter(line => /WARN/.test(line)) };
 }
 
 export function workerServicePlist({ runner, machine, brainHost, brainUser, key, home }) {
-  const args = [process.execPath || '/usr/bin/env node', runner, 'worker', 'run'];
+  const args = ['/usr/bin/env', 'node', runner, 'worker', 'run'];
   const env = {
+    PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${path.posix.join(home, '.local', 'bin')}`,
     SWARM_WORKER_NAME: machine,
     ...(brainHost ? { SWARM_BRAIN_HOST: brainHost } : {}),
     ...(brainUser ? { SWARM_BRAIN_USER: brainUser } : {}),
-    SWARM_SSH_KEY: key,
+    SWARM_SSH_KEY: path.posix.join(home, '.ssh', 'swarm_ed25519'),
   };
   return {
     Label: 'com.project-swarm.worker',
@@ -196,8 +205,9 @@ ${env}
 }
 
 export async function installWorkerService({ target, key, machine, brain, run = defaultRun, home }) {
-  const runner = '~/.project-swarm/current/tools/swarm.mjs';
-  const plist = workerServicePlist({ runner, machine, brainHost: brain?.host, brainUser: brain?.user, key: '~/.ssh/swarm_ed25519', home: home ?? `/Users/${target.user}` });
+  const targetHome = home ?? `/Users/${target.user}`;
+  const runner = path.posix.join(targetHome, '.project-swarm', 'current', 'tools', 'swarm.mjs');
+  const plist = workerServicePlist({ runner, machine, brainHost: brain?.host, brainUser: brain?.user, key: path.posix.join(targetHome, '.ssh', 'swarm_ed25519'), home: targetHome });
   const encoded = Buffer.from(plistXml(plist)).toString('base64');
   const script = [
     'set -e',
@@ -217,8 +227,8 @@ export async function installWorkerService({ target, key, machine, brain, run = 
 export function brainWatchPlist({ runner, home }) {
   return {
     Label: 'com.project-swarm.brainwatch',
-    ProgramArguments: [process.execPath || '/usr/bin/env node', runner, 'brain', 'watch'],
-    EnvironmentVariables: {},
+    ProgramArguments: ['/usr/bin/env', 'node', runner, 'brain', 'watch'],
+    EnvironmentVariables: { PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${path.posix.join(home, '.local', 'bin')}` },
     RunAtLoad: true,
     KeepAlive: true,
     StandardOutPath: path.join(home, 'swarm-worker', 'logs', 'brainwatch.log'),
@@ -228,7 +238,8 @@ export function brainWatchPlist({ runner, home }) {
 }
 
 export async function installBrainWatchService({ target, key, run = defaultRun, home }) {
-  const plist = brainWatchPlist({ runner: '~/.project-swarm/current/tools/swarm.mjs', home: home ?? `/Users/${target.user}` });
+  const targetHome = home ?? `/Users/${target.user}`;
+  const plist = brainWatchPlist({ runner: path.posix.join(targetHome, '.project-swarm', 'current', 'tools', 'swarm.mjs'), home: targetHome });
   const encoded = Buffer.from(plistXml(plist)).toString('base64');
   const script = [
     'set -e',
@@ -275,7 +286,9 @@ WantedBy=default.target
 export async function probeMachine(name, { registry, run = defaultRunInput, home = os.homedir(), env = process.env, now = Date.now } = {}) {
   const machine = registry.machines[name];
   if (!machine) throw Object.assign(new Error(`machine ${name} is not registered`), { code: 'machine-unknown' });
-  if (machine.host === os.hostname() || machine.host === `${os.hostname()}.local`) {
+  const addresses = await localAddresses({ run: defaultRun }).catch(() => ({}));
+  const localNames = new Set([os.hostname(), os.hostname().replace(/\.local$/, ''), addresses.ip, addresses.tailscaleHost].filter(Boolean));
+  if (localNames.has(machine.host) || (machine.ip && localNames.has(machine.ip))) {
     return { ...machine, ...(await probeLocal({ run: defaultRun, home, env, now })) };
   }
   return { ...machine, ...(await probeRemote({ ...machine, key: path.join(home, '.ssh', 'swarm_ed25519') }, { run, now })) };
@@ -351,7 +364,7 @@ export async function lockSshToKey({ target, key, run = defaultRunInput } = {}) 
 }
 
 
-export async function ensureWorkerKey({ target, key, name, run = defaultRunInput, home = os.homedir() } = {}) {
+export async function ensureWorkerKey({ target, key, name, run = defaultRunInput, home = os.homedir(), runner, node = process.execPath } = {}) {
   const script = [
     'set -e',
     'mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"',
@@ -366,13 +379,16 @@ export async function ensureWorkerKey({ target, key, name, run = defaultRunInput
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const authFile = path.join(dir, 'authorized_keys');
   const existing = await fs.readFile(authFile, 'utf8').catch(() => '');
-  if (!existing.includes(pub)) await fs.appendFile(authFile, `${existing && !existing.endsWith('\n') ? '\n' : ''}${pub}\n`, { mode: 0o600 });
+  const forced = `command="${node} ${runner ?? path.join(home, '.project-swarm', 'current', 'tools', 'swarm.mjs')} worker-rpc",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-user-rc ${pub}`;
+  const kept = existing.split('\n').filter(line => !line.includes(pub));
+  kept.push(forced);
+  await fs.writeFile(authFile, `${kept.filter(Boolean).join('\n')}\n`, { mode: 0o600 });
   await fs.chmod(authFile, 0o600).catch(() => {});
-  return { pub };
+  return { pub, forced };
 }
 
 export async function writeWorkerBrainPointer({ target, key, brain, name, run = defaultRunInput } = {}) {
-  const payload = JSON.stringify({ host: brain.host, user: brain.user, machine: name });
+  const payload = JSON.stringify({ host: brain.host, user: brain.user, machine: name, hosts: brainHostList(brain), epoch: brain.epoch ?? 0 });
   const script = `mkdir -p "$HOME/.project-swarm" && printf '%s\\n' '${payload}' > "$HOME/.project-swarm/brain.json" && chmod 600 "$HOME/.project-swarm/brain.json"`;
   const argv = sshCommandArgv(target, script, { key });
   const result = await run(argv[0], argv.slice(1), { timeout: 30000 });
@@ -396,26 +412,35 @@ export async function runMachineAdd(args, deps = {}) {
   const role = roleFlag.value === 'both' || roleFlag.value === 'remote+worker' || (!roleFlag.value && name === 'ghost') ? 'remote+worker' : roleFlag.value === 'brain' ? 'brain' : 'worker';
   const key = keyFlag.value ?? path.join(home, '.ssh', 'swarm_ed25519');
   try {
+    process.stderr.write(`machine add: checking key for ${target.user}@${target.host}...\n`);
     const keyState = await ensureKey(key, { run: interactive });
     if (!(await keyWorks(target, key, { run: runShell }))) await copyKey(target, key, { run: interactive });
-    await ensureWorkerKey({ target, key, name, run }).catch(() => null);
+    process.stderr.write(`machine add: key works; checking the remote prepped state...\n`);
+    const stableRunner = path.join(home, '.project-swarm', 'current', 'tools', 'swarm.mjs');
+    const brainRunner = await fs.stat(stableRunner).then(() => stableRunner, () => path.join(installRoot, 'tools', 'swarm.mjs'));
+    await ensureWorkerKey({ target, key, name, run, runner: brainRunner }).catch(() => null);
     const before = await probeRemote({ ...target, key }, { run, now }).catch(() => null);
     const registry = await readRegistry({ file: deps.registryFile ?? machinesFile({ env, home }), env, home });
-    const brain = role === 'brain' ? { host: target.host, user: target.user } : registry.brain ? registry.machines[registry.brain] : { host: os.hostname(), user: os.userInfo().username };
+    const brainBase = role === 'brain' ? { host: target.host, user: target.user } : registry.brain ? registry.machines[registry.brain] : { host: os.hostname(), user: os.userInfo().username };
+    const brain = { ...brainBase, hosts: brainHostList(brainBase), epoch: registry.epoch ?? 0 };
     const brainName = role === 'brain' ? name : (registry.brain ?? 'mini');
     let runnerWarning = null;
     let bootstrap = { warnings: [] };
     if (!registerOnly) {
+      process.stderr.write(`machine add: syncing the runner to ${target.host} (timeout 10m)...\n`);
       try { await syncRunner({ target, key, installRoot, home, run: runShell }); }
       catch (error) { runnerWarning = `WARN ${error.message}`; }
       bootstrap = await runBootstrap({ target, key, name, role, brainHost: brain?.host, brainUser: brain?.user, run });
       if (runnerWarning) bootstrap.warnings.push(runnerWarning);
     }
+    process.stderr.write(`machine add: probing ${target.host}...\n`);
     const probed = await probeRemote({ ...target, key }, { run, now }).catch(() => before ?? {});
     const machine = measuredOnly({
       name,
       role,
+      ...probed,
       host: target.host,
+      ip: target.host,
       user: target.user,
       os: probed.os ?? before?.os,
       arch: probed.arch,
@@ -439,6 +464,7 @@ export async function runMachineAdd(args, deps = {}) {
       lastSeen: new Date(now()).toISOString(),
     });
     await addMachine(machine, { file: deps.registryFile ?? machinesFile({ env, home }), env, home, brain: role === 'brain' });
+    await updateSshConfigForMachine({ name, host: target.host, user: target.user, key, home }).catch(() => null);
     const after = await readRegistry({ file: deps.registryFile ?? machinesFile({ env, home }), env, home });
     if (!after.brain) {
       const localHost = os.hostname().toLowerCase();
@@ -456,6 +482,7 @@ export async function runMachineAdd(args, deps = {}) {
       catch (error) { bootstrap.warnings.push(`WARN ${error.message}`); }
     }
     if (!registerOnly && role !== 'brain') {
+      process.stderr.write(`machine add: installing the worker service on ${target.host}...\n`);
       try {
         if ((probed.os ?? 'macos') === 'linux') await installWorkerServiceLinux({ target, key, machine: name, brain, run: runShell });
         else {
@@ -564,7 +591,7 @@ export async function openScreen(name, { registry, env = process.env, home = os.
   const brain = registry.machines[registry.brain];
   const key = path.join(home, '.ssh', 'swarm_ed25519');
   const via = brain && brain.name !== name ? { host: brain.host, user: brain.user } : null;
-  const dest = `${machine.host}.local`;
+  const dest = machine.host;
   const sshArgs = [
     '-fN', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
     '-o', 'ExitOnForwardFailure=yes', '-i', key,
@@ -631,13 +658,24 @@ export async function runRemoteSetup(args, deps = {}) {
   for (const name of failoverOrder(registry)) {
     const machine = registry.machines[name];
     if (!machine || name === 'mini') continue;
-    lines.push('', `Host ${name}`, `  HostName ${machine.host}.local`, `  User ${machine.user}`, `  ProxyJump mini`, `  IdentityFile ${key}`, `  IdentitiesOnly yes`, `  StrictHostKeyChecking accept-new`);
+    lines.push('', `Host ${name}`, `  HostName ${machine.host}`, `  User ${machine.user}`, `  ProxyJump mini`, `  IdentityFile ${key}`, `  IdentitiesOnly yes`, `  StrictHostKeyChecking accept-new`);
   }
   const configFile = path.join(home, '.ssh', 'config');
   await fs.mkdir(path.dirname(configFile), { recursive: true, mode: 0o700 });
   const existing = await fs.readFile(configFile, 'utf8').catch(() => '');
   if (!/^# swarm machine setup$/m.test(existing)) await fs.appendFile(configFile, `\n# swarm machine setup\n${lines.join('\n')}\n`, { mode: 0o600 });
   return out(`wrote ~/.ssh/config (mini + workers via ProxyJump mini)\nTest: ssh mini 'hostname'\nAttach: swarm attach\nScreen: swarm screen bean\n`);
+}
+
+
+export async function pushFile({ target, key, name, data, run = defaultRunInput } = {}) {
+  if (!/^[A-Za-z0-9._-]{1,80}$/.test(String(name ?? ''))) throw Object.assign(new Error('invalid state file name'), { code: 'file-push-invalid' });
+  const encoded = Buffer.from(data).toString('base64');
+  const script = `mkdir -p "$HOME/.project-swarm" && printf '%s' ${JSON.stringify(encoded)} | base64 -d > "$HOME/.project-swarm/${name}"`;
+  const argv = sshCommandArgv(target, script, { key });
+  const result = await run(argv[0], argv.slice(1), { timeout: 30000 });
+  if (result.code !== 0) throw Object.assign(new Error('file push failed'), { code: 'file-push-failed' });
+  return true;
 }
 
 export async function runBrainMove(args, deps = {}) {
@@ -655,9 +693,14 @@ export async function runBrainMove(args, deps = {}) {
   const lock = await acquireBrainLock({ file: deps.brainLockFile, machine: os.hostname(), now: now() });
   try {
     const stateDir = machineStateDir({ env, home });
-    await pauseWorkerQueue({ file: path.join(stateDir, 'worker-queue.paused'), reason: `brain-move:${targetName}` }).catch(() => null);
+    const sourcePauseFile = deps.workerPauseFile ?? workerPauseFile({ env, home });
+    await pauseWorkerQueue({ file: sourcePauseFile, reason: `brain-move:${targetName}` }).catch(() => null);
     const projects = await listProjects({ file: projectsFile(env), env, home }).catch(() => []);
-    for (const project of projects) await snapshotProjectState(project.root, { stateDir, projectId: project.id }).catch(() => null);
+    for (const project of projects) {
+      try { await snapshotProjectState(project.root, { stateDir, projectId: project.id }); }
+      catch (error) { return bad(`state snapshot failed for ${project.name}: ${sanitize(error.message)}\n`); }
+    }
+    await snapshotCatalog({ stateDir, env, home }).catch(() => null);
     const source = registry.machines[registry.brain];
     if (source && source.host !== target.host && deps.syncState !== false) {
       const key = path.join(home, '.ssh', 'swarm_ed25519');
@@ -665,11 +708,19 @@ export async function runBrainMove(args, deps = {}) {
       if (rsync.code !== 0) return bad(`state sync failed: ${sanitize(rsync.stderr ?? '')}\n`);
     }
     await setBrain(targetName, { file: deps.registryFile ?? machinesFile({ env, home }), env, home });
-    await writeBrainPointer({ host: target.host, user: target.user, machine: targetName }, { file: deps.brainPointerFile ?? brainPointerFile({ env, home }), env, home });
+    const updated = await readRegistry({ file: deps.registryFile ?? machinesFile({ env, home }), env, home });
+    updated.epoch = (updated.epoch ?? 0) + 1;
+    await writeRegistry(updated, { file: deps.registryFile ?? machinesFile({ env, home }), env, home });
+    const epoch = updated.epoch;
+    const pointerPath = deps.brainPointerFile ?? brainPointerFile({ env, home });
+    await writeBrainPointer({ host: target.host, user: target.user, machine: targetName, epoch }, { file: pointerPath, env, home });
+    const pushKey = path.join(home, '.ssh', 'swarm_ed25519');
+    await pushFile({ target, key: pushKey, name: 'machines.json', data: await fs.readFile(deps.registryFile ?? machinesFile({ env, home }), 'utf8'), run: deps.runInput ?? defaultRunInput }).catch(() => null);
+    await pushFile({ target, key: pushKey, name: 'brain.json', data: await fs.readFile(pointerPath, 'utf8'), run: deps.runInput ?? defaultRunInput }).catch(() => null);
     const key = path.join(home, '.ssh', 'swarm_ed25519');
     for (const [name, machine] of Object.entries(registry.machines)) {
       if (name === targetName) continue;
-      const pointer = JSON.stringify({ host: target.host, user: target.user, machine: targetName });
+      const pointer = JSON.stringify({ host: target.host, user: target.user, machine: targetName, epoch });
       await (deps.runShell ?? defaultRun)('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-i', key, '--', `${machine.user}@${machine.host}`, `mkdir -p ~/.project-swarm && printf '%s\\n' '${pointer}' > ~/.project-swarm/brain.json`], { timeout: 30000 }).catch(() => null);
     }
     if (deps.startBrain !== false) {
@@ -677,7 +728,12 @@ export async function runBrainMove(args, deps = {}) {
       if (start.code !== 0) return bad(`brain moved in the registry but the orchestrator did not start on ${targetName}: ${sanitize(start.stderr ?? '')}\n`);
     }
     await (deps.runShell ?? defaultRun)('ssh', ['-T', '-o', 'BatchMode=yes', '-i', key, '--', `${target.user}@${target.host}`, 'rm -f ~/.project-swarm/state/worker-queue.paused'], { timeout: 30000 }).catch(() => null);
-    await resumeWorkerQueue({ file: path.join(stateDir, 'worker-queue.paused') }).catch(() => null);
+    if (deps.stopSource !== false) {
+      try {
+        const board = JSON.parse(await fs.readFile(path.join(home, '.project-swarm', 'board.json'), 'utf8'));
+        if (board?.pid && /watch/.test(String(board?.argv?.join(' ') ?? ''))) process.kill(board.pid, 'SIGTERM');
+      } catch {}
+    }
     const warning = target.role === 'remote+worker' && force ? '\nwarning: the swarm stops if this machine sleeps or leaves the network' : '';
     return out(`brain moved to ${targetName} (${target.user}@${target.host}); running tickets keep going; new leases pause until the new brain answers${warning}\n`);
   } finally {
@@ -701,6 +757,115 @@ export async function runBrainStatus(args, deps = {}) {
   if (!machine) return out('brain: none registered\n');
   const lock = await fs.readFile(deps.brainLockFile ?? path.join(projectSwarmHome({ env, home }), 'brain.lock'), 'utf8').then(text => JSON.parse(text), () => null);
   return out(`brain: ${registry.brain} (${machine.user}@${machine.host})${lock ? ` · lock held by ${lock.machine}` : ' · no lock'}\norder: ${failoverOrder(registry).join(' -> ')}\n`);
+}
+
+
+
+export async function updateSshConfigForMachine({ name, host, user, key, home = os.homedir() }) {
+  if (!MACHINE_NAME_RE.test(String(name ?? ''))) throw Object.assign(new Error('invalid machine name'), { code: 'ssh-config-invalid' });
+  const file = path.join(home, '.ssh', 'config');
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const existing = await fs.readFile(file, 'utf8').catch(() => '');
+  const lines = existing.split('\n');
+  const block = [
+    `Host ${name}`,
+    `  HostName ${host}`,
+    `  User ${user}`,
+    `  IdentityFile ${key}`,
+    '  IdentitiesOnly yes',
+    '  StrictHostKeyChecking accept-new',
+    '  ServerAliveInterval 30',
+    '  ControlMaster auto',
+    '  ControlPath ~/.ssh/sockets/%r@%h-%p',
+    '  ControlPersist 10m',
+  ];
+  let start = -1;
+  for (let i = 0; i < lines.length; i += 1) if (new RegExp(`^Host\\s+${name}$`).test(lines[i])) { start = i; break; }
+  let next = existing;
+  if (start >= 0) {
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i += 1) if (/^Host\s+/.test(lines[i])) { end = i; break; }
+    next = [...lines.slice(0, start), ...block, ...lines.slice(end)].join('\n');
+  } else {
+    next = `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}\n# swarm machine\n${block.join('\n')}\n`;
+  }
+  if (next !== existing) {
+    await fs.writeFile(file, next, { mode: 0o600 });
+    await fs.chmod(file, 0o600).catch(() => {});
+  }
+  return { file, updated: next !== existing };
+}
+
+export function brainHostList(brain) {
+  return [...new Set([brain?.host, ...(Array.isArray(brain?.hosts) ? brain.hosts : []), brain?.tailscaleHost].filter(Boolean))];
+}
+
+export async function refreshBrainAddress({ env = process.env, home = os.homedir(), now = Date.now } = {}) {
+  const pointerFile = brainPointerFile({ env, home });
+  const pointer = await readBrainPointer({ file: pointerFile, env, home }).catch(() => null);
+  if (!pointer) return null;
+  const addresses = await localAddresses({ run: defaultRun });
+  const current = addresses.ip ?? pointer.host;
+  const hosts = [...new Set([current, pointer.host, ...(Array.isArray(pointer.hosts) ? pointer.hosts : []), addresses.tailscaleHost, pointer.tailscaleHost].filter(Boolean))];
+  if (current === pointer.host && hosts.length === brainHostList(pointer).length) return pointer;
+  const next = { ...pointer, host: current, hosts, ...(addresses.tailscaleHost ? { tailscaleHost: addresses.tailscaleHost } : {}) };
+  await writeBrainPointer(next, { file: pointerFile, env, home });
+  try {
+    const registry = await readRegistry({ file: machinesFile({ env, home }), env, home });
+    if (registry.brain && registry.machines[registry.brain]) {
+      registry.machines[registry.brain] = { ...registry.machines[registry.brain], host: current, ip: current, ...(addresses.tailscaleHost ? { tailscaleHost: addresses.tailscaleHost } : {}), updatedAt: new Date(now()).toISOString() };
+      await writeRegistry(registry, { file: machinesFile({ env, home }), env, home });
+    }
+  } catch {}
+  return next;
+}
+
+export async function runWorkerRpc({ stdin = process.stdin, env = process.env, home = os.homedir(), now = Date.now, file } = {}) {
+  const chunks = [];
+  for await (const chunk of stdin) chunks.push(chunk);
+  let request;
+  try { request = JSON.parse(Buffer.concat(chunks).toString('utf8').trim() || '{}'); }
+  catch { return bad('worker-rpc-invalid-json\n', 2); }
+  const pointer = await readBrainPointer({ env, home }).catch(() => null);
+  if (request.epoch !== undefined && pointer?.epoch !== undefined && Number(request.epoch) !== Number(pointer.epoch)) return bad(`${JSON.stringify({ error: 'worker-brain-stale', message: 'this worker points at an old brain epoch' })}\n`, 1);
+  const queueFile = file ?? workerQueueFile({ env, home });
+  try {
+    if (request.op === 'heartbeat') {
+      const registry = await readRegistry({ file: machinesFile({ env, home }), env, home });
+      const name = typeof request.machine === 'string' ? request.machine : null;
+      if (name && registry.machines[name]) {
+        registry.machines[name] = { ...registry.machines[name], host: request.ip ?? registry.machines[name].host, ip: request.ip ?? registry.machines[name].ip, health: 'ok', lastSeen: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString() };
+        await writeRegistry(registry, { file: machinesFile({ env, home }), env, home });
+        await updateSshConfigForMachine({ name, host: request.ip ?? registry.machines[name].host, user: registry.machines[name].user, key: path.join(home, '.ssh', 'swarm_ed25519'), home }).catch(() => null);
+      }
+      const pointer = await refreshBrainAddress({ env, home, now });
+      return out(`${JSON.stringify({ machine: name ? registry.machines[name] : null, brain: pointer ? { host: pointer.host, hosts: brainHostList(pointer), epoch: pointer.epoch ?? null, machine: pointer.machine ?? null } : null })}\n`);
+    }
+    if (request.op === 'next') {
+      const item = await nextWorkerItem({ lanes: Array.isArray(request.lanes) ? request.lanes : WORKER_LANE_NAMES, machine: request.machine ?? null, file: queueFile, env, home, now });
+      return out(`${JSON.stringify(item)}\n`);
+    }
+    if (request.op === 'claim') {
+      if (typeof request.id !== 'string' || typeof request.holder !== 'string') return bad('worker-rpc-invalid-claim\n', 2);
+      const item = await claimWorkerItem(request.id, request.holder, { file: queueFile, env, home, now, machine: request.machine ?? null, lanes: Array.isArray(request.lanes) ? request.lanes : null });
+      return out(`${JSON.stringify(item)}\n`);
+    }
+    if (request.op === 'renew') {
+      if (typeof request.id !== 'string' || typeof request.holder !== 'string') return bad('worker-rpc-invalid-renew\n', 2);
+      const item = await renewWorkerItem(request.id, request.holder, { file: queueFile, env, home, now });
+      return out(`${JSON.stringify(item)}\n`);
+    }
+    if (request.op === 'report') {
+      if (typeof request.id !== 'string' || typeof request.holder !== 'string') return bad('worker-rpc-invalid-report\n', 2);
+      const report = request.report && typeof request.report === 'object' ? request.report : null;
+      const status = report?.status === 'pass' ? 'done' : (report?.retry === true || ['rate-limited', 'logged-out'].includes(report?.status)) ? 'requeue' : 'failed';
+      const item = await reportWorkerItem(request.id, request.holder, { status, report, file: queueFile, env, home, now });
+      return out(`${JSON.stringify(item)}\n`);
+    }
+    return bad('worker-rpc-op-unknown\n', 2);
+  } catch (error) {
+    return bad(`${JSON.stringify({ error: error.code ?? 'worker-rpc-failed', message: sanitize(error.message) })}\n`, 1);
+  }
 }
 
 export async function runWorkerCommand(args, deps = {}) {
@@ -746,8 +911,11 @@ export async function runWorkerCommand(args, deps = {}) {
   if (verb === 'claim') {
     const id = rest[0];
     const holder = flag(rest, '--holder').value;
+    const machine = flag(rest, '--machine').value;
+    const lanesFlag = flag(rest, '--lanes');
+    const lanes = lanesFlag.value ? lanesFlag.value.split(',').map(value => value.trim()).filter(Boolean) : null;
     if (!id || !holder) return bad(`Usage: swarm worker claim ID --holder H\n`);
-    try { const item = await claimWorkerItem(id, holder, { file, env, home, now }); return out(`${JSON.stringify(item)}\n`); } catch (error) { return bad(`${sanitize(error.message)}\n`); }
+    try { const item = await claimWorkerItem(id, holder, { file, env, home, now, machine, lanes }); return out(`${JSON.stringify(item)}\n`); } catch (error) { return bad(`${sanitize(error.message)}\n`); }
   }
   if (verb === 'renew') {
     const id = rest[0];
@@ -763,7 +931,7 @@ export async function runWorkerCommand(args, deps = {}) {
     let report = null;
     if (b64) { try { report = JSON.parse(Buffer.from(b64, 'base64').toString('utf8')); } catch { return bad('report is not valid base64 JSON\n'); } }
     try {
-      const status = report?.status === 'pass' ? 'done' : ['rate-limited', 'logged-out'].includes(report?.status) ? 'requeue' : 'failed';
+      const status = report?.status === 'pass' ? 'done' : (report?.retry === true || ['rate-limited', 'logged-out'].includes(report?.status)) ? 'requeue' : 'failed';
       const item = await reportWorkerItem(id, holder, { status, report, file, env, home, now });
       return out(`${JSON.stringify(item)}\n`);
     } catch (error) { return bad(`${sanitize(error.message)}\n`); }
@@ -773,16 +941,37 @@ export async function runWorkerCommand(args, deps = {}) {
     const name = deps.machineName ?? lanesFile?.name ?? os.hostname();
     const lanes = lanesFile?.lanes_installed ?? WORKER_LANE_NAMES;
     const paths = workerPaths(home);
-    const brain = (await readBrainPointer({ env, home }).catch(() => null)) ?? (await readRegistry({ file: deps.registryFile ?? machinesFile({ env, home }), env, home }).then(registry => registry.brain ? registry.machines[registry.brain] : null));
-    if (!brain) return bad('no brain registered; run swarm machine add on the brain or set ~/.project-swarm/brain.json\n');
-    const transport = deps.transport ?? createSshTransport({ brain });
+    const readBrain = async () => (await readBrainPointer({ env, home }).catch(() => null)) ?? (await readRegistry({ file: deps.registryFile ?? machinesFile({ env, home }), env, home }).then(registry => registry.brain ? registry.machines[registry.brain] : null));
+    const firstBrain = await readBrain();
+    if (!firstBrain) return bad('no brain registered; run swarm machine add on the brain or set ~/.project-swarm/brain.json\n');
     const once = rest.includes('--once');
     const runner = deps.runnerPath ?? path.join(projectSwarmHome({ env, home }), 'current', 'tools', 'swarm.mjs');
     const iteration = async () => {
+      const brain = (await readBrain()) ?? firstBrain;
+      const transport = deps.transport ?? createSshTransport({ brain });
+      const currentLanes = (await readWorkerLanes(home))?.lanes_installed ?? lanes;
       const local = await probeLocal({ run: deps.runShell ?? defaultRun, home, env, now });
+      if (typeof transport.heartbeat === 'function') {
+        const heartbeat = await transport.heartbeat({ machine: name, ip: local.ip }).catch(() => null);
+        if (heartbeat?.brain?.host) {
+          brain.host = heartbeat.brain.host;
+          brain.hosts = heartbeat.brain.hosts;
+          brain.epoch = heartbeat.brain.epoch;
+          await writeBrainPointer({ host: brain.host, user: brain.user, machine: heartbeat.brain.machine ?? brain.machine ?? 'mini', hosts: brain.hosts, epoch: brain.epoch }, { env, home }).catch(() => null);
+        }
+      }
       const brainReachable = await (deps.runShell ?? defaultRun)('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-i', path.join(home, '.ssh', 'swarm_ed25519'), '--', `${brain.user}@${brain.host}`, 'true'], { timeout: 10000 }).then(() => true, () => false);
+      const monitor = async () => {
+        const current = await probeLocal({ run: deps.runShell ?? defaultRun, home, env, now });
+        const reachable = await (deps.runShell ?? defaultRun)('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-i', path.join(home, '.ssh', 'swarm_ed25519'), '--', `${brain.user}@${brain.host}`, 'true'], { timeout: 10000 }).then(() => true, () => false);
+        const gate = ghostGate({ role: lanesFile?.role, onCharger: current.onCharger, lidOpen: current.lidOpen, brainReachable: reachable });
+        if (!gate.ok) return { ok: false, reason: gate.reason };
+        const disk = diskGuard(current.freeDiskGb);
+        if (!disk.ok) return { ok: false, reason: 'disk-below-guard' };
+        return { ok: true };
+      };
       return runWorkerOnce({
-        lanes,
+        lanes: currentLanes,
         holder: `${name}/${process.pid}`,
         paths,
         runner,
@@ -797,6 +986,8 @@ export async function runWorkerCommand(args, deps = {}) {
         run: deps.runTicket ?? undefined,
         brain,
         key: path.join(home, '.ssh', 'swarm_ed25519'),
+        monitor,
+        monitorMs: 30000,
       });
     };
     if (once) {

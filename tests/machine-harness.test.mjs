@@ -14,11 +14,11 @@ import { buildLaneCommand, detectLaneOutcome, laneLoginHint, WORKER_LANE_NAMES }
 import {
   claimWorkerItem, diskGuard, enqueueManifest, listWorkerItems, nextWorkerItem, releaseExpiredWorkerItems, reportWorkerItem, workerQueueFile,
 } from '../tools/worker-queue.mjs';
-import { executeItem, ghostGate, ghostState, slotsForMachine, workerPaths } from '../tools/worker-runner.mjs';
+import { createSshTransport, executeItem, ghostGate, ghostState, slotsForMachine, workerPaths } from '../tools/worker-runner.mjs';
 import { buildMachineView, registryHintText } from '../tools/machine-view.mjs';
 import { snapshotProjectState, restoreProjectState } from '../tools/state-sync.mjs';
 import { runBench } from '../tools/worker-bench.mjs';
-import { failoverDecision, listMachines, parseTarget, doctorLines, runBrainMove, runMachineAdd, runWorkerCommand } from '../tools/machine-commands.mjs';
+import { ensureWorkerKey, failoverDecision, listMachines, parseTarget, doctorLines, runBrainMove, runMachineAdd, runWorkerCommand, updateSshConfigForMachine } from '../tools/machine-commands.mjs';
 
 const tmp = async t => {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'machine-harness-')));
@@ -93,16 +93,18 @@ test('worker queue is idempotent, leases expire, and reports close items', async
   const manifestPath = path.join(dir, 'batch.json');
   const manifest = { version: 1, jobs: [{ id: 'build-a', agent: 'claude', prompt: 'build a' }, { id: 'build-b', agent: 'codex', prompt: 'build b' }] };
   const first = await enqueueManifest({ manifestPath, manifest, project: 'demo', file, now: () => 1000 });
-  assert.deepEqual(first.added.sort(), ['batch.json:build-a', 'batch.json:build-b']);
+  const ids = first.added.sort();
+  assert.equal(ids.length, 2);
+  assert.ok(ids.some(id => id.includes('build-a-')) && ids.some(id => id.includes('build-b-')));
   const again = await enqueueManifest({ manifestPath, manifest, project: 'demo', file, now: () => 2000 });
   assert.equal(again.total, 0);
   const next = await nextWorkerItem({ lanes: ['claude'], file, now: () => 3000 });
-  assert.equal(next.id, 'batch.json:build-a');
+  assert.equal(next.id, ids[0]);
   await claimWorkerItem(next.id, 'bean/1', { file, now: () => 3000, leaseMs: 1000 });
   await assert.rejects(() => claimWorkerItem(next.id, 'bean/2', { file, now: () => 3100 }), { code: 'worker-lease-held' });
   const released = await releaseExpiredWorkerItems({ file, now: () => 5000 });
   assert.deepEqual(released.released, [next.id]);
-  const claimed = await claimWorkerItem(next.id, 'air8/1', { file, now: () => 5000, leaseMs: 1000 });
+  const claimed = await claimWorkerItem(next.id, 'air8/1', { file, now: () => 5000, leaseMs: 5000 });
   assert.equal(claimed.lease.holder, 'air8/1');
   const report = await reportWorkerItem(next.id, 'air8/1', { status: 'done', report: { status: 'pass' }, file, now: () => 6000 });
   assert.equal(report.status, 'done');
@@ -209,10 +211,11 @@ test('worker queue commands work without touching the brain', async t => {
   assert.equal(added.exitCode, 0, added.stdout);
   const next = await runWorkerCommand(['next', '--lanes', 'claude', '--json'], { env: { HOME: dir }, home: dir, workerQueueFile: file, now: () => 2000 });
   assert.equal(next.exitCode, 0, next.stdout);
-  assert.equal(JSON.parse(next.stdout).lane, 'claude');
-  const claimed = await runWorkerCommand(['claim', 'batch.json:tiny', '--holder', 'bean/1'], { env: { HOME: dir }, home: dir, workerQueueFile: file, now: () => 2000 });
+  const nextItem = JSON.parse(next.stdout);
+  assert.equal(nextItem.lane, 'claude');
+  const claimed = await runWorkerCommand(['claim', nextItem.id, '--holder', 'bean/1'], { env: { HOME: dir }, home: dir, workerQueueFile: file, now: () => 2000 });
   assert.equal(claimed.exitCode, 0, claimed.stdout);
-  const report = await runWorkerCommand(['report', 'batch.json:tiny', '--holder', 'bean/1', '--report', Buffer.from(JSON.stringify({ status: 'pass' })).toString('base64')], { env: { HOME: dir }, home: dir, workerQueueFile: file, now: () => 3000 });
+  const report = await runWorkerCommand(['report', nextItem.id, '--holder', 'bean/1', '--report', Buffer.from(JSON.stringify({ status: 'pass' })).toString('base64')], { env: { HOME: dir }, home: dir, workerQueueFile: file, now: () => 3000 });
   assert.equal(report.exitCode, 0, report.stdout);
 });
 
@@ -267,7 +270,8 @@ test('a silent worker returns its item and a rate limit cools that lane on that 
   const after = await listWorkerItems({ file, now: () => 6000 });
   assert.equal(after.find(item => item.id === retried.id).status, 'queued');
   const next = await nextWorkerItem({ lanes: ['claude', 'codex'], machine: 'air8', file, lanesFile, now: () => 6000 });
-  assert.equal(next.id, 'batch.json:b', 'the rate-limited lane is skipped for that machine');
+  assert.notEqual(next.id, retried.id, 'the rate-limited lane is skipped for that machine');
+  assert.equal(next.lane, 'codex');
   const other = await nextWorkerItem({ lanes: ['claude', 'codex'], machine: 'bean', file, lanesFile, now: () => 6000 });
   assert.equal(other.id, retried.id, 'another machine can still take the lane');
 });
@@ -287,11 +291,69 @@ test('a brain move pauses new leases, moves the pointer and resumes', async t =>
   const result = await runBrainMove(['bean'], {
     env: { HOME: dir, SWARM_PROJECTS_FILE: projectsFile, SWARM_WORKER_QUEUE_FILE: queueFile, SWARM_WORKER_PAUSE_FILE: pauseFile },
     home: dir, now: () => 2000, registryFile, brainPointerFile: pointerFile, brainLockFile: lockFile,
-    syncState: false, startBrain: false, runShell: async () => ({ code: 0, stdout: '', stderr: '' }),
+    syncState: false, startBrain: false, stopSource: false, runShell: async () => ({ code: 0, stdout: '', stderr: '' }),
   });
   assert.equal(result.exitCode, 0, result.stdout);
   const registry = await readRegistry({ file: registryFile });
   assert.equal(registry.brain, 'bean');
   assert.equal(JSON.parse(await fs.readFile(pointerFile, 'utf8')).machine, 'bean');
-  assert.equal(await fs.stat(pauseFile).then(() => true, () => false), false);
+  assert.equal(await fs.stat(pauseFile).then(() => true, () => false), true, 'the old brain stays paused after a move');
+});
+
+test('worker keys are forced to the queue RPC and ssh config uses the IP', async t => {
+  const dir = await tmp(t);
+  const run = async (_command, _args, options = {}) => {
+    if (String(options.input ?? '').includes('swarm_ed25519.pub')) return { code: 0, stdout: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeWorker ghost@10.10.7.73\n', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const result = await ensureWorkerKey({ target: { user: 'ghost', host: '10.10.7.73' }, key: path.join(dir, 'brain_key'), name: 'ghost', run, home: dir, runner: '/brain/current/tools/swarm.mjs', node: '/usr/bin/node' });
+  assert.match(result.forced, /command="\/usr\/bin\/node \/brain\/current\/tools\/swarm.mjs worker-rpc",no-pty/);
+  const auth = await fs.readFile(path.join(dir, '.ssh', 'authorized_keys'), 'utf8');
+  assert.equal(auth.trim().split('\n').length, 1);
+  assert.match(auth, /worker-rpc/);
+  assert.doesNotMatch(auth, /^ssh-ed25519 .*ghost@10\.10\.7\.73$/m);
+  await updateSshConfigForMachine({ name: 'ghost', host: '10.10.7.73', user: 'ghost', key: '/brain/.ssh/swarm_ed25519', home: dir });
+  const config = await fs.readFile(path.join(dir, '.ssh', 'config'), 'utf8');
+  assert.match(config, /Host ghost\n  HostName 10\.10\.7\.73/);
+});
+
+test('the worker transport tries the last known IP then the fallback list and sends RPC JSON', async () => {
+  const calls = [];
+  const run = async (_command, args, options = {}) => {
+    calls.push({ args, input: options.input });
+    if (calls.length === 1) return { code: 1, stdout: '', stderr: 'unreachable' };
+    return { code: 0, stdout: JSON.stringify({ ok: true }), stderr: '' };
+  };
+  const brain = { host: '10.10.10.169', user: 'prime', hosts: ['10.10.10.169', '100.104.42.88'], epoch: 2 };
+  const transport = createSshTransport({ brain, key: '/k', run });
+  const result = await transport.next({ lanes: ['claude'], machine: 'ghost' });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(brain.host, '100.104.42.88');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].args[0], '-T');
+  assert.ok(calls[0].args.includes('prime@10.10.10.169'));
+  assert.ok(calls[1].args.includes('prime@100.104.42.88'));
+  assert.equal(JSON.parse(calls[1].input).op, 'next');
+  assert.equal(JSON.parse(calls[1].input).epoch, 2);
+});
+
+test('machine add stores the IP, not the remote .local name, and sets role both', async t => {
+  const dir = await tmp(t);
+  const key = path.join(dir, 'swarm_ed25519');
+  await fs.writeFile(key, 'private');
+  await fs.writeFile(`${key}.pub`, 'public');
+  const registryFile = path.join(dir, 'machines.json');
+  await writeRegistry({ version: 1, brain: 'mini', order: ['mini'], machines: { mini: machine('mini', { role: 'brain', host: '10.10.10.169', ip: '10.10.10.169' }) } }, { file: registryFile });
+  const probe = 'host=ghost.local\nip=10.10.7.73\nos=macos\nramGb=16\ncores=8\nfreeDiskGb=90\nlane=claude\nremoteLogin=true\nscreenSharing=true\nrunner=running\nfileVault=false\n';
+  const run = async (_command, _args, options = {}) => {
+    if (String(options.input ?? '').startsWith('export SWARM_MACHINE_NAME')) return { code: 0, stdout: 'MACHINE_SETUP_OK name=ghost slots=4 lanes=["claude"]\n', stderr: '' };
+    return { code: 0, stdout: probe, stderr: '' };
+  };
+  const runShell = async () => ({ code: 0, stdout: '', stderr: '' });
+  const result = await runMachineAdd(['ghost@10.10.7.73', '--name', 'ghost', '--role', 'both'], { env: { HOME: dir }, home: dir, run, runShell, interactive: async () => 0, installRoot: process.cwd(), registryFile, now: () => 1000, brainLockFile: path.join(dir, 'brain.lock') });
+  assert.equal(result.exitCode, 0, result.stdout);
+  const registry = await readRegistry({ file: registryFile });
+  assert.equal(registry.machines.ghost.host, '10.10.7.73');
+  assert.equal(registry.machines.ghost.ip, '10.10.7.73');
+  assert.equal(registry.machines.ghost.role, 'remote+worker');
 });

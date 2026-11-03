@@ -8,18 +8,24 @@ const execFileAsync = promisify(execFile);
 
 export const WORKER_LANE_CLIS = Object.freeze(['claude', 'codex', 'gemini', 'opencode', 'cursor-agent']);
 
-export function defaultRun(command, args = [], options = {}) {
-  return execFileAsync(command, args, { timeout: 15000, maxBuffer: 2 * 1024 * 1024, ...options });
+export async function defaultRun(command, args = [], options = {}) {
+  if (options.input !== undefined) return defaultRunInput(command, args, options);
+  try {
+    const result = await execFileAsync(command, args, { timeout: 15000, maxBuffer: 2 * 1024 * 1024, ...options });
+    return { code: 0, stdout: String(result?.stdout ?? ''), stderr: String(result?.stderr ?? '') };
+  } catch (error) {
+    return { code: typeof error?.code === 'number' ? error.code : 1, stdout: String(error?.stdout ?? ''), stderr: String(error?.stderr ?? error?.message ?? '') };
+  }
 }
 
-export function defaultRunInput(command, args = [], { input = '', timeout = 20000 } = {}) {
+export function defaultRunInput(command, args = [], { input = '', timeout = 20000, onData } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(Object.assign(new Error(`${command} timed out`), { stdout, stderr, code: 'ETIMEDOUT' })); }, timeout);
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.stdout.on('data', chunk => { stdout += chunk; onData?.(String(chunk), 'stdout'); });
+    child.stderr.on('data', chunk => { stderr += chunk; onData?.(String(chunk), 'stderr'); });
     child.on('error', error => { clearTimeout(timer); reject(error); });
     child.on('close', code => { clearTimeout(timer); if (code === 0) resolve({ stdout, stderr, code }); else reject(Object.assign(new Error(`${command} exited ${code}`), { stdout, stderr, code })); });
     child.stdin.end(input);
@@ -89,6 +95,23 @@ async function runSafe(run, command, args = [], options = {}) {
   }
 }
 
+
+export function firstIp(output) {
+  for (const token of String(output ?? '').split(/\s+/)) {
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(token) && !token.startsWith('127.')) return token;
+  }
+  return undefined;
+}
+
+export async function localAddresses({ run = defaultRun } = {}) {
+  const darwin = (await runSafe(run, 'sh', ['-c', 'ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true'])).stdout;
+  const linux = (await runSafe(run, 'sh', ['-c', "hostname -I 2>/dev/null | tr ' ' '\\n' | grep -v '^127\\.' | head -1"])).stdout;
+  const ip = firstIp(darwin) ?? firstIp(linux);
+  const ts = await runSafe(run, 'tailscale', ['ip', '-4']);
+  const tailscaleHost = firstIp(ts.stdout);
+  return { ...(ip ? { ip } : {}), ...(tailscaleHost ? { tailscaleHost } : {}) };
+}
+
 export function parseLanCLIs(pathList) {
   const seen = new Set();
   for (const line of String(pathList ?? '').split('\n')) {
@@ -102,8 +125,10 @@ export function parseLanCLIs(pathList) {
 
 export async function probeLocal({ run = defaultRun, home = os.homedir(), env = process.env, now = Date.now } = {}) {
   const platform = os.platform();
+  const addresses = await localAddresses({ run });
   const result = {
     host: os.hostname(),
+    ...addresses,
     os: platform === 'darwin' ? 'macos' : platform === 'linux' ? 'linux' : platform,
     arch: os.arch(),
     ramGb: Math.round(os.totalmem() / 1024 ** 3),
@@ -168,6 +193,8 @@ export function remoteProbeScript() {
     '  *) emit os "$(uname -s)" ;;',
     'esac',
     'emit arch "$(uname -m)"',
+    'if [ "$(uname -s)" = Darwin ]; then RIP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true); else RIP=$(hostname -I 2>/dev/null | tr " " "\\n" | grep -v "^127\\." | head -1); fi',
+    'if [ -n "$RIP" ]; then emit ip "$RIP"; fi',
     'if [ "$(uname -s)" = Darwin ]; then',
     '  emit ramGb "$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))"',
     '  emit cores "$(sysctl -n hw.ncpu 2>/dev/null || echo 0)"',
@@ -218,7 +245,7 @@ export function parseRemoteProbe(stdout) {
     } else if (key === 'sleepMinutes') {
       const n = number(value);
       if (n !== undefined) result.sleepMinutes = n;
-    } else if (['host', 'os', 'arch', 'chip', 'runner'].includes(key) && value) {
+    } else if (['host', 'os', 'arch', 'chip', 'runner', 'ip', 'tailscaleHost'].includes(key) && value) {
       result[key] = value;
     }
   }
