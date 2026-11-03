@@ -59,3 +59,9 @@ The worker lane plugins are one config entry each: `claude`, `codex`, `gemini`, 
 - Type each lane's own login on that machine (`claude`, `codex login`, `gemini`, `opencode auth login`, `cursor-agent login`, `gh auth login`).
 - If FileVault is on, a reboot waits for the password at the keyboard; run `swarm machine doctor` to see it.
 - Keep a full-time worker on the charger with the lid open; a `remote+worker` machine follows the ghost rules above.
+
+## Linux, PS5s and rented GPUs
+
+The same `swarm machine add <user>@<host>` works on Linux: it installs the runner as a systemd user unit and writes the same `~/swarm-worker/lanes.json`. dev2 is registered this way (`swarm machine add dev2@10.10.10.220 --name dev2`); the PS5s and Vast.ai GPU hosts join with the same command. GPU work keeps using the existing `rented` lane and `swarm gpu`; the machine registry only adds placement and health.
+
+On a machine below the 20 GB free-disk guard, `swarm machine doctor <name>` reports it and the runner refuses new work until the disk is cleaned.
