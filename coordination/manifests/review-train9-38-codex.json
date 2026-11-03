@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain938codex",
+      "agent": "codex",
+      "model": "gpt-6-astra",
+      "tier": "expensive",
+      "tierReason": "interim review of the release diff while the Claude weekly limit is unavailable",
+      "prompt": "Interim review of Project Swarm release train 9 / 1.167.38: coordination/review/train9-38.diff (combined diff against main at 1.167.37). The release contains (1) Train 9 upgrade A: one board for both Macs, machine tags on Command Center cards/events/Cockpit, machines list with versions and drift, remote project tags; and (2) the machine harness: one machine registry, `swarm machine add/login/doctor/list/remove`, pull-based worker queue with leases/heartbeats/requeue and per-machine lane cooldowns, worker runners as LaunchAgent/systemd, brain move/lock/failover, shared-state snapshot/rsync, brain repo mirrors, lane plugins for claude/codex/gemini/opencode/cursor, ghost dual-role rules, `swarm remote setup`, `attach`, `screen`, and a measured-only Machines view in Swarm Watch. Look for BLOCKERS only: a guard or approval bypass, secrets/keys reaching a worker or a public path, a machine or worker able to take work it must not (ghost on battery/lid closed/away, disk below 20 GB, paused lane), a lost or double-claimed ticket, a brain move that loses state or runs two brains, a shell injection or unsafe SSH/rsync argument, a crash on a normal path, a regression in existing behavior, or a test that proves nothing. The full diff is in your context; docs/machines.md and tests/machine-harness.test.mjs describe the intended behavior. Write ONLY coordination/review/train9-38-codex-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+      "context": [
+        "coordination/review/train9-38.diff",
+        "docs/machines.md",
+        "tests/machine-harness.test.mjs"
+      ],
+      "outputs": ["coordination/review/train9-38-codex-review.json"],
+      "resultFile": "coordination/review/train9-38-codex-review.json",
+      "timeoutMs": 2400000
+    }
+  ]
+}
