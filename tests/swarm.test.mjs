@@ -367,7 +367,8 @@ test('normal success and error exits clean surviving descendants in the owned gr
 test('cleanup signal permission failures are explicit and prevent successful integration', async t => {
  const root=await fixture(t);const attempts=[];
  const state=await runManifest(root,manifest(),{spawnImpl:update,killImpl:(target,signal)=>{attempts.push({target,signal});throw Object.assign(Error('private detail must not leak'),{code:'EPERM'});}});
- assert.equal(state.status,'failed');assert.equal(state.jobs[0].status,'failed');assert.match(state.jobs[0].cleanupError,/EPERM/);assert.match(state.jobs[0].error,/cleanup failed/);assert.ok(!JSON.stringify(state).includes('private detail'));assert.equal(attempts.length,1);assert.equal(attempts[0].signal,'SIGTERM');assert.ok(attempts[0].target<0);await assert.rejects(integrateRun(root,state.id),/Only a complete/);
+ assert.equal(state.status,'failed');assert.equal(state.jobs[0].status,'failed');assert.match(state.jobs[0].cleanupError,/EPERM/);assert.match(state.jobs[0].error,/cleanup failed/);assert.ok(!JSON.stringify(state).includes('private detail'));// A lasting EPERM is re-probed for the grace window (macOS zombie groups answer EPERM briefly), then reported.
+ assert.ok(attempts.length>=1);assert.ok(attempts.every(call=>call.signal==='SIGTERM'&&call.target<0));await assert.rejects(integrateRun(root,state.id),/Only a complete/);
 });
 
 test('SIGKILL escalation failures are reported instead of swallowed', async()=>{

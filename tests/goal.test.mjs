@@ -9,7 +9,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { validateManifest, parseGoFlags } from '../tools/swarm.mjs';
 import { commitOutputs } from '../tools/go.mjs';
-import { createGoBranch, goGoal, isGoalArgument, manifestForGoal, resumeCommand, topLevelFolders, worktreeDirty } from '../tools/goal.mjs';
+import { createGoBranch, goGoal, isGoalArgument, manifestForGoal, resumeCommand, rootLevelFiles, topLevelFolders, worktreeDirty } from '../tools/goal.mjs';
+import { validateChildManifest, validateLeadArea } from '../tools/leads.mjs';
 
 const exec = promisify(execFile);
 
@@ -199,10 +200,48 @@ test('lead prompts list the tracked files inside their scope, capped and cleaned
   const files = ['src/a.js', 'src/b.js', 'tests/t.js', 'src‮/evil.js', 'README.md'];
   const m = manifestForGoal('do it', { folders: ['src', 'tests'], files, leads: 2, maxJobs: 5, concurrency: 1 });
   const src = m.jobs.find(job => job.area.scope.includes('src/')).prompt;
-  assert.match(src, /FILES IN YOUR SCOPE \(2 of 2/);
-  assert.match(src, /- src\/a\.js\n- src\/b\.js/);
-  assert.ok(!src.includes('tests/t.js') && !src.includes('README.md') && !/‮/.test(src));
+  assert.match(src, /FILES IN YOUR SCOPE \(3 of 3/);
+  assert.match(src, /- src\/a\.js\n- src\/b\.js\n- README\.md/);
+  assert.ok(!src.includes('tests/t.js') && !/‮/.test(src));
+  // README.md sits at the repo root, so exactly one lead owns it.
+  assert.equal(m.jobs.filter(job => job.area.scope.includes('README.md')).length, 1);
   const many = manifestForGoal('x', { folders: ['src'], files: Array.from({ length: 300 }, (_, n) => `src/f${n}.js`), leads: 1, maxJobs: 5, concurrency: 1 });
   assert.match(many.jobs[0].prompt, /\(200 of 300/);
   assert.equal(manifestForGoal('x', { folders: ['src'], leads: 1 }).jobs[0].prompt.includes('FILES IN YOUR SCOPE'), false);
+});
+
+test('root-level files get a lead, so a goal can change README.md (bot-test: only coordination/ besides root files)', () => {
+  const files = ['.gitignore', '.project-swarm.json', 'AGENTS.md', 'CLAUDE.md', 'README.md', 'coordination/TASK.md', 'coordination/swarm-smoke.json'];
+  const m = manifestForGoal('Add a short README that says hello', { folders: ['coordination'], files });
+  validateManifest(m);
+  assert.equal(m.jobs.length, 1);
+  assert.deepEqual(m.jobs[0].area.scope, ['coordination/', 'AGENTS.md', 'CLAUDE.md', 'README.md']);
+  assert.match(m.jobs[0].prompt, /^You own only these folders and files: coordination\/, AGENTS\.md, CLAUDE\.md, README\.md\./);
+  assert.match(m.jobs[0].prompt, /- README\.md/);
+  assert.ok(!m.jobs[0].area.scope.some(entry => entry.startsWith('.')), 'dotfiles stay out of scope');
+  // A child job that edits the root README now passes the lead's scope check.
+  const area = validateLeadArea({ ...m.jobs[0], agent: 'codex' });
+  validateChildManifest({ version: 1, jobs: [{ id: 'readme', agent: area.agents[0], prompt: 'Say hello in README.md.', context: ['README.md'], outputs: ['README.md'] }] }, { lead: m.jobs[0], area, parentManifest: m });
+});
+
+test('root files join the smallest folder bucket, and a repo with only root files still plans', () => {
+  const split = manifestForGoal('x', { folders: ['app', 'lib', 'tools'], files: ['README.md', 'package.json', 'app/a.js'], leads: 2 });
+  validateManifest(split);
+  assert.deepEqual(split.jobs.map(job => job.area.scope), [['app/', 'tools/'], ['lib/', 'README.md', 'package.json']]);
+  const rootOnly = manifestForGoal('x', { folders: [], files: ['README.md'] });
+  validateManifest(rootOnly);
+  assert.deepEqual(rootOnly.jobs.map(job => job.area.scope), [['README.md']]);
+  assert.match(rootOnly.jobs[0].prompt, /^You own only these files: README\.md\./);
+  assert.throws(() => manifestForGoal('x', { folders: [], files: ['README.md'], leads: 2 }), { code: 'goal-leads' });
+  // Folder-only plans keep their old prompt wording.
+  assert.match(manifestForGoal('x', { folders: ['app'] }).jobs[0].prompt, /^You own only these folders: app\/\./);
+});
+
+test('root files that would overflow the 50-entry scope limit are left out instead of breaking the plan', () => {
+  const files = Array.from({ length: 60 }, (_, n) => `f${n}.md`);
+  const m = manifestForGoal('x', { folders: ['app'], files });
+  validateManifest(m);
+  assert.deepEqual(m.jobs[0].area.scope, ['app/']);
+  assert.throws(() => manifestForGoal('x', { folders: [], files }), { code: 'goal-no-folders' });
+  assert.deepEqual(rootLevelFiles(['b.md', 'a.md', 'a.md', 'dir/c.md', '.env', 'goal-lead-3.json', 'x*.md']), ['a.md', 'b.md']);
 });

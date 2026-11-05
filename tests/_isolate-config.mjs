@@ -53,6 +53,12 @@ fs.writeFileSync(
   { mode: 0o600 },
 );
 
+// Runs in the suite never probe this machine's real CLIs, logins or keys before routing; the
+// lane-doctor tests inject their own gate.
+process.env.SWARM_LANE_DOCTOR = '0';
+// Nor read the real Keychain (Cursor login token or API key); Keychain tests inject their own reader.
+process.env.SWARM_CURSOR_NO_KEYCHAIN = '1';
+
 // Lesson #152: a test that passes its own small `env` object (never `process.env`) to a function
 // whose fallback is `env.HOME || os.homedir()` still lands on the real machine's home once that
 // object has no HOME key of its own — os.homedir() itself reads process.env.HOME at call time, so

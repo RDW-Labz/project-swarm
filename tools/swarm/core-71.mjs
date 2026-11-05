@@ -1,6 +1,6 @@
 import { assertScratchOutsideRepo, resolveVenvInterpreterDirs } from '../claude-shell.mjs';
 import { blockedNoteFromReply, codexEnvironment, codexMessage, codexProfile, git, parseCodexReply, prepareViteCaches, resolveReadPaths, runCodexWithRetry, validateReadPaths } from '../codex-adapter.mjs';
-import { CURSOR_BLIP_RE, cursorConfig, cursorEnvironment, cursorMessage, cursorProfile, redactCursorKey, requireCursorApiKey, resolveCursorBinary } from '../cursor-adapter.mjs';
+import { CURSOR_BLIP_RE, cursorAuthEnv, cursorConfig, cursorEnvironment, cursorMessage, cursorProfile, redactCursorKey, resolveCursorAuth, resolveCursorBinary } from '../cursor-adapter.mjs';
 import { isBuildArtifact } from '../ignored-artifacts.mjs';
 import { acquireIntegrationLock } from '../integration-lock.mjs';
 import { loadLocalConfig } from '../local-config.mjs';
@@ -87,7 +87,9 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
     // settled before the profile is written; allowedPaths are extra read-only grants.
     const cursorSettings = isCursor ? cursorConfig(config, options.env?.HOME ?? os.homedir()) : null;
     const cursorBinary = isCursor ? await resolveCursorBinary(options.env ?? process.env) : null;
-    const cursorKey = isCursor ? requireCursorApiKey(options.env ?? process.env) : null;
+    // One credential: the subscription login (CURSOR_AUTH_TOKEN) when this Mac is logged in, else CURSOR_API_KEY.
+    const cursorAuth = isCursor ? resolveCursorAuth(options.env ?? process.env) : null;
+    const cursorKey = cursorAuth?.secret ?? null;
     const readPaths = await resolveReadPaths([...(job.readPaths ?? []), ...(cursorSettings?.allowedPaths ?? [])], undefined, config);
     const venv = await resolveVenvInterpreterDirs(worktree);
     if (venv.unresolvable.length) { result = venvUnresolvableResult(venv.unresolvable); return result; }
@@ -132,7 +134,7 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
         // The key is set last so neither swarmEnv nor testEnv can replace or drop it; the adapter
         // log sink and the saved stdout/stderr/response are redacted against it.
         const cursorJob = { ...job, timeoutMs: job.timeoutMs ?? cursorSettings.timeoutMs };
-        result = await execute(cursorJob, worktree, message, { ...options, logDirectory: path.join(root, directory, job.id), workerKey: cursorKey, cursor: { profile, bin: cursorBinary.bin, worktree, apiKey: cursorKey, env: { ...await cursorEnvironment(options.env), ...workerEnv, CURSOR_API_KEY: cursorKey } } });
+        result = await execute(cursorJob, worktree, message, { ...options, logDirectory: path.join(root, directory, job.id), workerKey: cursorKey, cursor: { profile, bin: cursorBinary.bin, worktree, apiKey: cursorKey, env: cursorAuthEnv({ ...await cursorEnvironment(options.env), ...workerEnv }, cursorAuth) } });
         for (const key of ['stdout', 'stderr', 'response', 'error', 'blipText']) {
           if (typeof result[key] === 'string' && result[key].includes(cursorKey)) { result.workerKeyExposed = true; result[key] = redactCursorKey(result[key], cursorKey); }
         }
@@ -146,7 +148,7 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
         }
         const leaked = isCursor ? outputs.filter(output => output.bytes.includes(Buffer.from(cursorKey))).map(output => output.file) : [];
         if (leaked.length) {
-          result = { ...result, status: 'failed', workerKeyExposed: true, error: `output contains CURSOR_API_KEY: ${leaked.join(', ')}` };
+          result = { ...result, status: 'failed', workerKeyExposed: true, error: `output contains the Cursor credential (${cursorAuth.envName}): ${leaked.join(', ')}` };
         } else if (missing.length) {
           // Field lesson 19: a worker's own "blocked" envelope is the real reason, reported as
           // job status blocked with its summary — never masked by a generic missing-output error.
@@ -166,7 +168,7 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
             resultFiles.add(reaskRelative);
             const launchOptions = { ...options, logDirectory: path.join(root, directory, job.id), onOutput: () => {} };
             if (isCursor) {
-              const reask = await execute(job, worktree, reaskMessage, { ...launchOptions, workerKey: cursorKey, cursor: { profile, bin: cursorBinary.bin, worktree, apiKey: cursorKey, env: { ...await cursorEnvironment(options.env), ...workerEnv, CURSOR_API_KEY: cursorKey } } });
+              const reask = await execute(job, worktree, reaskMessage, { ...launchOptions, workerKey: cursorKey, cursor: { profile, bin: cursorBinary.bin, worktree, apiKey: cursorKey, env: cursorAuthEnv({ ...await cursorEnvironment(options.env), ...workerEnv }, cursorAuth) } });
               for (const key of ['stdout', 'stderr', 'response', 'error']) if (typeof reask[key] === 'string') reask[key] = redactCursorKey(reask[key], cursorKey);
               return reask;
             }
