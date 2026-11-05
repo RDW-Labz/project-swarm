@@ -319,21 +319,41 @@ export function claudeArgs(job, { resume } = {}) {
   return ['-p', '--restricted', '--safe-mode', '--tools', tools, '--permission-mode', job.outputs.length ? 'acceptEdits' : 'default', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence', '--no-chrome', '--output-format', 'stream-json', '--verbose', ...(job.web ? ['--allowedTools', 'WebSearch,WebFetch'] : []), ...(job.model ? ['--model', job.model] : []), ...(resume ? ['--resume', resume] : [])];
 }
 
-export function stopChild(child, { killImpl = process.kill.bind(process) } = {}) {
+// macOS answers EPERM, not ESRCH, for a process group whose only members are exited but not yet
+// reaped (zombies). It clears within milliseconds once launchd reaps them, so an EPERM is re-probed
+// for this long before it is reported as a real permission failure.
+export const CLEANUP_EPERM_GRACE_MS = 1000;
+const CLEANUP_EPERM_RETRY_MS = 10;
+
+export function stopChild(child, { killImpl = process.kill.bind(process), epermGraceMs = CLEANUP_EPERM_GRACE_MS, now = Date.now } = {}) {
   if (!child?.pid) return Promise.resolve({error:null});
   const target = process.platform !== 'win32' ? -child.pid : child.pid;
   return new Promise(resolve => {
-    let timer, finished=false;
-    const finish=error=>{if(finished)return;finished=true;clearTimeout(timer);child.removeListener('close',check);resolve({error:error??null});};
-    const signal=(kind)=>{try{killImpl(target,kind);return true;}catch(error){if(error.code==='ESRCH'){finish();return false;}const code=/^[A-Z0-9_]+$/.test(error.code??'')?error.code:'UNKNOWN';finish(`Owned worker cleanup failed (${code}) while sending ${kind}; descendants may remain`);return false;}};
+    let timer, retry=null, epermSince=null, finished=false;
+    const finish=error=>{if(finished)return;finished=true;clearTimeout(timer);clearTimeout(retry);child.removeListener('close',check);resolve({error:error??null});};
+    // A send that hits EPERM inside the grace window is retried; onSent runs if a retry succeeds.
+    // Only one retry is pending at a time, and other probes wait for it.
+    const signal=(kind,onSent)=>{
+      if(finished)return false;
+      try{killImpl(target,kind);epermSince=null;return true;}
+      catch(error){
+        if(error.code==='ESRCH'){finish();return false;}
+        if(error.code==='EPERM'){
+          epermSince??=now();
+          if(now()-epermSince<epermGraceMs){retry=setTimeout(()=>{retry=null;if(signal(kind,onSent))onSent?.();},CLEANUP_EPERM_RETRY_MS);return false;}
+        }
+        const code=/^[A-Z0-9_]+$/.test(error.code??'')?error.code:'UNKNOWN';finish(`Owned worker cleanup failed (${code}) while sending ${kind}; descendants may remain`);return false;
+      }
+    };
     // Keep the group allocated by this spawn as the only cleanup target.
     // Normal leader exit, like cancellation, can leave descendants in that group.
-    const check=()=>signal(0);
-    if(!signal('SIGTERM'))return;
-    timer=setTimeout(()=>{if(signal(0)&&signal('SIGKILL'))finish();},500);
+    const check=()=>{if(retry===null)signal(0);};
+    const escalate=()=>{if(signal('SIGKILL',finish))finish();};
+    const killTick=()=>{if(retry!==null){timer=setTimeout(killTick,CLEANUP_EPERM_RETRY_MS);return;}if(signal(0,escalate))escalate();};
+    const armKill=()=>{timer=setTimeout(killTick,500);};
     child.once('close',check);
-    // Wait for libuv to reap a terminating leader before probing the group.
-    // This avoids a redundant probe during the leader's asynchronous exit.
+    if(signal('SIGTERM',armKill))armKill();
+    else if(finished)return;
     if(child.exitCode!=null||child.signalCode!=null)check();
   });
 }
