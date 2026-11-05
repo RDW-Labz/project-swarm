@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 import { LANE_AGENTS } from './lanes.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
+import { JOB_TYPES } from './job-types.mjs';
+import { TIERS } from './swarm/patterns.mjs';
 
 export const LEAD_LIMITS = Object.freeze({ maxJobsDefault: 50, maxJobsMax: 500, concurrencyDefault: 8, concurrencyMax: 64 });
 const AREA_KEYS = ['goal', 'scope', 'maxJobs', 'concurrency', 'agents', 'budget'];
 const CHILD_KEYS = ['version', 'concurrency', 'jobs', 'budget', 'contract', 'report'];
 const JOB_KEYS = ['id', 'agent', 'model', 'type', 'tier', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'after', 'deletes', 'report', 'sensitive'];
+// A lead never names a child type or tier the runner does not know: it once wrote type "worker" and
+// tier "standard" because the prompt listed the keys but not their values.
+const CHILD_TYPES = Object.keys(JOB_TYPES).filter(type => type !== 'lead');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const error = (code, reason) => Object.assign(new Error(`${code}: ${reason}`), { code });
 function keys(value, allowed, fail) {
@@ -83,6 +88,8 @@ export function validateChildManifest(child, { lead, area, parentManifest, leadS
     if (!object(job)) fail('job must be an object');
     keys(job, JOB_KEYS, fail);
     if (job.type === 'lead') fail('depth limit 2: child jobs cannot be leads');
+    if (job.type !== undefined && !CHILD_TYPES.includes(job.type)) fail(`type ${JSON.stringify(job.type)} is not one of ${CHILD_TYPES.join(', ')}`);
+    if (job.tier !== undefined && !TIERS.includes(job.tier)) fail(`tier ${JSON.stringify(job.tier)} is not one of ${TIERS.join(', ')}`);
     if (!area.agents.includes(job.agent)) fail(`agent ${job.agent} is not allowed`);
     if (job.tier === 'expensive' && !area.agents.includes('claude')) fail('expensive tier requires claude in area.agents');
     if (job.sensitive === false && (leadSensitive ?? lead.sensitive) !== false) fail('sensitive: false requires a lead with sensitive: false');
@@ -112,7 +119,7 @@ export function leadPromptBlock({ job, area, outputPath }) {
   const short = (value, max) => value.length > max ? `${value.slice(0, max - 3)}...` : value;
   const file = area.scope[0].endsWith('/') ? `${area.scope[0]}result.txt` : area.scope[0];
   const example = { version: 1, jobs: [{ id: 'worker', agent: area.agents[0], prompt: 'Implement the goal.', outputs: [file.length <= 200 ? file : '<file inside scope>'] }] };
-  return `\nLead goal: ${short(area.goal, 400)}\nScope: ${short(JSON.stringify(area.scope), 700)}\nMax jobs: ${area.maxJobs}; allowed agents: ${area.agents.join(', ')}; concurrency cap: ${area.concurrency}.\nOnly output: ${short(outputPath, 200)}, holding one JSON manifest {"version":1,"jobs":[...]}.\nAllowed top-level keys: ${CHILD_KEYS.join(', ')}.\nAllowed job keys: ${JOB_KEYS.join(', ')}.\nEvery job output and deletes entry must be inside the scope. outputs, context and deletes are exact file paths, never folders (no trailing slash): to change an existing file list it in both context and outputs, to create a file name the new file. Plan from the file list you are given; you cannot read file contents, so tell each child job to read the files it needs. A job's report, if you set it, is exactly the word short. Child jobs cannot be leads or run commands.\nExample: ${JSON.stringify(example)}`;
+  return `\nLead goal: ${short(area.goal, 400)}\nScope: ${short(JSON.stringify(area.scope), 700)}\nMax jobs: ${area.maxJobs}; allowed agents: ${area.agents.join(', ')}; concurrency cap: ${area.concurrency}.\nOnly output: ${short(outputPath, 200)}, holding one JSON manifest {"version":1,"jobs":[...]}.\nAllowed top-level keys: ${CHILD_KEYS.join(', ')}.\nAllowed job keys: ${JOB_KEYS.join(', ')}.\ntype is optional; leave it out for ordinary work, or use exactly one of: ${CHILD_TYPES.join(', ')}. tier is optional; if set, use exactly one of: ${TIERS.join(', ')}.\nEvery job output and deletes entry must be inside the scope. outputs, context and deletes are exact file paths, never folders (no trailing slash): to change an existing file list it in both context and outputs, to create a file name the new file. Plan from the file list you are given; you cannot read file contents, so tell each child job to read the files it needs. A job's report, if you set it, is exactly the word short. Child jobs cannot be leads or run commands.\nExample: ${JSON.stringify(example)}`;
 }
 
 export function leadRollup(childState, rollup) {

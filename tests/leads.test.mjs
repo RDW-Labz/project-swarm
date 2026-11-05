@@ -130,3 +130,19 @@ test('a child report is always "short": a sentence from the lead is coerced, and
   assert.equal(shortParent.jobs[0].report, 'short');
   assert.equal(sentence.jobs[0].report, 'Short report: changed files, risks.', 'the input is not changed');
 });
+
+test('lead prompts name the valid child types and tiers, and an invented one is refused clearly', async () => {
+  const { leadPromptBlock, validateChildManifest, validateLeadArea } = await import('../tools/leads.mjs');
+  const lead = { id: 'lead-1', type: 'lead', agent: 'codex', prompt: 'x', context: [], outputs: ['goal-lead-1.json'], area: { goal: 'Add a short README that says hello', scope: ['README.md'], maxJobs: 2, concurrency: 1 } };
+  const area = validateLeadArea(lead);
+  const prompt = leadPromptBlock({ job: lead, area, outputPath: 'goal-lead-1.json' });
+  assert.match(prompt, /use exactly one of: build, fix, test, review, research, docs, merge\./);
+  assert.match(prompt, /tier is optional; if set, use exactly one of: cheap, mid, expensive\./);
+  // The exact child job a codex lead wrote on the bot-fleet runner (Nov 5, 2026).
+  const written = { id: 'write-readme', agent: area.agents[0], type: 'worker', tier: 'standard', prompt: 'Update README.md so it says hello.', context: ['README.md'], outputs: ['README.md'], report: 'short' };
+  assert.throws(() => validateChildManifest({ version: 1, jobs: [written] }, { lead, area, parentManifest: { jobs: [lead] } }), /lead-child-invalid: lead-1: type "worker" is not one of build, fix/);
+  assert.throws(() => validateChildManifest({ version: 1, jobs: [{ ...written, type: 'docs' }] }, { lead, area, parentManifest: { jobs: [lead] } }), /tier "standard" is not one of cheap, mid, expensive/);
+  validateChildManifest({ version: 1, jobs: [{ ...written, type: 'docs', tier: 'cheap' }] }, { lead, area, parentManifest: { jobs: [lead] } });
+  const { type, tier, ...plain } = written;
+  validateChildManifest({ version: 1, jobs: [plain] }, { lead, area, parentManifest: { jobs: [lead] } });
+});
