@@ -138,6 +138,9 @@ test('lead prompts name the valid child types and tiers, and an invented one is 
   const prompt = leadPromptBlock({ job: lead, area, outputPath: 'goal-lead-1.json' });
   assert.match(prompt, /use exactly one of: build, fix, test, review, research, docs, merge\./);
   assert.match(prompt, /tier is optional; if set, use exactly one of: cheap, mid, expensive\./);
+  assert.match(prompt, /Allowed top-level keys: version, concurrency, jobs, budget, report\. Leave out contract/);
+  // The child manifest a codex lead wrote next, with an invented contract object.
+  assert.throws(() => validateChildManifest({ version: 1, jobs: [{ id: 'hello', agent: area.agents[0], type: 'docs', prompt: 'Say hello.', context: ['README.md'], outputs: ['README.md'] }], contract: { scope: ['README.md'], noDeletes: true } }, { lead, area, parentManifest: { jobs: [lead] } }), /contract must be the parent contract/);
   // The exact child job a codex lead wrote on the bot-fleet runner (Nov 5, 2026).
   const written = { id: 'write-readme', agent: area.agents[0], type: 'worker', tier: 'standard', prompt: 'Update README.md so it says hello.', context: ['README.md'], outputs: ['README.md'], report: 'short' };
   assert.throws(() => validateChildManifest({ version: 1, jobs: [written] }, { lead, area, parentManifest: { jobs: [lead] } }), /lead-child-invalid: lead-1: type "worker" is not one of build, fix/);
