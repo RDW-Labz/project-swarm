@@ -71,6 +71,7 @@ import { projectStatus, formatStatus } from './status.mjs';
 import { commandLikeMessage } from './goal-guard.mjs';
 import { zshCompletion, completeRuns, COMMANDS } from './completion.mjs';
 import { checkSwarmCommand } from './swarm-bin.mjs';
+import { createLaneDoctorGate } from './lane-doctor.mjs';
 import { autoInit, GOAL_BUDGET, isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, trackedFiles, worktreeDirty, createGoBranch } from './goal.mjs';
 import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, SCALE_MAX_JOBS, prepareScaleRepo, scaleStub, scaleFull } from './scale.mjs';
 import { routeJob, rentedContractProblem } from './router.mjs';
@@ -311,6 +312,29 @@ export async function runManifest(root, manifest, options = {}) {
   return { ...state, humanJobs };
 }
 
+// Routes an auto job, then runs its lane's launch preflight (platform, binary, credential). With a lane
+// doctor gate, a lane whose preflight fails is marked failed and the next healthy lane is tried; without
+// one, the preflight error is thrown as before.
+async function routeWithLanePreflight(job, lanes, routeOptions, { laneGate, platform, env }) {
+  const skips = [];
+  for (;;) {
+    const route = pickJobRoute(job, lanes, { ...routeOptions, ...(laneGate ? { laneReady: laneGate.ready } : {}) });
+    try {
+      if (route.agent === 'codex') requireCodexPlatform(platform);
+      if (route.agent === 'cursor') {
+        requireCursorPlatform(platform);
+        await resolveCursorBinary(env);
+        requireCursorApiKey(env);
+      }
+      return { route, skips };
+    } catch (error) {
+      if (!laneGate) throw error;
+      laneGate.markFailed(route.agent, error.message);
+      skips.push({ agent: route.agent, reason: String(error.message).slice(0, 200) });
+    }
+  }
+}
+
 async function runManifestMain(root, manifest, options = {}) {
   const { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null, batch: batchFlag = false, batchLimits } = options;
   root = await fs.realpath(root);
@@ -320,13 +344,20 @@ async function runManifestMain(root, manifest, options = {}) {
   const appliedTypes = await applyManifestJobTypes(root, manifest, { env });
   manifest = appliedTypes.manifest;
   manifest = selectRunManifest(manifest, jobs);
-  const runLanes = resolveLanes({ config: loadLocalConfig({ env }), manifest, env });
+  const runConfig = loadLocalConfig({ env });
+  const runLanes = resolveLanes({ config: runConfig, manifest, env });
   const oversize = await editInPlaceOnlyJobs(root, manifest, { env });
-  const dispatchJobs = manifest.jobs.map(job => {
-    if (job.agent !== 'auto') return job;
-    const route = pickJobRoute(job, runLanes, { root, contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(job.id) });
-    return withoutApiOnlyFields({ ...job, agent: route.agent, model: route.model });
-  });
+  // Auto jobs go only to lanes that pass `swarm doctor` in this run's environment; a lead's child run
+  // reuses its parent's gate. config laneDoctor: false, options.laneDoctor: false or SWARM_LANE_DOCTOR=0 turns it off.
+  const laneGate = options.laneDoctor === false || runConfig.laneDoctor === false || ((env.SWARM_LANE_DOCTOR === '0' || process.env.SWARM_LANE_DOCTOR === '0') && options.laneDoctor === undefined) ? null
+    : (options.laneDoctor && typeof options.laneDoctor.ready === 'function' ? options.laneDoctor : createLaneDoctorGate({ env, root }));
+  if (laneGate && manifest.jobs.some(job => job.agent === 'auto')) await laneGate.prepare(Object.keys(runLanes));
+  const dispatchJobs = [];
+  for (const job of manifest.jobs) {
+    if (job.agent !== 'auto') { dispatchJobs.push(job); continue; }
+    const { route } = await routeWithLanePreflight(job, runLanes, { root, contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(job.id) }, { laneGate, platform, env });
+    dispatchJobs.push(withoutApiOnlyFields({ ...job, agent: route.agent, model: route.model }));
+  }
   const scopeWarnings = manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
   // An unborn HEAD (no commits yet) breaks `git rev-parse HEAD`, which runBaseChecks below (and
   // worktree creation, for a codex/claude-shell job) both assume succeeds; refused here, before
@@ -376,7 +407,7 @@ async function runManifestMain(root, manifest, options = {}) {
   }
   if (dispatchJobs.some(job => job.agent === 'codex')) requireCodexPlatform(platform);
   // A cursor job fails fast, before any worktree exists: platform, binary on PATH, then the key
-  // (the sandbox blocks the Keychain, so CURSOR_API_KEY in this environment is the only login).
+  // (the sandbox blocks the Keychain, so this parent reads the Cursor login token or CURSOR_API_KEY for the worker).
   if (dispatchJobs.some(job => job.agent === 'cursor')) {
     requireCursorPlatform(platform);
     await resolveCursorBinary(env);
@@ -404,7 +435,7 @@ async function runManifestMain(root, manifest, options = {}) {
   }
   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   try {
-    const finishedState = await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt, maxUsd, maxTokens, now, sleep, resumeState, parentRun, leadJob, hostTransport, heartbeatMs, batchFlag, batchLimits, childOptions: options });
+    const finishedState = await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt, maxUsd, maxTokens, now, sleep, resumeState, parentRun, leadJob, hostTransport, heartbeatMs, batchFlag, batchLimits, childOptions: options, laneGate });
     // The record is written before the command can exit, but a slow disk never holds the run's result back for more than a moment.
     await Promise.race([import('./history-hooks.mjs').then(hooks => hooks.recordRunHistory(root, finishedState)).catch(() => {}), new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
     return finishedState;
@@ -413,7 +444,7 @@ async function runManifestMain(root, manifest, options = {}) {
   }
 }
 
-async function runManifestBody(root, manifest, { batchFlag = false, batchLimits, spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, pendingBaseChecks = null, sync = false, scopeWarnings = [], jobTypeWarnings = [], liveDir, maxUsd, maxTokens, now = Date.now, sleep, resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null, childOptions }) {
+async function runManifestBody(root, manifest, { batchFlag = false, batchLimits, spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, pendingBaseChecks = null, sync = false, scopeWarnings = [], jobTypeWarnings = [], liveDir, maxUsd, maxTokens, now = Date.now, sleep, resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null, childOptions, laneGate = null }) {
   const cleanup = new AbortController();
   signal = signal ? AbortSignal.any([signal, cleanup.signal]) : cleanup.signal;
   let workers = [];
@@ -775,16 +806,15 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
       const failures = record.routeFailures ??= {};
       try {
         if (original.agent === 'auto') {
-          record.route = pickJobRoute(original, lanes, { root, health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(original.id) });
+          const routed = await routeWithLanePreflight(original, lanes, { root, health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(original.id) }, { laneGate, platform, env });
+          record.route = routed.route;
+          if (routed.skips.length) record.laneSkips = [...(record.laneSkips ?? []), ...routed.skips];
+          if (laneGate) state.laneDoctor = laneGate.report();
           job = withoutApiOnlyFields({ ...job, agent: record.route.agent, model: record.route.model });
-          if (record.capFallbacks?.length) record.capFallbacks[record.capFallbacks.length - 1].to = record.route.agent;
           // The API lanes carry the short report inside their envelope (`result`); the "finish with one JSON line" instruction is for CLI lanes and makes small models drop the files.
           if (API_AGENTS.includes(job.agent) && job.report === 'short' && job.prompt.endsWith(`\n\n${REPORT_PROMPT_LINE}`)) job = { ...job, prompt: job.prompt.slice(0, -REPORT_PROMPT_LINE.length - 2) };
-          if (job.agent === 'codex') requireCodexPlatform(platform);
+          if (record.capFallbacks?.length) record.capFallbacks[record.capFallbacks.length - 1].to = record.route.agent;
           if (job.agent === 'cursor') {
-            requireCursorPlatform(platform);
-            await resolveCursorBinary(env);
-            requireCursorApiKey(env);
             const claims = await cursorClaimConflicts(root, [job]);
             if (claims.length) fail(`Refusing to run: ${claims[0].files[0]} is claimed by Cursor lane job ${claims[0].claim}`, 'cursor-claim-conflict');
           }
@@ -1314,7 +1344,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
               const caps = [child.budget?.[key], { maxUsd, maxTokens }[key] ?? manifest.budget?.[key]].filter(value => value !== undefined && value !== null);
               return [key, caps.length ? Math.min(...caps) : undefined];
             }));
-            const childState = await runManifest(root, child, { ...childOptions, ...childCaps, signal, jobs: null, resumeState: null, id: childId, parentRun: id, leadJob: original.id });
+            const childState = await runManifest(root, child, { ...childOptions, ...childCaps, signal, jobs: null, resumeState: null, id: childId, parentRun: id, leadJob: original.id, laneDoctor: laneGate ?? false });
             applyLeadChildState(record, childState);
           } catch (error) { record.status = 'failed'; record.error = error.message; }
           record.finishedAt = new Date(now()).toISOString();

@@ -111,14 +111,16 @@ function typeRouteAgents(job, lanes, endpointHealth) {
     && (agent !== 'local' || laneConfigured('local', lanes, job, endpointHealth)));
 }
 
-export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), endpointHealth = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract, ready = 0 } = {}) {
+// laneReady(agent) is false for a lane that failed `swarm doctor` (or its launch preflight) in this run:
+// such a lane is never picked, and the next healthy lane in the same order takes the job.
+export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), endpointHealth = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract, ready = 0, laneReady = () => true } = {}) {
   if (job?.agent !== 'auto') {
     const error = new Error('route-invalid: job.agent must be auto');
     error.code = 'route-invalid';
     throw error;
   }
 
-  const configured = agent => laneConfigured(agent, lanes, job, endpointHealth);
+  const configured = agent => laneConfigured(agent, lanes, job, endpointHealth) && laneReady(agent) !== false;
   const accepted = agent => {
     const model = laneModel(job, agent, lanes, failures, endpointHealth);
     if (agent === 'local' && model === null) return false;
