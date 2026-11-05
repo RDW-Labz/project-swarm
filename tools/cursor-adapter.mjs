@@ -18,7 +18,7 @@ export const CURSOR_FLAGS = ['-p', '--output-format', '--model', '--trust', '--w
 // Never passed: --api-key puts the key in argv; --worktree/--approve-mcps leave the swarm boundary.
 export const CURSOR_FORBIDDEN_FLAGS = ['--api-key', '--worktree', '-w', '--approve-mcps', '--yolo'];
 export const CURSOR_DEFAULTS = Object.freeze({ model: 'composer-2.5', timeoutMs: 300000, maxAttempts: DEFAULT_MAX_ATTEMPTS, allowedPaths: [] });
-export const CURSOR_NOT_AUTHENTICATED = 'cursor-not-authenticated: store the key in the Keychain (service project-swarm, account cursor.api_key) or set CURSOR_API_KEY in the swarm environment';
+export const CURSOR_NOT_AUTHENTICATED = 'cursor-not-authenticated: run `cursor-agent login` to use your Cursor subscription, or store an API key in the Keychain (service project-swarm, account cursor.api_key) or set CURSOR_API_KEY in the swarm environment';
 // Transient transport failures only; a model or auth error is never retried.
 export const CURSOR_BLIP_RE = /\b(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED)\b|socket hang up|network error|Connection (?:error|failed|reset)|\b(?:502|503|504) (?:Bad Gateway|Service Unavailable|Gateway Timeout)\b/i;
 
@@ -51,11 +51,55 @@ export function readCursorKey(env = process.env, { platform = process.platform, 
   } catch { return undefined; }
 }
 // The key itself is checked only for presence and shape; it is never printed.
-export function requireCursorApiKey(env = process.env) {
-  const key = readCursorKey(env);
-  if (typeof key !== 'string' || !key.trim()) throw Object.assign(new Error(CURSOR_NOT_AUTHENTICATED), { code: 'cursor-not-authenticated' });
-  if (/[\s\0]/.test(key) || key.length < 8) throw Object.assign(new Error('cursor-not-authenticated: CURSOR_API_KEY is malformed (whitespace, control characters or too short)'), { code: 'cursor-not-authenticated' });
-  return key;
+// Kept for callers that only need to know a credential exists: a subscription login or an API key.
+export function requireCursorApiKey(env = process.env, options = {}) {
+  return resolveCursorAuth(env, options).secret;
+}
+
+// A Cursor subscription login, from `cursor-agent login`: cursor-agent keeps its access token in the
+// macOS Keychain (service `cursor-access-token`, account `cursor-user`). The sandbox blocks the Keychain,
+// so only this parent reads it and the worker gets it as CURSOR_AUTH_TOKEN, exactly like an API key:
+// never in argv, the prompt or a log. The token is a JWT; one that expires within the margin is unusable.
+export const CURSOR_LOGIN_ITEM = Object.freeze({ service: 'cursor-access-token', account: 'cursor-user' });
+export const CURSOR_LOGIN_MARGIN_MS = 10 * 60 * 1000;
+export function cursorTokenExpiry(token) {
+  const part = typeof token === 'string' ? token.split('.')[1] : undefined;
+  if (!part) return null;
+  try {
+    const exp = JSON.parse(Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'))?.exp;
+    return Number.isFinite(exp) ? exp * 1000 : null;
+  } catch { return null; }
+}
+export function readCursorLogin(env = process.env, { platform = process.platform, exec = execFileSync, now = Date.now } = {}) {
+  if (env?.SWARM_CURSOR_NO_KEYCHAIN === '1' || platform !== 'darwin') return { token: undefined, problem: null };
+  let token;
+  try {
+    token = String(exec('/usr/bin/security', ['find-generic-password', '-s', CURSOR_LOGIN_ITEM.service, '-a', CURSOR_LOGIN_ITEM.account, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 })).trim();
+  } catch { return { token: undefined, problem: null }; }
+  if (!token || /[\s\0]/.test(token)) return { token: undefined, problem: null };
+  const expiresAt = cursorTokenExpiry(token);
+  if (expiresAt === null) return { token: undefined, problem: 'the Cursor login token is not readable; run `cursor-agent login` again' };
+  if (expiresAt - now() < CURSOR_LOGIN_MARGIN_MS) return { token: undefined, problem: `the Cursor login expired ${new Date(expiresAt).toISOString()}; run \`cursor-agent login\` again` };
+  return { token, expiresAt, problem: null };
+}
+
+// The worker's one credential. A subscription login wins over an API key, so a Mac that is logged in
+// to Cursor uses the plan it pays for; an API key is the fallback (CI, or a machine with no login).
+export function resolveCursorAuth(env = process.env, options = {}) {
+  const login = (options.readLogin ?? readCursorLogin)(env, options);
+  if (login.token) return { kind: 'login', envName: 'CURSOR_AUTH_TOKEN', secret: login.token, expiresAt: login.expiresAt };
+  const key = (options.readKey ?? readCursorKey)(env, options);
+  if (typeof key === 'string' && key.trim()) {
+    if (/[\s\0]/.test(key) || key.length < 8) throw Object.assign(new Error('cursor-not-authenticated: CURSOR_API_KEY is malformed (whitespace, control characters or too short)'), { code: 'cursor-not-authenticated' });
+    return { kind: 'api-key', envName: 'CURSOR_API_KEY', secret: key, expiresAt: null };
+  }
+  throw Object.assign(new Error(login.problem ? `cursor-not-authenticated: ${login.problem}` : CURSOR_NOT_AUTHENTICATED), { code: 'cursor-not-authenticated' });
+}
+
+// The worker environment for one credential: exactly one of CURSOR_AUTH_TOKEN / CURSOR_API_KEY.
+export function cursorAuthEnv(base, auth) {
+  const { CURSOR_API_KEY, CURSOR_AUTH_TOKEN, ...rest } = base ?? {};
+  return { ...rest, [auth.envName]: auth.secret };
 }
 
 // Resolves cursor-agent on the given PATH to its real file: ~/.local/bin/cursor-agent is a symlink
@@ -155,7 +199,7 @@ export async function resolveCursorEnvelope(stdout, worktree, job) {
 
 export const redactCursorKey = (text, key) => (key && typeof text === 'string' ? text.split(key).join('[cursor-key-redacted]') : text);
 
-export async function cursorDoctor({ platform = process.platform, exec = execViaFile, env = process.env } = {}) {
+export async function cursorDoctor({ platform = process.platform, exec = execViaFile, env = process.env, authOptions = {} } = {}) {
   if (platform !== 'darwin') return { agent: 'cursor', status: 'unsupported', platform, configured: false, liveVerified: false, note: 'macOS seatbelt is required' };
   const options = { timeout: 10000, maxBuffer: 1024 * 1024, env: Object.fromEntries(Object.entries(env ?? {}).filter(([key]) => key !== 'CURSOR_API_KEY')) };
   const { bin } = await resolveCursorBinary(env);
@@ -165,7 +209,10 @@ export async function cursorDoctor({ platform = process.platform, exec = execVia
   if (!help.stdout) throw Error('Cursor help probe failed (no or empty output)');
   const missing = CURSOR_FLAGS.filter(flag => !new RegExp(`(^|[\\s,])${flag}(?=[\\s,=<]|$)`, 'm').test(help.stdout));
   if (missing.length) throw Error(`Cursor lacks required flags: ${missing.join(', ')}`);
-  let auth = 'CURSOR_API_KEY set', status = 'compatible', note;
-  try { requireCursorApiKey(env); } catch (error) { auth = 'missing'; status = 'not-authenticated'; note = error.message; }
+  let auth, status = 'compatible', note;
+  try {
+    const found = resolveCursorAuth(env, authOptions);
+    auth = found.kind === 'login' ? `Cursor login (subscription), expires ${new Date(found.expiresAt).toISOString()}` : 'CURSOR_API_KEY set';
+  } catch (error) { auth = 'missing'; status = 'not-authenticated'; note = error.message; }
   return { agent: 'cursor', status, platform, version: version.stdout.trim(), binary: bin, auth, ...(note ? { note } : {}), liveVerified: false };
 }

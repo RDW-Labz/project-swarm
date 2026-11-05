@@ -111,7 +111,7 @@ test('cursorProfile is the codex profile plus the install dir (read+exec) and ~/
 
 test('fail fast: missing key, malformed key and missing binary carry stable codes and never echo a key', async t => {
   assert.throws(() => requireCursorApiKey({}), error => error.message === CURSOR_NOT_AUTHENTICATED && error.code === 'cursor-not-authenticated');
-  assert.equal(CURSOR_NOT_AUTHENTICATED, 'cursor-not-authenticated: store the key in the Keychain (service project-swarm, account cursor.api_key) or set CURSOR_API_KEY in the swarm environment');
+  assert.equal(CURSOR_NOT_AUTHENTICATED, 'cursor-not-authenticated: run `cursor-agent login` to use your Cursor subscription, or store an API key in the Keychain (service project-swarm, account cursor.api_key) or set CURSOR_API_KEY in the swarm environment');
   assert.throws(() => requireCursorApiKey({ CURSOR_API_KEY: '  ' }), /cursor-not-authenticated/);
   assert.throws(() => requireCursorApiKey({ CURSOR_API_KEY: 'has space inside' }), error => /malformed/.test(error.message) && !error.message.includes('has space'));
   assert.equal(requireCursorApiKey({ CURSOR_API_KEY: KEY }), KEY);
@@ -259,7 +259,7 @@ test('integration: a key the worker writes into an output fails the job, keeps n
   const state = await runManifest(root, manifest(), { platform: 'darwin', env: runEnv(fake), spawnImpl: viaFake() });
   assert.equal(state.jobs[0].status, 'failed');
   assert.equal(state.jobs[0].workerKeyExposed, true);
-  assert.match(state.jobs[0].error, /output contains CURSOR_API_KEY: output\.txt/);
+  assert.match(state.jobs[0].error, /output contains the Cursor credential \(CURSOR_API_KEY\): output\.txt/);
   assert.equal(state.jobs[0].keptWorkspace, null);
   await assert.rejects(fs.access(resolveWorktree(state, state.jobs[0])));
   for (const file of [...await walk(path.join(root, '.swarm/runs', state.id)), ...await walk(path.join(root, '.swarm/workspaces', state.id))]) assert.equal((await fs.readFile(file)).includes(Buffer.from(KEY)), false, file);

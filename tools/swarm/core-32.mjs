@@ -3,7 +3,7 @@ import { containsKey, readWorkerKey } from '../claude-shell.mjs';
 import { execViaFile, EXTRA_CLI_AGENTS, extraCliDoctor } from '../cli-adapters.mjs';
 import { remoteExec, resolveCliHosts } from '../cli-host.mjs';
 import { codexDoctor } from '../codex-adapter.mjs';
-import { cursorDoctor, readCursorKey } from '../cursor-adapter.mjs';
+import { cursorDoctor, readCursorKey, readCursorLogin } from '../cursor-adapter.mjs';
 import { loadLocalConfig } from '../local-config.mjs';
 import { fail, loadLocalConfigInline, validateOutputCap } from './core-1.mjs';
 import { relative } from './core-11.mjs';
@@ -18,7 +18,7 @@ import path from 'node:path';
 // Decision #154 guard: a run with a claude shell job is refused by integrate and ship when its
 // diff, results, logs or saved exchange hold the worker key (exact bytes), before any write to
 // the project or git. The key comes from the same parent-only source the run used.
-// A cursor job is checked the same way against CURSOR_API_KEY from the integrating environment.
+// A cursor job is checked the same way against the Cursor login token and CURSOR_API_KEY from the integrating environment.
 export async function workerKeyGuard(root, id, state, { env = process.env, keyExec, extraFiles = [] } = {}) {
   const hasShell = state.jobs.some(job => job.shell === true), hasCursor = state.jobs.some(job => job.agent === 'cursor');
   if (!hasShell && !hasCursor) return;
@@ -27,7 +27,8 @@ export async function workerKeyGuard(root, id, state, { env = process.env, keyEx
   if (hasShell) {
     try { keys.push(await readWorkerKey({ env, exec: keyExec, config: loadLocalConfig({ env }) })); } catch (error) { fail(`Refusing: cannot check run ${id} for the worker API key: ${error.message}`); }
   }
-  { const cursorKey = hasCursor ? readCursorKey(env) : undefined; if (cursorKey) keys.push(cursorKey); }
+  // Both Cursor credentials are checked: a job may have run on either the subscription login or an API key.
+  if (hasCursor) { const cursorKey = readCursorKey(env); if (cursorKey) keys.push(cursorKey); const login = readCursorLogin(env).token; if (login) keys.push(login); }
   if (!keys.length) return;
   const hits = [];
   const check = async file => { try { const info = await fs.lstat(file); if (info.isFile()) { const bytes = await fs.readFile(file); if (keys.some(key => containsKey(bytes, key))) hits.push(path.relative(root, file)); } } catch (error) { if (error.code !== 'ENOENT') throw error; } };
