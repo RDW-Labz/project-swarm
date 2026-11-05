@@ -2889,7 +2889,7 @@ function autopilotDeps(root) {
     },
     startBacklog: async (root, item) => {
       const caps = autopilotCaps({ maxUsd: item.maxUsd });
-      const manifest = manifestForGoal(item.goal, { folders: await topLevelFolders(root), maxUsd: caps.maxUsd, maxTokens: caps.maxTokens });
+      const manifest = manifestForGoal(item.goal, { folders: await topLevelFolders(root), files: await trackedFiles(root), maxUsd: caps.maxUsd, maxTokens: caps.maxTokens });
       // Marked before the run starts so a crash can never start a goal twice; the run id is in the journal.
       await markBacklogStarted(root, item.id, 'pending');
       const next = await runManifestChecked(root, manifest, undefined, caps);
@@ -4497,6 +4497,7 @@ async function mainInner() {
     result=await goGoal(root,argument,{...goFlags,checks},{
       dirty: firstRun.ran?async()=>false:worktreeDirty,
       folders: topLevelFolders,
+      files: trackedFiles,
       plan: (goal,options)=>plan?plan.manifest:manifestForGoal(goal,options),
       runId: goalRunId,
       branch: async(goRoot,name)=>{

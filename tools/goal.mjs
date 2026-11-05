@@ -109,20 +109,44 @@ function scopeListing(scope, files) {
   return `\n\nFILES IN YOUR SCOPE (${Math.min(inside.length, MAX_LISTED)} of ${inside.length}, exact paths; you cannot read them yourself, so plan from these names):\n${shown}`;
 }
 
+// Matches the lead area limit in leads.mjs (1 to 50 scope entries).
+const MAX_SCOPE_ENTRIES = 50;
+const LEAD_OUTPUT = /^goal-lead-\d+\.json$/;
+
+// Tracked files directly at the repo root, as exact scope entries. Dotfiles are left out like dot-folders, and
+// so are names a lead's own output could take.
+export function rootLevelFiles(files = []) {
+  return [...new Set(files)]
+    .filter(file => typeof file === 'string' && file.length > 0 && !file.includes('/') && !file.startsWith('.') && !LEAD_OUTPUT.test(file) && !/[*?\[\\\u0000-\u001f]/.test(file) && file.trim() === file)
+    .sort();
+}
+
+function scopeNoun(scope) {
+  const folders = scope.some(entry => entry.endsWith('/')), files = scope.some(entry => !entry.endsWith('/'));
+  return folders && files ? 'folders and files' : files ? 'files' : 'folders';
+}
+
 export function manifestForGoal(goal, { folders = [], files = [], sensitive, leads = 'auto', maxJobs = GOAL_DEFAULTS.maxJobs, concurrency = GOAL_DEFAULTS.concurrency, checks = [], maxUsd = GOAL_BUDGET.maxUsd, maxTokens = GOAL_BUDGET.maxTokens } = {}) {
   const text = typeof goal === 'string' ? goal.trim() : '';
   if (!text || text.length > 2000) throw goalError('goal-invalid', 'goal must be 1–2000 characters');
   if (!Number.isInteger(maxJobs) || maxJobs < 1 || maxJobs > 500) throw goalError('goal-max-jobs', '--max-jobs must be an integer 1–500');
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 64) throw goalError('goal-concurrency', '--concurrency must be an integer 1–64');
   const names = [...new Set(folders)].filter(name => !name.startsWith('.') && FOLDER.test(name) && name !== 'node_modules').sort();
-  if (!names.length) throw goalError('goal-no-folders', 'the repo has no top-level folders to split');
+  const rootFiles = rootLevelFiles(files);
+  if (!names.length && !rootFiles.length) throw goalError('goal-no-folders', 'the repo has no top-level folders or files to split');
+  const units = Math.max(names.length, 1);
   let count;
-  if (leads === 'auto') count = Math.min(names.length, GOAL_DEFAULTS.maxLeads);
+  if (leads === 'auto') count = Math.min(units, GOAL_DEFAULTS.maxLeads);
   else if (Number.isInteger(leads) && leads >= 1 && leads <= GOAL_DEFAULTS.maxLeads) {
-    if (leads > names.length) throw goalError('goal-leads', `${leads} leads need ${leads} top-level folders; found ${names.length}`);
+    if (leads > units) throw goalError('goal-leads', `${leads} leads need ${leads} top-level folders; found ${names.length}`);
     count = leads;
   } else throw goalError('goal-leads', '--leads must be auto or an integer 1–10');
-  const buckets = splitFolders(names, count);
+  const buckets = names.length ? splitFolders(names, count) : [[]];
+  // Files at the repo root (README.md, package.json, ...) belong to no folder, so without this no lead could
+  // ever change them. They join the smallest bucket as exact paths, while it stays within the scope limit.
+  const smallest = buckets.reduce((best, bucket) => (bucket.length < best.length ? bucket : best), buckets[0]);
+  if (rootFiles.length && smallest.length + rootFiles.length <= MAX_SCOPE_ENTRIES) smallest.push(...rootFiles);
+  if (!smallest.length) throw goalError('goal-no-folders', `the repo has no top-level folders, and its ${rootFiles.length} root files exceed the ${MAX_SCOPE_ENTRIES}-entry scope limit`);
   return {
     version: 1,
     concurrency,
@@ -134,7 +158,7 @@ export function manifestForGoal(goal, { folders = [], files = [], sensitive, lea
       type: 'lead',
       agent: 'auto',
       ...(sensitive === false ? { sensitive: false } : {}),
-      prompt: `You own only these folders: ${scope.join(', ')}. Turn this goal into child jobs inside that scope. Every child job uses a short report.\n\nGOAL:\n${text}${scopeListing(scope, files)}`,
+      prompt: `You own only these ${scopeNoun(scope)}: ${scope.join(', ')}. Turn this goal into child jobs inside that scope. Every child job uses a short report.\n\nGOAL:\n${text}${scopeListing(scope, files)}`,
       context: [],
       outputs: [`goal-lead-${index + 1}.json`],
       area: { goal: text, scope, maxJobs, concurrency },
@@ -169,6 +193,7 @@ export async function goGoal(root, goal, flags = {}, deps) {
   const maxTokens = flags.maxTokens ?? GOAL_BUDGET.maxTokens;
   const planOptions = {
     folders: await deps.folders(root),
+    files: deps.files ? await deps.files(root) : [],
     leads: flags.leads ?? 'auto',
     maxJobs: flags.maxJobs ?? GOAL_DEFAULTS.maxJobs,
     concurrency: flags.concurrency ?? GOAL_DEFAULTS.concurrency,
