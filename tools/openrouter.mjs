@@ -4,7 +4,8 @@
 // - every request carries provider.data_collection = "deny"; a body without it is refused;
 // - anthropic/* models are pinned to the Anthropic provider, with no fallback;
 // - deepseek/* models may only write bookkeeping files (PR payloads, changelogs, mutants files,
-//   metrics), never code;
+//   metrics), never code, unless the operator sets lanes.openrouter.allowCodeOutputs to true
+//   (default off / unset). Sensitive jobs are still refused; this flag never lifts sensitive: false.
 // - spend caps: $5 per job and $5 per UTC day, checked against a worst-case estimate before
 //   each request and recorded from the provider's reported cost after it.
 // The key is read by the swarm parent only (env OPENROUTER_API_KEY, else the macOS keychain item
@@ -104,9 +105,29 @@ export function isBookkeepingJob(outputs) {
   }
   return true;
 }
-export function assertBookkeepingOnly(job) {
+export function assertBookkeepingOnly(job, { allowCodeOutputs = false } = {}) {
+  if (allowCodeOutputs === true) return;
   const bad = nonBookkeepingOutputs(job.model, job.outputs);
   if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`);
+}
+
+// Operator opt-in for non-sensitive OpenRouter/DeepSeek code outputs. True only when the value
+// is boolean true; unset and false keep today's bookkeeping-only rule. Accepts either a machine
+// config (`{ lanes: { openrouter: { allowCodeOutputs } } }`) or a resolved lane map.
+export function openrouterAllowsCodeOutputs(source = {}) {
+  const lane = source?.lanes?.openrouter ?? source?.openrouter;
+  return lane?.allowCodeOutputs === true;
+}
+
+// Manifest overwrites machine config when the field is present, matching resolveLanes merge.
+// `allowCodeOutputs: true` from a caller (router, executeApi) wins outright.
+export function resolveOpenRouterAllowCodeOutputs({ allowCodeOutputs, config, manifest, env = process.env } = {}) {
+  if (allowCodeOutputs === true) return true;
+  const fromManifest = manifest?.lanes?.openrouter?.allowCodeOutputs;
+  if (fromManifest === true) return true;
+  if (fromManifest === false) return false;
+  if (config !== undefined) return openrouterAllowsCodeOutputs(config);
+  try { return openrouterAllowsCodeOutputs(loadLocalConfig({ env })); } catch { return false; }
 }
 
 export const OPENROUTER_LANE_PAUSED = 'openrouter-lane-paused';

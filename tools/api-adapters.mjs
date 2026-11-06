@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Tool-free, one-request workers. Transport injection is for tests, never manifests.
 import { randomBytes } from 'node:crypto';
-import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, emptyOutputsContentRefusal, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, dayCapUsd, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, responseFinishReason, OpenRouterError } from './openrouter.mjs';
+import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, emptyOutputsContentRefusal, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, dayCapUsd, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, responseFinishReason, OpenRouterError, resolveOpenRouterAllowCodeOutputs } from './openrouter.mjs';
 import { batchCostUsd } from './batch.mjs';
 import { assertDailyLimitBeforeSend, estimateReservation, PAID_LANES } from './spend.mjs';
 import { bestOfCount, selectBest } from './best-of.mjs';
@@ -593,7 +593,7 @@ export function anthropicUserContent(job, cappedContext, { skillsBlock = '' } = 
   ];
 }
 
-export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {}, bestOfCheck = null, root = job.root, spendKey } = {}) {
+export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {}, bestOfCheck = null, root = job.root, spendKey, allowCodeOutputs } = {}) {
   const controller = new AbortController(); let reason = null, finishReason = null, anthropicBilled = () => null;
   const abort = why => { if (!reason) { reason = why; controller.abort(); } };
   const onAbort = () => abort('cancelled');
@@ -605,7 +605,10 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     if (signal?.aborted) { abort('cancelled'); fail('Request cancelled'); }
     timer = setTimeout(() => abort('timeout'), job.timeoutMs ?? 300000);
     poll = setInterval(() => { Promise.resolve(cancelled()).then(value => { if (value) abort('cancelled'); }).catch(() => abort('Cancellation check failed')); }, 100);
-    if (job.agent === 'openrouter') { assertBookkeepingOnly(job); emptyOutputsContentRefusal(job); }
+    if (job.agent === 'openrouter') {
+      assertBookkeepingOnly(job, { allowCodeOutputs: resolveOpenRouterAllowCodeOutputs({ allowCodeOutputs, env }) });
+      emptyOutputsContentRefusal(job);
+    }
     if (job.agent === 'anthropic') assertAnthropicModel(job);
     const config = apiConfiguration(job.agent, env, { readKey, readAnthropic, readLocal, model: job.model });
     // Last line of defence behind the router and validation: a rented server never sees a job that is not explicitly sensitive: false.

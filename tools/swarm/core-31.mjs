@@ -10,7 +10,7 @@ import { isHumanJob, validateHumanJob } from '../human-jobs.mjs';
 import { JOB_TYPES, jobTypeOutputViolations } from '../job-types.mjs';
 import { resolveLanes } from '../lanes.mjs';
 import { validateLeadArea, validateParentLeads } from '../leads.mjs';
-import { nonBookkeepingOutputs } from '../openrouter.mjs';
+import { nonBookkeepingOutputs, resolveOpenRouterAllowCodeOutputs } from '../openrouter.mjs';
 import { looseKillCommands } from '../process-guard.mjs';
 import { resolveToolchainBin } from '../ship.mjs';
 import { resolveBudget } from '../spend.mjs';
@@ -150,7 +150,7 @@ async function mutantReviewTexts(root, overlay = new Map()) {
   return texts;
 }
 
-export function validateManifest(manifest, { outputJobIds = null, env = process.env } = {}) {
+export function validateManifest(manifest, { outputJobIds = null, env = process.env, allowOpenRouterCodeOutputs } = {}) {
   normalizeManifestMetadata(manifest);
   if (!manifest || typeof manifest !== 'object') fail('Manifest is missing');
   if (manifest.version !== 1) fail('Manifest requires version: 1');
@@ -352,8 +352,12 @@ export function validateManifest(manifest, { outputJobIds = null, env = process.
     for (const file of job.outputs) relative(file);
     const typeViolations = jobTypeOutputViolations(job);
     if (typeViolations.length) fail(`Job ${job.id} (type ${job.type}) may not write: ${typeViolations.join(', ')}`, 'job-type-output');
-    // Decision #227: a deepseek/* model on OpenRouter writes bookkeeping files only.
-    if (job.agent === 'openrouter') { const bad = nonBookkeepingOutputs(job.model, job.outputs); if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`); }
+    // Decision #227: a deepseek/* model on OpenRouter writes bookkeeping files only, unless the
+    // operator set lanes.openrouter.allowCodeOutputs (machine config or manifest; default off).
+    if (job.agent === 'openrouter' && !resolveOpenRouterAllowCodeOutputs({ allowCodeOutputs: allowOpenRouterCodeOutputs, manifest, env })) {
+      const bad = nonBookkeepingOutputs(job.model, job.outputs);
+      if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`);
+    }
     if (job.resultFile !== undefined) {
       if (!job.outputs.includes(job.resultFile)) fail(`Job ${job.id}: resultFile must be one of its outputs`);
       relative(job.resultFile);
