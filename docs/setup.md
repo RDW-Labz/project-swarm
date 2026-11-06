@@ -36,6 +36,9 @@ config file, never as a source literal: `$XDG_CONFIG_HOME/project-swarm/config.j
 `XDG_CONFIG_HOME` is set to an absolute path, else `~/.config/project-swarm/config.json`.
 `SWARM_CONFIG` overrides either. This file must sit outside any git work tree, including the
 shared install's own checkout — the runner refuses to read a config file found inside one.
+`lanes.openrouter.allowCodeOutputs: true` belongs here when an operator wants OpenRouter
+(including `deepseek/*`) to write non-sensitive code; default is off, and `swarm update`
+does not touch this file.
 
 Live Codex and Claude shell runs put their detached worktrees outside the project root by
 default. Set `{"worktreesOutsideRoot": false}` in this local config to opt back into the

@@ -572,8 +572,13 @@ function pickJobRoute(job, lanes, options = {}) {
   return routeJob(job, { lanes, ...routeOptions, failures, accepts: candidate => {
     if (editInPlaceOnly && API_AGENTS.includes(candidate.agent)) return false;
     if (candidate.after && isWorktreeWriter(candidate)) return false;
-    try { validateManifest({ version: 1, jobs: [withoutApiOnlyFields({ ...candidate, after: undefined })] }); return true; }
-    catch { return false; }
+    try {
+      validateManifest(
+        { version: 1, jobs: [withoutApiOnlyFields({ ...candidate, after: undefined })] },
+        lanes?.openrouter?.allowCodeOutputs === true ? { allowOpenRouterCodeOutputs: true } : {},
+      );
+      return true;
+    } catch { return false; }
   } });
 }
 

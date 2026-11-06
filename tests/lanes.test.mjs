@@ -58,6 +58,20 @@ test('defaults are complete, deeply frozen, and independently resolved', () => {
   assert.equal(lanes.cursor.backoff.baseMs, 2000);
 });
 
+test('resolveLanes accepts openrouter.allowCodeOutputs true and false, default unset, and refuses it elsewhere', () => {
+  assert.equal(resolveLanes({ config: { lanes: { openrouter: { allowCodeOutputs: true } } } }).openrouter.allowCodeOutputs, true);
+  assert.equal(resolveLanes({ config: { lanes: { openrouter: { allowCodeOutputs: false } } } }).openrouter.allowCodeOutputs, false);
+  assert.equal(Object.hasOwn(resolveLanes().openrouter, 'allowCodeOutputs'), false);
+  for (const allowCodeOutputs of ['yes', 1, null, {}]) {
+    assert.throws(() => resolveLanes({ config: { lanes: { openrouter: { allowCodeOutputs } } } }), { code: 'lanes-invalid' });
+  }
+  assert.throws(() => resolveLanes({ config: { lanes: { cursor: { allowCodeOutputs: true } } } }), { code: 'lanes-invalid' });
+  assert.equal(resolveLanes({
+    config: { lanes: { openrouter: { allowCodeOutputs: true } } },
+    manifest: { lanes: { openrouter: { allowCodeOutputs: false } } },
+  }).openrouter.allowCodeOutputs, false);
+});
+
 test('config precedes manifest; lane and backoff fields merge independently', () => {
   const config = { lanes: { codex: { concurrency: 9, requestsPerMinute: 8, model: 'gpt-5', backoff: { baseMs: 10, maxRetries: 2 } } } };
   const manifest = { lanes: { codex: { concurrency: 5, backoff: { maxMs: 400 } }, cursor: { model: 'vendor/model:v1.2_3' } } };
