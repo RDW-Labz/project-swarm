@@ -57,6 +57,19 @@ test('OpenRouter only gets non-sensitive bookkeeping jobs', () => {
   assert.equal(routeJob({ ...bookkeeping, outputs: ['.swarm-manifests/plan.md', 'docs/pr-body.md'] }, { lanes: available }).agent, 'openrouter');
 });
 
+test('allowCodeOutputs lets OpenRouter take non-sensitive code jobs without changing cheap order or sensitive rules', () => {
+  const available = { openrouter: { ...lanes.openrouter, allowCodeOutputs: true }, claude: lanes.claude };
+  assert.equal(routeJob(job, { lanes: available }).agent, 'openrouter');
+  for (const sensitive of [undefined, true]) {
+    assert.throws(() => routeJob({ ...job, sensitive }, { lanes: available }), { code: 'route-exhausted' });
+  }
+  const opted = { ...lanes, openrouter: { ...lanes.openrouter, allowCodeOutputs: true } };
+  assert.equal(routeJob(job, { lanes: opted }).agent, 'cursor', 'Cursor still wins when healthy');
+  const pausedCheap = agent => ({ state: ['cursor', 'codex', 'anthropic'].includes(agent) ? 'paused' : 'ok' });
+  assert.equal(routeJob(job, { lanes: opted, health: pausedCheap }).agent, 'openrouter');
+  assert.notEqual(routeJob(job, { lanes, health: pausedCheap }).agent, 'openrouter');
+});
+
 test('expensive tier uses only Claude', () => {
   assert.deepEqual(routeJob({ ...job, tier: 'expensive' }, { lanes }), {
     agent: 'claude', model: 'claude-model', reason: 'tier expensive',

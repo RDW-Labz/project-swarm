@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { isBookkeepingJob } from './openrouter.mjs';
+import { isBookkeepingJob, openrouterAllowsCodeOutputs } from './openrouter.mjs';
 import { prefersLocalLane } from './job-types.mjs';
 import { LANE_AGENTS } from './lanes.mjs';
 import {
@@ -36,7 +36,9 @@ export function rentedContractProblem(job, contract = job?.contract) {
 
 // Code jobs: Cursor stays in the mix, then paid Anthropic (Haiku or Sonnet); Codex is paused by default in lane config.
 // Hermes is not in this order: it runs only where a job type names it (research). OpenRouter runs
-// only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive.
+// only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive, unless the
+// operator sets lanes.openrouter.allowCodeOutputs (non-sensitive code jobs may then use this lane;
+// cheap order is unchanged so OpenRouter stays the fallback, not a paid default).
 export const CHEAP_ORDER = Object.freeze(['cursor', 'codex', 'anthropic', 'openrouter']);
 export const ROUTE_ORDER = Object.freeze([...CHEAP_ORDER, 'claude']);
 
@@ -111,6 +113,10 @@ function typeRouteAgents(job, lanes, endpointHealth) {
     && (agent !== 'local' || laneConfigured('local', lanes, job, endpointHealth)));
 }
 
+function openrouterAcceptsJob(job, lanes) {
+  return openrouterAllowsCodeOutputs(lanes) || isBookkeepingJob(job.outputs);
+}
+
 export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), endpointHealth = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract, ready = 0 } = {}) {
   if (job?.agent !== 'auto') {
     const error = new Error('route-invalid: job.agent must be auto');
@@ -144,7 +150,7 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), en
       && !laneConfigPaused(agent, lanes)
       && (agent !== 'rented' || useRented)
       && (!NON_SENSITIVE_ONLY.includes(agent) || job.sensitive === false)
-      && (agent !== 'openrouter' || isBookkeepingJob(job.outputs))
+      && (agent !== 'openrouter' || openrouterAcceptsJob(job, lanes))
       && accepted(agent));
     const failed = candidates.filter(agent => failures[agent] >= failureLimit(agent));
     if (failed.length) reason = failed.length === 1 && failed[0] === 'rented' ? 'rented lane failed once: Haiku, then Codex' : `fallback after 2 failures on ${failed.join(', ')}`;
