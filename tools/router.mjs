@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { isBookkeepingJob, openrouterAllowsCodeOutputs } from './openrouter.mjs';
+import { isBookkeepingJob, isRestrictedForOpenRouter, openrouterAllowsCodeOutputs } from './openrouter.mjs';
 import { prefersLocalLane } from './job-types.mjs';
 import { LANE_AGENTS } from './lanes.mjs';
 import {
@@ -37,8 +37,8 @@ export function rentedContractProblem(job, contract = job?.contract) {
 // Code jobs: Cursor stays in the mix, then paid Anthropic (Haiku or Sonnet); Codex is paused by default in lane config.
 // Hermes is not in this order: it runs only where a job type names it (research). OpenRouter runs
 // only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive, unless the
-// operator sets lanes.openrouter.allowCodeOutputs (non-sensitive code jobs may then use this lane;
-// cheap order is unchanged so OpenRouter stays the fallback, not a paid default).
+// operator sets lanes.openrouter.allowCodeOutputs (non-sensitive code jobs may then use this lane
+// after Cursor and Codex; restricted topics never go to OpenRouter).
 export const CHEAP_ORDER = Object.freeze(['cursor', 'codex', 'anthropic', 'openrouter']);
 export const ROUTE_ORDER = Object.freeze([...CHEAP_ORDER, 'claude']);
 
@@ -114,7 +114,19 @@ function typeRouteAgents(job, lanes, endpointHealth) {
 }
 
 function openrouterAcceptsJob(job, lanes) {
+  if (isRestrictedForOpenRouter(job)) return false;
   return openrouterAllowsCodeOutputs(lanes) || isBookkeepingJob(job.outputs);
+}
+
+function cheapLaneOrder(lanes, job, localConfigured) {
+  if (job.sensitive !== false || !openrouterAllowsCodeOutputs(lanes)) {
+    return localConfigured
+      ? ['cursor', 'codex', 'local', 'anthropic', 'openrouter']
+      : [...CHEAP_ORDER];
+  }
+  return localConfigured
+    ? ['cursor', 'codex', 'local', 'openrouter', 'anthropic']
+    : ['cursor', 'codex', 'openrouter', 'anthropic'];
 }
 
 // laneReady(agent) is false for a lane that failed `swarm doctor` (or its launch preflight) in this run:
@@ -138,15 +150,13 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), en
   const hardCodex = job.hard === true && job.tier !== 'expensive' && codexLive && accepted('codex');
   const typed = typeRouteAgents(job, lanes, endpointHealth);
   const localFirst = prefersLocalLane(job) && configured('local') ? ['local'] : [];
-  const cheapOrder = configured('local')
-    ? ['cursor', 'codex', 'local', 'anthropic', 'openrouter']
-    : [...CHEAP_ORDER];
+  const cheapOrder = cheapLaneOrder(lanes, job, configured('local'));
   const order = [...new Set([...(hardCodex ? ['codex'] : []), ...(useRented ? RENTED_FIRST : []), ...localFirst, ...typed.filter(agent => !localFirst.includes(agent)), ...(useRented ? RENTED_AFTER : []), ...cheapOrder])];
   let reason = hardCodex ? 'hard ticket: codex first' : 'cheapest healthy lane';
   let candidates;
   if (job.tier === 'expensive' && job.type !== 'review') {
     reason = 'tier expensive';
-    candidates = configured('claude') && !(failures.claude >= 2) && accepted('claude') ? ['claude'] : [];
+    candidates = configured('claude') && laneReady('claude') !== false && !(failures.claude >= 2) && accepted('claude') ? ['claude'] : [];
   } else {
     candidates = order.filter(agent => configured(agent)
       && !laneConfigPaused(agent, lanes)
@@ -158,7 +168,7 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), en
     if (failed.length) reason = failed.length === 1 && failed[0] === 'rented' ? 'rented lane failed once: Haiku, then Codex' : `fallback after 2 failures on ${failed.join(', ')}`;
     candidates = candidates.filter(agent => !(failures[agent] >= failureLimit(agent)));
     const totalFailures = order.reduce((sum, agent) => sum + (failures[agent] ?? 0), 0);
-    if (!candidates.length && totalFailures >= 2 && configured('claude')
+    if (!candidates.length && totalFailures >= 2 && configured('claude') && laneReady('claude') !== false
       && !(failures.claude >= 2) && accepted('claude')) {
       candidates = ['claude'];
       reason = `fallback after 2 failures on ${order.filter(agent => failures[agent] > 0).join(', ')}`;

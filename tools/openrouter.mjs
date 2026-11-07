@@ -105,6 +105,41 @@ export function isBookkeepingJob(outputs) {
   }
   return true;
 }
+
+const RESTRICTED_OPENROUTER_PATH = Object.freeze([
+  /(^|\/)\.env/i,
+  /secret/i,
+  /credential/i,
+  /(^|\/)auth/i,
+  /login/i,
+  /password/i,
+  /oauth/i,
+  /session/i,
+  /token/i,
+  /payment/i,
+  /billing/i,
+  /square/i,
+  /stripe/i,
+  /refund/i,
+  /invoice/i,
+  /charge/i,
+  /migration/i,
+  /\.sql$/i,
+]);
+const RESTRICTED_OPENROUTER_PROMPT = /\b(secret|secrets|credential|credentials|password|auth|oauth|login|payment|payments|billing|square|stripe|refund|refunds|migration|migrations)\b/i;
+
+/** Restricted topics (auth, payments, migrations, secrets, …) never go to OpenRouter. */
+export function isRestrictedForOpenRouter(job) {
+  if (job?.type === 'migration') return true;
+  const paths = [...(job?.outputs ?? []), ...(job?.context ?? []), ...(job?.deletes ?? [])];
+  for (const file of paths) {
+    if (typeof file !== 'string' || !file) continue;
+    const normalized = file.replaceAll('\\', '/');
+    if (RESTRICTED_OPENROUTER_PATH.some(pattern => pattern.test(normalized))) return true;
+  }
+  if (typeof job?.prompt === 'string' && RESTRICTED_OPENROUTER_PROMPT.test(job.prompt)) return true;
+  return false;
+}
 export function assertBookkeepingOnly(job, { allowCodeOutputs = false } = {}) {
   if (allowCodeOutputs === true) return;
   const bad = nonBookkeepingOutputs(job.model, job.outputs);
