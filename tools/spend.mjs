@@ -8,6 +8,7 @@ import { defaultMaxOutputTokens } from './openrouter.mjs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LANE_AGENTS } from './lanes.mjs';
+import { assertTestIsolation } from './test-isolation.mjs';
 import { validateRentedConfig } from './rented.mjs';
 import {
   centralDayKey,
@@ -93,7 +94,9 @@ export function validateRates(rates) {
 }
 
 export function spendDir(env = process.env, home = os.homedir()) {
-  return env.SWARM_SPEND_DIR || path.join(home, '.project-swarm', 'spend');
+  if (env.SWARM_SPEND_DIR) return env.SWARM_SPEND_DIR;
+  assertTestIsolation('spend ledger', env);
+  return path.join(home, '.project-swarm', 'spend');
 }
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
