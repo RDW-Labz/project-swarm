@@ -8,6 +8,7 @@ import { validateRentedConfig, effectiveRentedRaw } from './rented.mjs';
 import { validateLocalLaneBlock, localLaneConcurrency, LOCAL_MODEL_PREFIX, localSlotRoom, attachLocalSlotMeta } from './local-lane.mjs';
 import { DEFAULT_MACHINE_SHARE_PRIORITY, machineAllowance } from './project-priority.mjs';
 import path from 'node:path';
+import { assertTestIsolation } from './test-isolation.mjs';
 
 export { machineAllowance } from './project-priority.mjs';
 
@@ -148,6 +149,7 @@ export function lanesDir(env = process.env, home = os.homedir()) {
   // tests in the same process. Those runs get a private directory; a test that needs the shared
   // file sets SWARM_LANES_DIR. Production runs (no SWARM_TEST_TMP) always share one file.
   if (env.SWARM_TEST_TMP) return path.join(env.SWARM_TEST_TMP, `lanes-${crypto.randomUUID()}`);
+  assertTestIsolation('lane claims', env);
   return path.join(home, '.project-swarm', 'lanes');
 }
 function pidAlive(pid) {

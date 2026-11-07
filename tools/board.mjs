@@ -7,11 +7,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { assertTestIsolation } from './test-isolation.mjs';
 
 const execFileAsync = promisify(execFile);
 
 export function liveDir(env = process.env, home = os.homedir()) {
-  return env.SWARM_LIVE_DIR || path.join(home, '.project-swarm', 'live');
+  if (env.SWARM_LIVE_DIR) return env.SWARM_LIVE_DIR;
+  assertTestIsolation('live runs', env);
+  return path.join(home, '.project-swarm', 'live');
 }
 
 async function git(cwd, args) {

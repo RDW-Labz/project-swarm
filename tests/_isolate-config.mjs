@@ -79,6 +79,7 @@ export function assertIsolatedHome(candidate = nativeHome()) {
 
 const testTmpDir = fs.mkdtempSync(path.join(testTmpBase, 'swarm-test-tmp-'));
 process.env.SWARM_TEST_TMP = testTmpDir;
+process.env.SWARM_TEST_ISOLATED = '1';
 
 /** After hand-build or inbox fixtures: drop request state and owner decisions for a temp project root. */
 export async function cleanupTestProject(root) {
