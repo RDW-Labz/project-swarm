@@ -280,7 +280,8 @@ for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-
     },
   });
   assert.equal(launched, true);
-  assert.equal(launches, scenario === 'missing-output-blip' ? 2 : 1);
+  // A missing output gets one re-ask for exactly the missing files (one more launch); a blip is retried instead.
+  assert.equal(launches, scenario === 'missing-output-blip' || scenario === 'missing-output' ? 2 : 1);
   if (scenario === 'missing-output-blip') {
     assert.equal(state.jobs[0].retries, 1);
     assert.equal(state.jobs[0].retryReason, 'codex-blip: workspace routing discovery failed');

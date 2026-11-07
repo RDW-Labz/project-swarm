@@ -1,5 +1,5 @@
 import { assertScratchOutsideRepo, resolveVenvInterpreterDirs } from '../claude-shell.mjs';
-import { blockedNoteFromReply, codexEnvironment, codexMessage, codexProfile, git, parseCodexReply, prepareViteCaches, resolveReadPaths, runCodexWithRetry, validateReadPaths } from '../codex-adapter.mjs';
+import { CODEX_BLIP_RE, blockedNoteFromReply, codexEnvironment, codexMessage, codexProfile, git, parseCodexReply, prepareViteCaches, resolveReadPaths, runCodexWithRetry, validateReadPaths } from '../codex-adapter.mjs';
 import { CURSOR_BLIP_RE, cursorAuthEnv, cursorConfig, cursorEnvironment, cursorMessage, cursorProfile, redactCursorKey, resolveCursorAuth, resolveCursorBinary } from '../cursor-adapter.mjs';
 import { isBuildArtifact } from '../ignored-artifacts.mjs';
 import { acquireIntegrationLock } from '../integration-lock.mjs';
@@ -14,6 +14,7 @@ import { jsonWrite } from './core-31.mjs';
 import { applyQueuePlans as applyQueuePlansBase } from './core-61.mjs';
 import { prepareJobEnvironment } from './core-51.mjs';
 import { reaskWorkerReport } from './core-61.mjs';
+import { diffSummary, REASK_SUMMARY_MESSAGE, settleMissingSummary } from '../summary-from-diff.mjs';
 import { redcheckRunLocked } from './core-62.mjs';
 import { journalWarning } from './warnings.mjs';
 import { prepareWorktreeLocation, worktreeDiskLowResult, worktreeStatusMap } from './workspace.mjs';
@@ -122,14 +123,33 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
     }
     const beforeStatus = job.scope === 'open' ? await worktreeStatusMap(worktree) : null;
     const resultFiles = new Set();
+    const workerEnv = { ...options.swarmEnv, SWARM_PORT_BASE: String(options.portBase), ...job.testEnv, TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir, SWARM_TEST_TMP: scratchDir };
+    const launchWorkerMessage = async reaskMessage => {
+      const reaskRelative = `.swarm-codex-result-${crypto.randomBytes(12).toString('hex')}.json`;
+      resultFiles.add(reaskRelative);
+      const launchOptions = { ...options, logDirectory: path.join(root, directory, job.id), onOutput: () => {} };
+      if (isCursor) {
+        const reask = await execute(job, worktree, reaskMessage, { ...launchOptions, workerKey: cursorKey, cursor: { profile, bin: cursorBinary.bin, worktree, apiKey: cursorKey, env: cursorAuthEnv({ ...await cursorEnvironment(options.env), ...workerEnv }, cursorAuth) } });
+        for (const key of ['stdout', 'stderr', 'response', 'error']) if (typeof reask[key] === 'string') reask[key] = redactCursorKey(reask[key], cursorKey);
+        return reask;
+      }
+      return execute(job, worktree, reaskMessage, { ...launchOptions, codex: { worktree, profile, lastMessage: path.join(worktree, reaskRelative), resultRelative: reaskRelative, env: { ...await codexEnvironment(options.env), ...workerEnv } } });
+    };
+    const collectDeclaredOutputs = async () => {
+      const outputs = [], missing = [];
+      for (const file of job.outputs) {
+        const bytes = await bytesAt(worktree, file);
+        if (bytes === null) { missing.push(file); continue; }
+        outputs.push({ file, bytes, mode: (await fs.stat(await safePath(worktree, file))).mode & 0o777 });
+      }
+      const leaked = isCursor ? outputs.filter(output => output.bytes.includes(Buffer.from(cursorKey))).map(output => output.file) : [];
+      return { outputs, missing, leaked };
+    };
     result = await runCodexWithRetry(async () => {
       // This is inside the run directory AND the allowed worktree, requiring no extra write grant.
       const resultRelative = `.swarm-codex-result-${crypto.randomBytes(12).toString('hex')}.json`;
       resultFiles.add(resultRelative);
       const lastMessage = path.join(worktree, resultRelative);
-      // Field lesson #141: this worktree's own port block, next to testEnv; a manifest testEnv can
-      // never set SWARM_PORT_BASE itself (refused at validate time).
-      const workerEnv = { ...options.swarmEnv, SWARM_PORT_BASE: String(options.portBase), ...job.testEnv, TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir, SWARM_TEST_TMP: scratchDir };
       if (isCursor) {
         // The key is set last so neither swarmEnv nor testEnv can replace or drop it; the adapter
         // log sink and the saved stdout/stderr/response are redacted against it.
@@ -140,13 +160,7 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
         }
       } else result = await execute(job, worktree, message, { ...options, logDirectory: path.join(root, directory, job.id), codex: { worktree, profile, lastMessage, resultRelative, env: { ...await codexEnvironment(options.env), ...workerEnv } } });
       if (result.status === 'complete') {
-        const outputs = [], missing = [];
-        for (const file of job.outputs) {
-          const bytes = await bytesAt(worktree, file);
-          if (bytes === null) { missing.push(file); continue; }
-          outputs.push({ file, bytes, mode: (await fs.stat(await safePath(worktree, file))).mode & 0o777 });
-        }
-        const leaked = isCursor ? outputs.filter(output => output.bytes.includes(Buffer.from(cursorKey))).map(output => output.file) : [];
+        let { outputs, missing, leaked } = await collectDeclaredOutputs();
         if (leaked.length) {
           result = { ...result, status: 'failed', workerKeyExposed: true, error: `output contains the Cursor credential (${cursorAuth.envName}): ${leaked.join(', ')}` };
         } else if (missing.length) {
@@ -154,30 +168,97 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
           // job status blocked with its summary — never masked by a generic missing-output error.
           const reply = parseCodexReply(result.response);
           if (reply?.status === 'blocked' && (job.report !== 'short' || validateReport(reply, { outputs: job.outputs }).report)) {
-            result = { ...result, status: 'blocked', error: `blocked: ${blockedSummaryFromReply(reply)}`.slice(0, 300) };
-          } else result = { ...result, status: 'failed', error: `Missing output (deletions are never propagated): ${missing.join(', ')}` };
-        } else {
+            const note = blockedSummaryFromReply(reply);
+            if (note !== 'no summary given') {
+              result = { ...result, status: 'blocked', error: `blocked: ${note}`.slice(0, 300) };
+            } else {
+              // No summary: ask once for just the summary, else describe the work from the diff of the declared outputs.
+              const settled = await settleMissingSummary({
+                status: 'blocked',
+                summary: undefined,
+                cancelled: Boolean(result.workerKeyExposed || result.cleanupError || result.terminationReason || options.signal?.aborted || await options.cancelled?.()),
+                alreadyReasked: Boolean(result.summaryReasked),
+                reask: async () => {
+                  const reask = await launchWorkerMessage(REASK_SUMMARY_MESSAGE);
+                  return { summary: parseCodexReply(reask.response)?.summary };
+                },
+                diff: async () => {
+                  const base = new Map(), current = new Map();
+                  for (const file of job.outputs) {
+                    try { base.set(file, Buffer.from(await gitImpl(worktree, ['show', `HEAD:${file}`]))); } catch { base.set(file, null); }
+                    current.set(file, await bytesAt(worktree, file));
+                  }
+                  return diffSummary(job.outputs, { readBase: file => base.get(file) ?? null, readCurrent: file => current.get(file) ?? null });
+                },
+              });
+              result = { ...result, status: settled.status, error: settled.error ?? `blocked: ${settled.summary}`.slice(0, 300), summaryReasked: settled.summaryReasked, summaryFromDiff: settled.summaryFromDiff, warnings: [...(result.warnings ?? []), ...settled.warnings] };
+              if (result.status === 'complete') result = { ...result, status: 'blocked', error: `blocked: ${settled.summary}`.slice(0, 300) };
+            }
+          } else {
+            const missingAtReask = [...missing];
+            // A transient blip is retried whole by runCodexWithRetry; a re-ask on top of it would only add a launch.
+            const blipped = (isCursor ? CURSOR_BLIP_RE : CODEX_BLIP_RE).test(`${result.stderr ?? ''}\n${result.blipText ?? ''}`);
+            const skipMissingReask = blipped || result.workerKeyExposed || result.cleanupError || result.terminationReason
+              || options.signal?.aborted || await options.cancelled?.();
+            if (!skipMissingReask) {
+              const present = job.outputs.filter(file => !missingAtReask.includes(file));
+              const saved = new Map();
+              for (const file of present) {
+                const bytes = await bytesAt(worktree, file);
+                saved.set(file, { bytes, mode: bytes === null ? null : (await fs.stat(await safePath(worktree, file))).mode & 0o777 });
+              }
+              result.missingReasked = missingAtReask;
+              const reaskMessage = `These declared outputs are still missing: ${missingAtReask.join(', ')}. Write exactly those files now. Keep every other file as it is. Then reply with your final report JSON line.`;
+              try {
+                const reask = await launchWorkerMessage(reaskMessage);
+                if (typeof result.usage?.total_tokens === 'number' && typeof reask.usage?.total_tokens === 'number') result.usage = { ...result.usage, total_tokens: result.usage.total_tokens + reask.usage.total_tokens };
+                for (const key of ['stdout', 'stderr', 'response']) if (reask[key] !== undefined) result[key] = reask[key];
+                if (reask.error) result.error = reask.error;
+                if (reask.status !== 'complete' || reask.error || reask.envelopeInvalid) result.status = reask.status === 'complete' ? 'failed' : reask.status;
+                if (isCursor) {
+                  for (const key of ['stdout', 'stderr', 'response', 'error', 'blipText']) {
+                    if (typeof reask[key] === 'string' && cursorKey && reask[key].includes(cursorKey)) {
+                      result.workerKeyExposed = true;
+                      result[key] = redactCursorKey(reask[key], cursorKey);
+                    }
+                  }
+                }
+              } finally {
+                const restored = [];
+                for (const [file, { bytes: before, mode }] of saved) {
+                  const after = await bytesAt(worktree, file);
+                  if (before === null ? after === null : after !== null && before.equals(after)) continue;
+                  if (before === null) await fs.rm(await safePath(worktree, file, { readOnly: true }), { force: true });
+                  else await write(worktree, file, before, false, mode, { template: true });
+                  restored.push(file);
+                }
+                if (restored.length) result.missingReaskRestored = restored;
+              }
+              ({ outputs, missing, leaked } = await collectDeclaredOutputs());
+              if (leaked.length) {
+                result = { ...result, status: 'failed', workerKeyExposed: true, error: `output contains the Cursor credential (${cursorAuth.envName}): ${leaked.join(', ')}` };
+                missing = [];
+              }
+            }
+            if (missing.length) {
+              const suffix = result.missingReasked ? ' (after one re-ask)' : '';
+              result = { ...result, status: 'failed', error: `Missing output (deletions are never propagated): ${missing.join(', ')}${suffix}` };
+            }
+          }
+        }
+        if (result.status === 'complete' && !missing.length) {
           const reply = parseCodexReply(result.response);
           const outputsUnchanged = !(await outputsChanged(worktree, launchBaseline));
           const blockedNote = blockedNoteFromReply(reply);
           if (blockedNote && outputsUnchanged) {
             result = { ...result, status: 'blocked', error: `blocked: ${blockedNote}`.slice(0, 300) };
           } else {
-          result = await reaskWorkerReport(job, result, worktree, options, async reaskMessage => {
-            const reaskRelative = `.swarm-codex-result-${crypto.randomBytes(12).toString('hex')}.json`;
-            resultFiles.add(reaskRelative);
-            const launchOptions = { ...options, logDirectory: path.join(root, directory, job.id), onOutput: () => {} };
-            if (isCursor) {
-              const reask = await execute(job, worktree, reaskMessage, { ...launchOptions, workerKey: cursorKey, cursor: { profile, bin: cursorBinary.bin, worktree, apiKey: cursorKey, env: cursorAuthEnv({ ...await cursorEnvironment(options.env), ...workerEnv }, cursorAuth) } });
-              for (const key of ['stdout', 'stderr', 'response', 'error']) if (typeof reask[key] === 'string') reask[key] = redactCursorKey(reask[key], cursorKey);
-              return reask;
+            result = await reaskWorkerReport(job, result, worktree, options, launchWorkerMessage);
+            if (result.status === 'complete' && outputsUnchanged && !blockedNoteFromReply(parseCodexReply(result.response))) {
+              result.warnings = [...(result.warnings ?? []), 'completed-without-changes: no declared output changed'];
             }
-            return execute(job, worktree, reaskMessage, { ...launchOptions, codex: { worktree, profile, lastMessage: path.join(worktree, reaskRelative), resultRelative: reaskRelative, env: { ...await codexEnvironment(options.env), ...workerEnv } } });
-          });
-          if (result.status === 'complete' && outputsUnchanged && !blockedNoteFromReply(parseCodexReply(result.response))) {
-            result.warnings = [...(result.warnings ?? []), 'completed-without-changes: no declared output changed'];
-          }
-          for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
+            ({ outputs } = await collectDeclaredOutputs());
+            for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
           }
         }
       }

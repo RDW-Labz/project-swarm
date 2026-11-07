@@ -64,6 +64,14 @@ export function validateLeadArea(job) {
   return { goal: area.goal, scope: [...area.scope], maxJobs, concurrency, agents: [...new Set(agents)], budget: normalizedBudget };
 }
 
+export function normalizeChildManifest(child) {
+  if (!object(child) || !Array.isArray(child.jobs)) return child;
+  return {
+    ...child,
+    jobs: child.jobs.map(job => (object(job) && job.context === undefined ? { ...job, context: [] } : job)),
+  };
+}
+
 export function validateParentLeads(manifest) {
   const leads = manifest.jobs.filter(job => job.type === 'lead').map(job => ({ job, area: validateLeadArea(job) }));
   for (let i = 0; i < leads.length; i += 1) {
@@ -80,6 +88,7 @@ export function validateParentLeads(manifest) {
 }
 
 export function validateChildManifest(child, { lead, area, parentManifest, leadSensitive }) {
+  child = normalizeChildManifest(child);
   const fail = reason => { throw error('lead-child-invalid', `${lead.id}: ${reason}`); };
   if (!object(child)) fail('manifest must be an object');
   keys(child, CHILD_KEYS, fail);
@@ -121,7 +130,7 @@ export function leadPromptBlock({ job, area, outputPath }) {
   const short = (value, max) => value.length > max ? `${value.slice(0, max - 3)}...` : value;
   const file = area.scope[0].endsWith('/') ? `${area.scope[0]}result.txt` : area.scope[0];
   const example = { version: 1, jobs: [{ id: 'worker', agent: area.agents[0], prompt: 'Implement the goal.', outputs: [file.length <= 200 ? file : '<file inside scope>'] }] };
-  return `\nLead goal: ${short(area.goal, 400)}\nScope: ${short(JSON.stringify(area.scope), 700)}\nMax jobs: ${area.maxJobs}; allowed agents: ${area.agents.join(', ')}; concurrency cap: ${area.concurrency}.\nOnly output: ${short(outputPath, 200)}, holding one JSON manifest {"version":1,"jobs":[...]}.\nAllowed top-level keys: ${CHILD_KEYS.filter(key => key !== 'contract').join(', ')}. Leave out contract: the parent's contract already applies to every child.\nAllowed job keys: ${JOB_KEYS.join(', ')}.\ntype is optional; leave it out for ordinary work, or use exactly one of: ${CHILD_TYPES.join(', ')}. tier is optional; if set, use exactly one of: ${TIERS.join(', ')}.\nEvery job output and deletes entry must be inside the scope. outputs, context and deletes are exact file paths, never folders (no trailing slash): to change an existing file list it in both context and outputs, to create a file name the new file. Plan from the file list you are given; you cannot read file contents, so tell each child job to read the files it needs. A job's report, if you set it, is exactly the word short. Child jobs cannot be leads or run commands.\nExample: ${JSON.stringify(example)}`;
+  return `\nLead goal: ${short(area.goal, 400)}\nScope: ${short(JSON.stringify(area.scope), 700)}\nMax jobs: ${area.maxJobs}; allowed agents: ${area.agents.join(', ')}; concurrency cap: ${area.concurrency}.\nOnly output: ${short(outputPath, 200)}, holding one JSON manifest {"version":1,"jobs":[...]}.\nAllowed top-level keys: ${CHILD_KEYS.filter(key => key !== 'contract').join(', ')}. Leave out contract: the parent's contract already applies to every child.\nAllowed job keys: ${JOB_KEYS.join(', ')}.\ntype is optional; leave it out for ordinary work, or use exactly one of: ${CHILD_TYPES.join(', ')}. tier is optional; if set, use exactly one of: ${TIERS.join(', ')}.\nEvery job output and deletes entry must be inside the scope. outputs, context and deletes are exact file paths, never folders (no trailing slash): to change an existing file list it in both context and outputs, to create a file name the new file. Give every job a context array (use [] when it needs no files). Plan from the file list you are given; you cannot read file contents, so tell each child job to read the files it needs. A job's report, if you set it, is exactly the word short. Child jobs cannot be leads or run commands.\nExample: ${JSON.stringify(example)}`;
 }
 
 export function leadRollup(childState, rollup) {
