@@ -29,7 +29,8 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
 // The claude lane also takes the models for tier "mid" and tier "expensive" jobs (the router falls back to `model`).
 const CLAUDE_TIER_FIELDS = Object.freeze(['midModel', 'expensiveModel']);
 const CLAUDE_EXTRA_FIELDS = Object.freeze(['shellPaused']);
-const OPENROUTER_EXTRA_FIELDS = Object.freeze(['allowCodeOutputs']);
+// reviewModel: the model for review (grading) jobs routed to OpenRouter; build and fix jobs keep `model`.
+const OPENROUTER_EXTRA_FIELDS = Object.freeze(['allowCodeOutputs', 'reviewModel']);
 const LOCAL_LANE_FIELDS = Object.freeze(['endpoints', 'agencyConcurrency']);
 function extraLaneFields(agent) {
   if (agent === 'claude') return [...CLAUDE_TIER_FIELDS, ...CLAUDE_EXTRA_FIELDS];
@@ -65,6 +66,7 @@ function validate(agent, lane) {
   }
   if (Object.hasOwn(lane, 'paused') && lane.paused !== true && lane.paused !== false) throw invalid(agent, 'paused', 'must be true or false');
   if (agent === 'claude' && Object.hasOwn(lane, 'shellPaused') && lane.shellPaused !== true && lane.shellPaused !== false) throw invalid(agent, 'shellPaused', 'must be true or false');
+  if (agent === 'openrouter' && Object.hasOwn(lane, 'reviewModel') && lane.reviewModel !== null && (typeof lane.reviewModel !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/.test(lane.reviewModel))) throw invalid(agent, 'reviewModel', 'must be null or a valid model name');
   if (agent === 'openrouter' && Object.hasOwn(lane, 'allowCodeOutputs') && lane.allowCodeOutputs !== true && lane.allowCodeOutputs !== false) throw invalid(agent, 'allowCodeOutputs', 'must be true or false');
 }
 

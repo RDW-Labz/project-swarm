@@ -104,6 +104,7 @@ const laneModel = (job, agent, lanes, failures = {}, endpointHealth = () => ({ s
     if (job.tier === 'expensive') return lanes.claude.expensiveModel ?? lanes.claude.model;
     if (job.tier === 'mid' && lanes.claude.midModel) return lanes.claude.midModel;
   }
+  if (agent === 'openrouter' && job?.type === 'review' && typeof lanes.openrouter?.reviewModel === 'string') return lanes.openrouter.reviewModel;
   return lanes[agent].model;
 };
 
