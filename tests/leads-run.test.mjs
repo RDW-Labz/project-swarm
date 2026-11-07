@@ -247,3 +247,18 @@ test('five leads share one cursor cap of 8, and a 429 pauses cursor for the othe
   controller.abort();
   await Promise.allSettled([parent, outside]);
 });
+
+test('a lead with nothing in its scope writes an empty manifest and the run still completes', async t => {
+  const options = await fixture(t);
+  const calls = [];
+  const state = await runManifest(options.root, manifest([lead('a'), lead('b')]), {
+    ...options,
+    fetchImpl: workers({ count: 1, calls, mutate: (child, letter) => (letter === 'b' ? { version: 1, jobs: [] } : child) }),
+  });
+  assert.equal(state.status, 'complete', JSON.stringify(state.jobs.map(job => [job.id, job.status, job.error])));
+  assert.equal(state.children.length, 1, 'only the lead with work starts a child run');
+  const idle = state.jobs.find(job => job.id === 'lead-b');
+  assert.equal(idle.status, 'complete');
+  assert.equal(idle.leadNoWork, true);
+  assert.ok(!calls.some(call => call.startsWith('app/b/')), 'no worker runs for the empty lead');
+});

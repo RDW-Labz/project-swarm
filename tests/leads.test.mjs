@@ -60,7 +60,7 @@ for (const [fields, reason] of [[{ type: 'lead' }, 'depth limit 2: child jobs ca
   test(`child rule ${reason} ${JSON.stringify(fields)}`, () => rejects(() => validateChildManifest(child({ jobs: [worker(fields)] }), options()), 'lead-child-invalid', reason));
 }
 test('child rejects shape, count, concurrency and budget violations', () => {
-  for (const value of [null, [], child({ version: 2 }), child({ jobs: [] }), child({ jobs: [null] }), child({ concurrency: 0 }), child({ concurrency: 1.5 }), child({ budget: { maxUsd: -1 } })]) rejects(() => validateChildManifest(value, options()), 'lead-child-invalid');
+  for (const value of [null, [], child({ version: 2 }), child({ jobs: [null] }), child({ concurrency: 0 }), child({ concurrency: 1.5 }), child({ budget: { maxUsd: -1 } })]) rejects(() => validateChildManifest(value, options()), 'lead-child-invalid');
   rejects(() => validateChildManifest(child({ jobs: [worker(), worker()] }), options({ maxJobs: 1 })), 'lead-child-invalid', '1 to 1');
   for (const key of ['maxUsd', 'maxTokens']) rejects(() => validateChildManifest(child({ budget: { [key]: 11 } }), options({ budget: { [key]: 10 } })), 'lead-child-invalid', key);
 });

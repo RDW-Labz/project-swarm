@@ -64,6 +64,26 @@ export function validateLeadArea(job) {
   return { goal: area.goal, scope: [...area.scope], maxJobs, concurrency, agents: [...new Set(agents)], budget: normalizedBudget };
 }
 
+export function isEmptyChildManifest(child) {
+  return object(child) && child.version === 1 && Array.isArray(child.jobs) && child.jobs.length === 0;
+}
+
+export function leadBlockIsOutOfScopeOnly(summary) {
+  if (typeof summary !== 'string') return false;
+  const lower = summary.toLowerCase();
+  return lower.includes('outside') && lower.includes('scope');
+}
+
+export function settleLeadOutcome({ child, report }) {
+  if (child != null && isEmptyChildManifest(child)) {
+    return { startChildRun: false, status: 'complete', warning: null };
+  }
+  if (report?.status === 'blocked' && leadBlockIsOutOfScopeOnly(report.summary ?? '')) {
+    return { startChildRun: false, status: 'complete', warning: 'lead-out-of-scope-ignored' };
+  }
+  return { startChildRun: true, status: null, warning: null };
+}
+
 export function normalizeChildManifest(child) {
   if (!object(child) || !Array.isArray(child.jobs)) return child;
   return {
@@ -94,7 +114,8 @@ export function validateChildManifest(child, { lead, area, parentManifest, leadS
   keys(child, CHILD_KEYS, fail);
   if (child.version !== 1) fail('version must be 1');
   if (child.contract !== undefined && child.contract !== parentManifest.contract) fail('contract must be the parent contract');
-  if (!Array.isArray(child.jobs) || child.jobs.length < 1 || child.jobs.length > area.maxJobs) fail(`jobs must contain 1 to ${area.maxJobs} entries`);
+  if (!Array.isArray(child.jobs)) fail('jobs must be an array');
+  if (child.jobs.length > area.maxJobs) fail(`jobs must contain 1 to ${area.maxJobs} entries`);
   for (const job of child.jobs) {
     if (!object(job)) fail('job must be an object');
     keys(job, JOB_KEYS, fail);
@@ -130,7 +151,7 @@ export function leadPromptBlock({ job, area, outputPath }) {
   const short = (value, max) => value.length > max ? `${value.slice(0, max - 3)}...` : value;
   const file = area.scope[0].endsWith('/') ? `${area.scope[0]}result.txt` : area.scope[0];
   const example = { version: 1, jobs: [{ id: 'worker', agent: area.agents[0], prompt: 'Implement the goal.', outputs: [file.length <= 200 ? file : '<file inside scope>'] }] };
-  return `\nLead goal: ${short(area.goal, 400)}\nScope: ${short(JSON.stringify(area.scope), 700)}\nMax jobs: ${area.maxJobs}; allowed agents: ${area.agents.join(', ')}; concurrency cap: ${area.concurrency}.\nOnly output: ${short(outputPath, 200)}, holding one JSON manifest {"version":1,"jobs":[...]}.\nAllowed top-level keys: ${CHILD_KEYS.filter(key => key !== 'contract').join(', ')}. Leave out contract: the parent's contract already applies to every child.\nAllowed job keys: ${JOB_KEYS.join(', ')}.\ntype is optional; leave it out for ordinary work, or use exactly one of: ${CHILD_TYPES.join(', ')}. tier is optional; if set, use exactly one of: ${TIERS.join(', ')}.\nEvery job output and deletes entry must be inside the scope. outputs, context and deletes are exact file paths, never folders (no trailing slash): to change an existing file list it in both context and outputs, to create a file name the new file. Give every job a context array (use [] when it needs no files). Plan from the file list you are given; you cannot read file contents, so tell each child job to read the files it needs. A job's report, if you set it, is exactly the word short. Child jobs cannot be leads or run commands.\nExample: ${JSON.stringify(example)}`;
+  return `\nLead goal: ${short(area.goal, 395)}\nScope: ${short(JSON.stringify(area.scope), 675)}\nMax jobs: ${area.maxJobs}; allowed agents: ${area.agents.join(', ')}; concurrency cap: ${area.concurrency}.\nOnly output: ${short(outputPath, 200)}, holding one JSON manifest {"version":1,"jobs":[...]}.\nAllowed top-level keys: ${CHILD_KEYS.filter(key => key !== 'contract').join(', ')}. Leave out contract: the parent contract applies.\nAllowed job keys: ${JOB_KEYS.join(', ')}.\ntype is optional; leave it out for ordinary work, or use exactly one of: ${CHILD_TYPES.join(', ')}. tier is optional; if set, use exactly one of: ${TIERS.join(', ')}.\nEvery job output and deletes entry must be inside the scope. outputs, context and deletes are file paths, not folders: list existing files in context and outputs; new paths only in outputs. Give every job a context array (use [] when it needs no files). You cannot read file contents; each child reads its context. A job's report, if set, is exactly short. Child jobs cannot be leads or run commands. If nothing in your scope needs to change for this goal, write {"version":1,"jobs":[]} as your manifest and finish with status complete and a summary saying so; do not report blocked for that.\nExample: ${JSON.stringify(example)}`;
 }
 
 export function leadRollup(childState, rollup) {

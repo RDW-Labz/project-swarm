@@ -82,7 +82,7 @@ import { checkProjectCap, noCapWarning, readProjectCap, projectSpend } from './p
 import { isCheckOnlyBlock, allOutputsWritten, deferredCheckWarnings, safeReason } from './central-checks.mjs';
 import { accrueSpend, resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
-import { validateLeadArea, validateParentLeads, validateChildManifest, leadPromptBlock, leadRollup } from './leads.mjs';
+import { validateLeadArea, validateParentLeads, validateChildManifest, leadPromptBlock, leadRollup, settleLeadOutcome } from './leads.mjs';
 import { REPORT_PROMPT_LINE, validateReport, legacyReport, rollupRun, renderRollupText } from './reports.mjs';
 import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, npmScriptsResolveToPlainNode, NO_STASH_LINE, MUTANTS_BY_HAND_LINE, MUTANTS_SHAPE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
 import { loadGotchas, gotchasPromptBlock, windowsCiGotchasWarnings } from './gotchas.mjs';
@@ -1350,12 +1350,25 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         // Field lesson #286: persisted once, at the root (survives across runs, unlike
         // .swarm/runs/<id>/), so the next dispatch refuses instead of spending on the same outage.
         if (result.status === 'provider-limit') await jsonWrite(root, '.swarm/claude-provider-limit.json', { resetsAt: result.resetsAt, detectedAt: new Date(now()).toISOString() });
-        if (original.type === 'lead' && record.status === 'complete') {
+        // A lead with nothing in its scope for this goal finishes cleanly instead of failing the run: either it says it is
+        // blocked only because the work is outside its scope, or (below) it writes an empty child manifest.
+        if (original.type === 'lead' && record.status === 'blocked' && settleLeadOutcome({ report: { status: 'blocked', summary: record.report?.summary ?? String(record.error ?? '').replace(/^blocked:\s*/, '') } }).warning) {
+          record.status = 'complete';
+          record.error = null;
+          record.leadNoWork = true;
+          record.leadWarning = 'lead-out-of-scope-ignored';
+        }
+        if (original.type === 'lead' && record.status === 'complete' && !record.leadNoWork) {
           try {
             let child;
             try { child = JSON.parse(await fs.readFile(path.join(workspaceRoot, original.outputs[0]), 'utf8')); }
             catch { fail(`lead-child-invalid: ${original.id}: manifest unreadable`, 'lead-child-invalid'); }
             child = validateChildManifest(child, { lead: original, area: validateLeadArea(original), parentManifest: manifest });
+            if (!settleLeadOutcome({ child }).startChildRun) {
+              record.leadNoWork = true;
+              await queueSave();
+              return;
+            }
             validateManifest(child);
             // A lead cannot know which tests mention the files it assigns; add them to ignoreTests (as scaffold does) instead of failing the run.
             try { await validateProject(root, child, { env, liveDir }); }
