@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "runtime-fixtures",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Owner rule: test fixtures must not contain token-shaped string literals; build them at runtime so no secret-looking text sits in the source. The secret scanner flagged these FAKE fixtures: (a) tests/orchestrator-lane.test.mjs around line 49 (the maskCommand test input with 'Bearer abcDEF123456789', 'sk-live-1234567890abcdef', 'API_KEY=hunter2', 'ghp_abcdefghijklmnopqrstuvwxyz0123456789ab') and around line 300 (the list with 'mysql -p hunter3', 'alice:pw12345', 'https://bob:pass99@github.com/o/r.git', 'postgres://u:pgpass@h/db' and any similar entries in that list); (b) tests/board-peers.test.mjs line 18 `const token = 'token_1234567890123456';`. Rewrite ONLY those fixture values so the same strings are produced at runtime from harmless pieces, e.g. const ghp = ['gh', 'p_'].join('') + 'abcdefghijklmnopqrstuvwxyz0123456789ab'; const url = 'https://' + 'bob' + ':' + 'pass99' + '@github.com/o/r.git'; const token = ['token', '1234567890123456'].join('_'). The resulting runtime strings must be byte-identical to today's so every assertion keeps testing the same behavior (masking, peer token validation). Do not change any assertion, test name, or any tools/ file. Also scan both files for any other literal matching common token shapes (ghp_/gho_/github_pat_/sk-/xox?-/AKIA/AIza/ya29./glpat-, user:password@ in URLs, NAME=value secrets, Bearer <long>) and convert those the same way. Edit only tests/orchestrator-lane.test.mjs and tests/board-peers.test.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/orchestrator-lane.test.mjs tests/board-peers.test.mjs`.",
+      "context": ["tests/_isolate-config.mjs", "tools/orchestrator-events.mjs", "tools/board-peers.mjs"],
+      "outputs": ["tests/orchestrator-lane.test.mjs", "tests/board-peers.test.mjs"],
+      "timeoutMs": 1200000
+    }
+  ]
+}

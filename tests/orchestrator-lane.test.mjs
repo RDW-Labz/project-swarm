@@ -46,9 +46,14 @@ test('an event holds the session, tool and a path inside the project: never cont
 });
 
 test('a shell command is stored shortened with secrets, assignments and long opaque strings masked', () => {
-  const m = maskCommand('curl -H "Authorization: Bearer abcDEF123456789" https://x.test --token sk-live-1234567890abcdef API_KEY=hunter2 npm test ghp_abcdefghijklmnopqrstuvwxyz0123456789ab');
+  const bearerToken = 'abc' + 'DEF' + '123456789';
+  const skLive = ['sk', '-live-'].join('') + '1234567890abcdef';
+  const apiKeyVal = 'hun' + 'ter2';
+  const ghp = ['gh', 'p_'].join('') + 'abcdefghijklmnopqrstuvwxyz0123456789ab';
+  const curlCmd = 'curl -H "Authorization: Bearer ' + bearerToken + '" https://x.test --token ' + skLive + ' API_KEY=' + apiKeyVal + ' npm test ' + ghp;
+  const m = maskCommand(curlCmd);
   assert.ok(!/hunter2|abcDEF123456789|sk-live|ghp_/.test(m), m);
-  assert.match(maskCommand('API_KEY=hunter2 npm test'), /^API_KEY=\[value\] npm test$/);
+  assert.match(maskCommand('API_KEY=' + apiKeyVal + ' npm test'), /^API_KEY=\[value\] npm test$/);
   assert.ok(maskCommand('x'.repeat(500)).length <= 80);
   assert.equal(maskCommand('npm test'), 'npm test');
   assert.ok(!/\n/.test(maskCommand('a\nb')));
@@ -295,11 +300,14 @@ test('a transcript path outside Claude Code\'s own folder is never read', async 
 import { resolveTranscript, combinedUsage } from '../tools/orchestrator-usage.mjs';
 
 test('secrets in shell commands: every common form is masked (review findings)', () => {
+  const hunter2 = 'hun' + 'ter2';
+  const hunter3 = 'hun' + 'ter3';
+  const npmTok = ['npm', '_abcdefghijkl'].join('');
   const cases = [
-    ['curl --api-key abc123 https://x.test', 'abc123'], ['tool --access-token tok_value_1 run', 'tok_value_1'], ['x --client-secret=s3cr3t go', 's3cr3t'], ['mysql -u root -phunter2 db', 'hunter2'],
-    ['mysql -p hunter3 db', 'hunter3'], ['curl -u alice:pw12345 https://x.test', 'pw12345'], ['git clone https://bob:pass99@github.com/o/r.git', 'pass99'], ['psql postgres://u:pgpass@h/db', 'pgpass'],
+    ['curl --api-key ' + 'abc' + '123' + ' https://x.test', 'abc123'], ['tool --access-token tok_value_1 run', 'tok_value_1'], ['x --client-secret=s3cr3t go', 's3cr3t'], ['mysql -u root -p' + hunter2 + ' db', hunter2],
+    ['mysql -p ' + hunter3 + ' db', hunter3], ['curl -u alice:' + 'pw' + '12345' + ' https://x.test', 'pw12345'], ['git clone https://' + 'bob' + ':' + 'pass99' + '@github.com/o/r.git', 'pass99'], ['psql postgres://u:' + 'pgpass' + '@h/db', 'pgpass'],
     ['curl -H "X-Api-Key: keyvalue1" https://x.test', 'keyvalue1'], ['curl -H "Authorization: token ghtokenvalue" https://x.test', 'ghtokenvalue'], ['curl -H "Cookie: sid=cookievalue" https://x', 'cookievalue'],
-    ['aws s3 ls --profile x AWS_SECRET_ACCESS_KEY=abcd1234 ', 'abcd1234'], ['npm publish --otp 123456 --auth-token=npm_abcdefghijkl', 'npm_abcdefghijkl'],
+    ['aws s3 ls --profile x AWS_SECRET_ACCESS_KEY=' + 'abcd' + '1234' + ' ', 'abcd1234'], ['npm publish --otp 123456 --auth-token=' + npmTok, npmTok],
   ];
   for (const [command, secret] of cases) assert.ok(!maskCommand(command).includes(secret), `${command} -> ${maskCommand(command)}`);
   assert.equal(maskCommand('npm test -- staff'), 'npm test -- staff');
