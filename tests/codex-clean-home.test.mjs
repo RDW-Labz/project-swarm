@@ -67,3 +67,20 @@ test('no login file: the clean home still works (API key or keyring logins)', as
   await assert.rejects(fs.lstat(path.join(target, 'auth.json')));
   assert.match(await fs.readFile(path.join(target, 'config.toml'), 'utf8'), /^# Written by project-swarm/);
 });
+
+test('parallel Codex jobs share one setup and never trip over the temp file or the login link', async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-home-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  await fs.mkdir(path.join(home, '.codex'));
+  await fs.writeFile(path.join(home, '.codex', 'config.toml'), REAL);
+  await fs.writeFile(path.join(home, '.codex', 'auth.json'), '{"tokens":"x"}');
+  const results = await Promise.all(Array.from({ length: 8 }, () => prepareCodexCleanHome({ env: {}, home })));
+  const target = path.join(home, '.codex', 'swarm-worker-home');
+  assert.deepEqual(new Set(results), new Set([target]));
+  assert.deepEqual((await fs.readdir(target)).sort(), ['auth.json', 'config.toml'], 'no temp files left behind');
+  assert.equal(await fs.readlink(path.join(target, 'auth.json')), path.join(home, '.codex', 'auth.json'));
+  // A second wave after the first finished also succeeds (the shared setup is not cached forever).
+  await fs.appendFile(path.join(home, '.codex', 'config.toml'), '\n[profiles.extra]\nmodel = "x"\n');
+  await Promise.all(Array.from({ length: 4 }, () => prepareCodexCleanHome({ env: {}, home })));
+  assert.match(await fs.readFile(path.join(target, 'config.toml'), 'utf8'), /\[profiles\.extra\]/);
+});
