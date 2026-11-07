@@ -73,7 +73,13 @@ export function loadLocalConfig({ env = process.env, home = env.HOME || os.homed
 /** Hard ceiling for autopilot `maxJobs` (matches go --scope batch size). */
 export const AUTOPILOT_MAX_JOBS_CEILING = 64;
 
-const AUTOPILOT_KEYS = new Set(['skipSkeleton', 'maxJobs']);
+const AUTOPILOT_KEYS = new Set(['skipSkeleton', 'maxJobs', 'supervise']);
+
+// autopilot.supervise (machine config, default false): when true, `swarm watch --all` also runs one
+// autopilot loop per active registered project. Off unless the machine's owner turns it on.
+export function autopilotSuperviseEnabled(config) {
+  return config?.autopilot?.supervise === true;
+}
 
 export function validateAutopilotBlock(raw, { label = 'autopilot' } = {}) {
   const errors = [];
@@ -90,6 +96,9 @@ export function validateAutopilotBlock(raw, { label = 'autopilot' } = {}) {
     if (v !== true && v !== false && v !== 'auto') {
       errors.push(`${label}.skipSkeleton: must be true, false, or "auto"`);
     }
+  }
+  if (raw.supervise !== undefined && raw.supervise !== true && raw.supervise !== false) {
+    errors.push(`${label}.supervise: must be true or false`);
   }
   if (raw.maxJobs !== undefined) {
     const n = Number(raw.maxJobs);

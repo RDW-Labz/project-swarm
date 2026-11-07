@@ -45,7 +45,12 @@ test('swarm status is the same short status, --json too; status --all is the boa
   const [bare, status, json, all] = await Promise.all([run([], w), run(['status'], w), run(['status', '--json'], w), run(['status', '--all'], w)]);
   assert.equal(status.code, 0, status.stderr);
   assert.equal(status.stdout, bare.stdout);
-  assert.deepEqual(Object.keys(JSON.parse(json.stdout)).sort(), ['initialized', 'lanes', 'lastRun', 'next', 'root', 'spendToday']);
+  // owner decision 2026-10-22: autopilot default-on status fields
+  const statusJson = JSON.parse(json.stdout);
+  assert.deepEqual(Object.keys(statusJson).sort(), ['autopilot', 'idleWithReady', 'initialized', 'lanes', 'lastRun', 'next', 'readyTickets', 'root', 'spendToday']);
+  assert.ok(statusJson.autopilot === 'on' || statusJson.autopilot === 'off');
+  assert.equal(statusJson.idleWithReady, false);
+  assert.equal(statusJson.readyTickets, 0);
   assert.deepEqual(JSON.parse(json.stdout).lanes.unchecked, ['hermes']);
   assert.equal(all.code, 0, all.stderr);
   assert.match(all.stdout, /No live runs on this machine\./);

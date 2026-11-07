@@ -83,13 +83,18 @@ test('autoInit runs init once on a clean project, skips an initialized or dirty 
 test('swarm with no arguments prints a short status and five next commands', async t => {
   const root = await project(t), home = await temp(t);
   const { stdout } = await run(['--root', root], home);
-  assert.match(stdout, /^Project Swarm status for /);
+  assert.match(stdout, /^autopilot: (on|off)\nProject Swarm status for /);
   assert.match(stdout, /Initialized: no; run: swarm init/);
   assert.match(stdout, /Next:\n {2}swarm init\n/);
   assert.equal(stdout.split('Next:\n')[1].trim().split('\n').length, 5);
   const json = JSON.parse((await run(['--root', root, '--json'], home)).stdout);
   assert.equal(json.initialized, false);
   assert.equal(json.next.length, 5);
+  // owner decision 2026-10-22: autopilot default-on status fields
+  assert.deepEqual(Object.keys(json).sort(), ['autopilot', 'idleWithReady', 'initialized', 'lanes', 'lastRun', 'next', 'readyTickets', 'root', 'spendToday']);
+  assert.ok(json.autopilot === 'on' || json.autopilot === 'off');
+  assert.equal(json.idleWithReady, false);
+  assert.equal(json.readyTickets, 0);
 });
 
 test('completion zsh prints the script and __complete runs lists run ids newest first', async t => {

@@ -1266,6 +1266,61 @@ async function defaultSleep(ms, signal) {
 
 export const MIN_INTERVAL_MS = 5000;
 
+export const AUTOPILOT_OFF_REL = path.join('.swarm', 'autopilot', 'off');
+
+export function autopilotOffPath(root) {
+  return path.join(root, AUTOPILOT_OFF_REL);
+}
+
+export async function isAutopilotOff(root) {
+  try {
+    await fs.access(autopilotOffPath(root));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function setAutopilotOff(root, off) {
+  const file = autopilotOffPath(root);
+  if (off) {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await fs.writeFile(file, '', { flag: 'wx', mode: 0o600 }).catch(async error => {
+      if (error?.code !== 'EEXIST') throw error;
+    });
+    return;
+  }
+  await fs.rm(file, { force: true });
+}
+
+const lockAlive = pid => {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+};
+
+/** `on` (enabled, idle), `off` (owner disabled), or `running` (a live autopilot holds the lock). */
+export async function autopilotStatusForRoot(root, { isAlive = lockAlive } = {}) {
+  if (await isAutopilotOff(root)) return 'off';
+  const file = path.join(root, '.swarm', 'project', 'autopilot.lock');
+  try {
+    const owner = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (Number.isInteger(owner?.pid) && owner.pid > 0 && isAlive(owner.pid)) return 'running';
+  } catch { /* no lock */ }
+  return 'on';
+}
+
+/** Board/status idle rule: ready tickets, no live run, and free machine slots when max is known. */
+export function computeIdleWithReady({ liveRunCount = 0, readyTickets = 0, freeMachineSlots = null } = {}) {
+  if (liveRunCount > 0) return false;
+  if (!(readyTickets > 0)) return false;
+  if (freeMachineSlots !== null && freeMachineSlots !== undefined && freeMachineSlots <= 0) return false;
+  return true;
+}
+
+export function countReadyTickets(ledger) {
+  const list = Array.isArray(ledger?.tickets) ? ledger.tickets : [];
+  return list.filter(t => t && t.status === 'ready').length;
+}
+
 const AUTOPILOT_POLL_DIGEST_FILE = path.join('.swarm', 'autopilot', 'last-poll-digest');
 
 function stableDigest(value) {
