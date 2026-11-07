@@ -80,6 +80,25 @@ async function gitDirty(dir,paths){
  }catch{return false;} // not a git checkout (e.g. a release archive): nothing to protect against
 }
 
+async function gitSourceCommit(dir){
+ try{
+  const {stdout}=await execFileAsync('git',['-C',dir,'rev-parse','HEAD'],{encoding:'utf8'});
+  return stdout.trim();
+ }catch{return null;}
+}
+
+async function gitSourceDirty(dir){
+ try{
+  const {stdout}=await execFileAsync('git',['-C',dir,'status','--porcelain'],{encoding:'utf8'});
+  return stdout.trim().length>0;
+ }catch{return null;}
+}
+
+async function sha256HexOfFile(filePath){
+ const data=await fs.readFile(filePath);
+ return createHash('sha256').update(data).digest('hex');
+}
+
 async function skillFilePairs(source){
  const pairs=[['skills/project-swarm/SKILL.md','SKILL.md'],['SECURITY.md','references/SECURITY.md'],['CONTRIBUTING.md','references/CONTRIBUTING.md']];
  for(const file of (await fs.readdir(path.join(source,'docs'))).filter(f=>/\.(md|json)$/.test(f)).sort())pairs.push([`docs/${file}`,`references/${file}`]);
@@ -107,6 +126,8 @@ export async function snapshotVersion(source,version,{versionsParent=source}={})
  let exists=false;
  try{exists=(await fs.stat(versionDir)).isDirectory();}catch(error){if(error.code!=='ENOENT')throw error;}
  if(!exists){
+  const sourceCommit=await gitSourceCommit(source);
+  const sourceDirty=await gitSourceDirty(source);
   const tmpDir=`${versionDir}.tmp-${process.pid}`;
   const runner=path.join(versionsParent,'current/tools/swarm.mjs');
   for(const [relative,target] of files){
@@ -119,6 +140,10 @@ export async function snapshotVersion(source,version,{versionsParent=source}={})
     await fs.writeFile(destination,content);
    }else await fs.copyFile(path.join(source,relative),destination);
   }
+  const fileHashes={};
+  for(const rel of await listFiles(tmpDir))fileHashes[rel.split(path.sep).join('/')]=await sha256HexOfFile(path.join(tmpDir,rel));
+  const manifest={version,source:{commit:sourceCommit,dirty:sourceDirty},createdAt:new Date().toISOString(),files:fileHashes};
+  await fs.writeFile(path.join(tmpDir,'.swarm-install.json'),`${JSON.stringify(manifest,null,2)}\n`);
   await fs.rename(tmpDir,versionDir);
  }
  return versionDir;
