@@ -5,6 +5,7 @@
 // copy: token refreshes write through, so the operator's login is not changed or forked).
 // Off switch: SWARM_CODEX_CLEAN_HOME=0. Location: SWARM_CODEX_HOME, else ~/.codex/swarm-worker-home (inside
 // the ~/.codex subtree the codex sandbox profile already allows).
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,11 +33,24 @@ export function cleanCodexConfig(text) {
   return `# Written by project-swarm for codex workers. Edit ~/.codex/config.toml instead.\n${out.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`;
 }
 
-export async function prepareCodexCleanHome({ env = process.env, home = os.homedir() } = {}) {
-  if (env.SWARM_CODEX_CLEAN_HOME === '0') return null;
+// Codex jobs start in parallel, so one setup runs per process and target; the others wait for it. Separate processes
+// (two Macs' runs never share a home, but two swarm runs on one Mac can) are safe too: unique temp names, and an
+// existing correct login link is accepted.
+const inflight = new Map();
+export function prepareCodexCleanHome({ env = process.env, home = os.homedir() } = {}) {
+  if (env.SWARM_CODEX_CLEAN_HOME === '0') return Promise.resolve(null);
   const source = path.resolve(env.CODEX_HOME || path.join(home, '.codex'));
   const target = path.resolve(env.SWARM_CODEX_HOME || path.join(home, '.codex', 'swarm-worker-home'));
-  if (source === target) return target;
+  if (source === target) return Promise.resolve(target);
+  const key = `${source}\0${target}`;
+  if (!inflight.has(key)) {
+    const job = setUp(source, target).finally(() => inflight.delete(key));
+    inflight.set(key, job);
+  }
+  return inflight.get(key);
+}
+
+async function setUp(source, target) {
   await fs.mkdir(target, { recursive: true, mode: 0o700 });
   let config = '';
   try { config = await fs.readFile(path.join(source, 'config.toml'), 'utf8'); } catch { /* no config: model defaults */ }
@@ -45,9 +59,13 @@ export async function prepareCodexCleanHome({ env = process.env, home = os.homed
   let current = null;
   try { current = await fs.readFile(configPath, 'utf8'); } catch { /* first run */ }
   if (current !== cleaned) {
-    const tmp = `${configPath}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, cleaned, { mode: 0o600 });
-    await fs.rename(tmp, configPath);
+    const tmp = `${configPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(tmp, cleaned, { mode: 0o600 });
+      await fs.rename(tmp, configPath);
+    } finally {
+      await fs.rm(tmp, { force: true });
+    }
   }
   const auth = path.join(target, 'auth.json');
   const realAuth = path.join(source, 'auth.json');
@@ -56,7 +74,10 @@ export async function prepareCodexCleanHome({ env = process.env, home = os.homed
   if (linked !== realAuth) {
     try { await fs.lstat(realAuth); } catch { return target; } // no file login (API key or keyring): nothing to link
     await fs.rm(auth, { force: true });
-    await fs.symlink(realAuth, auth);
+    try { await fs.symlink(realAuth, auth); } catch (error) {
+      // Another swarm process made the link first: fine if it points at the real login.
+      if (error?.code !== 'EEXIST' || await fs.readlink(auth).catch(() => null) !== realAuth) throw error;
+    }
   }
   return target;
 }
