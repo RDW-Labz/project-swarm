@@ -6,6 +6,7 @@ import { mkdirSync, realpathSync, lstatSync, openSync, writeSync, closeSync, con
 import os from 'node:os';
 import path from 'node:path';
 import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from './swarm-env.mjs';
+import { prepareCodexCleanHome } from './codex-clean-home.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { execViaFile } from './cli-adapters.mjs';
@@ -241,8 +242,10 @@ export function codexUsage(output) {
   const count = Number(matches.at(-1)?.[1].replaceAll(',', ''));
   return Number.isSafeInteger(count) && count >= 0 ? { total_tokens: count } : null;
 }
-export async function codexEnvironment(env = process.env, exists = async file => fs.access(file).then(() => true, () => false)) {
-  return { ...env, ...(await exists('/etc/ssl/cert.pem') ? { SSL_CERT_FILE: '/etc/ssl/cert.pem' } : {}) };
+// Workers get a clean CODEX_HOME (tools/codex-clean-home.mjs): no personal MCP servers, plugins or hooks.
+export async function codexEnvironment(env = process.env, exists = async file => fs.access(file).then(() => true, () => false), { cleanHome = prepareCodexCleanHome } = {}) {
+  const codexHome = await cleanHome({ env });
+  return { ...env, ...(await exists('/etc/ssl/cert.pem') ? { SSL_CERT_FILE: '/etc/ssl/cert.pem' } : {}), ...(codexHome ? { CODEX_HOME: codexHome } : {}) };
 }
 export async function git(root, args) {
   return (await execGit('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })).stdout;

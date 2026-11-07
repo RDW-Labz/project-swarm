@@ -193,8 +193,10 @@ test('doctor checks platform, executable, version, login, and exact help flags w
 });
 
 test('TLS environment uses certificate file when present and preserves environment otherwise', async () => {
-  assert.deepEqual(await codexEnvironment({ PATH: '/bin', SSL_CERT_FILE: 'old' }, async file => { assert.equal(file, '/etc/ssl/cert.pem'); return true; }), { PATH: '/bin', SSL_CERT_FILE: '/etc/ssl/cert.pem' });
-  assert.deepEqual(await codexEnvironment({ PATH: '/bin' }, async () => false), { PATH: '/bin' });
+  const noClean = { cleanHome: async () => null };
+  assert.deepEqual(await codexEnvironment({ PATH: '/bin', SSL_CERT_FILE: 'old' }, async file => { assert.equal(file, '/etc/ssl/cert.pem'); return true; }, noClean), { PATH: '/bin', SSL_CERT_FILE: '/etc/ssl/cert.pem' });
+  assert.deepEqual(await codexEnvironment({ PATH: '/bin' }, async () => false, noClean), { PATH: '/bin' });
+  assert.deepEqual(await codexEnvironment({ PATH: '/bin' }, async () => false, { cleanHome: async () => '/h/.codex/swarm-worker-home' }), { PATH: '/bin', CODEX_HOME: '/h/.codex/swarm-worker-home' });
 });
 
 test('the reply envelope accepts any object (lesson #64) and the token parser invents no usage', () => {
