@@ -24,6 +24,7 @@ export const EDIT_RULE = 'To change an existing large output without resending i
 // Field lesson #285: the exact truncation error describeIncompleteChatResponse/
 // assertCompleteChatResponse already produce; a prompt-size suffix is appended only to this one.
 const TRUNCATION_RE = /truncated: finish_reason length/;
+const MISSING_OUTPUTS_MSG = 'Worker must return every declared output exactly once';
 class AdapterError extends Error {}
 const fail = message => { throw new AdapterError(message); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -416,9 +417,30 @@ export function validateEnvelope(value, outputs, job = {}) {
     if (++editCount > MAX_EDITS) fail(`Worker returned too many edits (limit ${MAX_EDITS})`);
     seen.add(edit.path); editPaths.add(edit.path); size += Buffer.byteLength(edit.find) + Buffer.byteLength(edit.replace);
   }
-  if (seen.size !== outputs.length) fail('Worker must return every declared output exactly once');
+  if (seen.size !== outputs.length) {
+    const missing = outputs.filter(path => !seen.has(path));
+    const error = new AdapterError(MISSING_OUTPUTS_MSG);
+    error.onlyMissingOutputs = true;
+    error.missing = missing;
+    throw error;
+  }
   if (size > MAX_RESPONSE) fail('Worker output exceeded 16 MiB');
   return value;
+}
+
+function mergeOutputEnvelopes(first, second) {
+  const merged = {
+    summary: second.summary || first.summary,
+    files: [...first.files, ...second.files],
+    edits: [...(first.edits ?? []), ...(second.edits ?? [])],
+  };
+  if (object(first.result) || object(second.result)) {
+    merged.result = { ...(object(first.result) ? first.result : {}), ...(object(second.result) ? second.result : {}) };
+  } else if (first.result !== undefined || second.result !== undefined) {
+    merged.result = second.result ?? first.result;
+  }
+  if (first.normalized) Object.defineProperty(merged, 'normalized', { value: first.normalized, enumerable: false, configurable: true });
+  return merged;
 }
 
 // Row #185: applies one worker-proposed find/replace to a file's current content. A `find` that
@@ -787,13 +809,84 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     // Row #217: a worker that parsed to a bare JSON `null` (no envelope at all) never counts as
     // `complete` — named distinctly so a caller need not infer it from a generic validation error.
     if (envelope === null) fail('null-result: worker returned a null envelope');
+    const syncDeclaredOutputsRequest = (declared, nextSchema, followTaskText, promptSuffix) => {
+      const payload = job.agent === 'rented'
+        ? { files: cappedContext, declaredOutputs: declared, task: followTaskText }
+        : { task: followTaskText, declaredOutputs: declared, files: cappedContext };
+      const encoded = JSON.stringify(payload);
+      if (job.agent === 'openai') { body.input = encoded; body.text.format.schema = nextSchema; }
+      else if (job.agent === 'gemini') { body.contents[0].parts[0].text = encoded; body.generationConfig.responseJsonSchema = nextSchema; }
+      else if (job.agent === 'rented') { body.messages[1].content = encoded; body.response_format.json_schema.schema = nextSchema; }
+      else if (job.agent === 'openrouter') { body.messages[1].content = encoded; body.response_format.json_schema.schema = nextSchema; }
+      else if (job.agent === 'anthropic') {
+        body.messages[0].content = anthropicUserContent({ ...job, outputs: declared, prompt: `${job.prompt}\n${promptSuffix}` }, cappedContext, { skillsBlock });
+        body.output_config.format.schema = anthropicSchema(nextSchema);
+      }
+      else if (job.agent === 'local') { body.messages[1].content = encoded; body.response_format.json_schema.schema = nextSchema; }
+      else if (job.agent === 'lambda') { body.messages[1].content = encoded; body.response_format.json_schema.schema = nextSchema; }
+      else { body.messages[1].content = encoded; body.format = nextSchema; }
+      return encoded;
+    };
     try {
       validateEnvelope(envelope, job.outputs, job);
     } catch (validationError) {
-      // Lesson 296: Save raw response text when envelope validation fails
-      const err = new AdapterError(validationError.message);
-      err.invalidResponseText = result.text;
-      throw err;
+      if (!(validationError instanceof AdapterError && validationError.onlyMissingOutputs) || !validationError.missing?.length) {
+        const err = new AdapterError(validationError.message);
+        err.invalidResponseText = result.text;
+        throw err;
+      }
+      const missing = validationError.missing;
+      const suffix = `Your earlier reply left out these declared outputs: ${missing.join(', ')}. Return exactly those, as files or edits.`;
+      const followTaskText = `${skillsBlock}${job.prompt}${contractBlock(job)}\n${suffix}`;
+      const followSchema = outputSchema(missing, attachedSkills, job);
+      const followInput = syncDeclaredOutputsRequest(missing, followSchema, followTaskText, suffix);
+      if (job.agent === 'openrouter') {
+        const worstUsd = worstCaseUsd(pricing, { inputChars: instructions.length + followInput.length, maxTokens: limit });
+        assertWithinCaps({ worstUsd, spent: spentSoFar(readLedger(spend.ledger), { jobId: job.id, day: spend.stamp.toISOString().slice(0, 10) }), dayCap: dayCapUsd(env) });
+        requestWorstUsd = worstUsd;
+      }
+      if (job.agent === 'anthropic') {
+        const cachedChars = (Array.isArray(job.cacheContext) ? cappedContext.filter(file => job.cacheContext.includes(file.path)) : []).reduce((sum, file) => sum + String(file.content).length, 0);
+        const worstUsd = anthropicWorstUsd(job.model, { inputChars: instructions.length + followInput.length + Math.ceil(cachedChars * 0.25), maxTokens: limit });
+        const day = spend.stamp.toISOString().slice(0, 10);
+        const used = anthropicSpentSoFar(readAnthropicLedger(spend.ledger), { jobId: job.id, day });
+        const extra = anthropicUsage ? anthropicCostUsd(job.model, anthropicUsage) : 0;
+        assertAnthropicCaps({ worstUsd, spent: { job: used.job + extra, today: used.today + extra, total: used.total + extra }, limits: anthropicCaps(env) });
+        requestWorstUsd = worstUsd;
+      }
+      response = await sendRequest();
+      const followBodyJson = await readJson(response);
+      if (job.agent === 'anthropic') anthropicUsage = sumUsage(anthropicUsage, followBodyJson?.usage ?? null);
+      await recordFinishReason(followBodyJson);
+      const followExtracted = extract(job.agent, followBodyJson, bestOfN);
+      if (spend && job.agent === 'anthropic' && followExtracted.usage) {
+        appendAnthropicLedger(spend.ledger, { ts: spend.stamp.toISOString(), jobId: job.id, model: job.model, costUsd: anthropicCostUsd(job.model, followExtracted.usage), estimated: false, kind: 'missing-output-followup' });
+      } else if (spend && job.agent === 'openrouter') {
+        const reported = Number(followExtracted.usage?.cost);
+        appendLedger(spend.ledger, { ts: spend.stamp.toISOString(), jobId: job.id, model: job.model, costUsd: Number.isFinite(reported) && reported >= 0 ? reported : spend.worstUsd, estimated: !(Number.isFinite(reported) && reported >= 0), kind: 'missing-output-followup' });
+      }
+      result = { ...result, usage: sumUsage(result.usage, followExtracted.usage), actualModel: followExtracted.actualModel ?? result.actualModel, provider: followExtracted.provider ?? result.provider };
+      let followEnvelope; try { followEnvelope = JSON.parse(followExtracted.text); } catch { fail('Worker returned malformed structured output'); }
+      if (followEnvelope === null) fail('null-result: worker returned a null envelope');
+      try {
+        validateEnvelope(followEnvelope, missing, job);
+      } catch (followError) {
+        if (!(followError instanceof AdapterError && followError.onlyMissingOutputs)) {
+          const err = new AdapterError(followError.message);
+          err.invalidResponseText = followExtracted.text;
+          throw err;
+        }
+      }
+      envelope = mergeOutputEnvelopes(envelope, followEnvelope);
+      try {
+        validateEnvelope(envelope, job.outputs, job);
+      } catch (mergeError) {
+        let msg = mergeError.message;
+        if (mergeError.message === MISSING_OUTPUTS_MSG || mergeError.onlyMissingOutputs) msg += ' (after one follow-up request)';
+        const err = new AdapterError(msg);
+        err.invalidResponseText = result.text;
+        throw err;
+      }
     }
     const edits = envelope.edits ?? [];
     // JSON escapes can hide an echo until content is decoded. Scan the strings

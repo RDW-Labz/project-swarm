@@ -112,6 +112,87 @@ function scopeListing(scope, files) {
 // Matches the lead area limit in leads.mjs (1 to 50 scope entries).
 const MAX_SCOPE_ENTRIES = 50;
 const LEAD_OUTPUT = /^goal-lead-\d+\.json$/;
+const GOAL_PATH_FILE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.[A-Za-z0-9]{1,8}$/;
+const GOAL_PATH_FILE_G = /[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.[A-Za-z0-9]{1,8}/g;
+const GOAL_PATH_FOLDER_G = /(?:^|[\s('"[(])([A-Za-z0-9._-]+)\/(?=[\s'".,;:!?)\]]|$)/g;
+
+function cleanGoalToken(raw) {
+  let token = String(raw).trim();
+  while (token.length && /["'`(\[{]/.test(token[0])) token = token.slice(1);
+  while (token.length && /["'`)\]},;:.!?]/.test(token[token.length - 1])) token = token.slice(0, -1);
+  return token.trim();
+}
+
+function goalPathIgnored(token) {
+  if (!token || token.startsWith('.') || token.startsWith('/') || token.includes('://')) return true;
+  if (token.split('/').some(part => part === '..' || part.startsWith('.'))) return true;
+  return false;
+}
+
+function goalPathMatchIgnored(text, start, end) {
+  if (start > 0 && text[start - 1] === '/') return true;
+  const head = text.slice(0, start);
+  const chunk = head.slice(Math.max(head.lastIndexOf(' '), head.lastIndexOf('\t'), 0));
+  if (chunk.includes('://')) return true;
+  const before = text.slice(Math.max(0, start - 3), start);
+  if (before === '../' || before.endsWith('/..')) return true;
+  if (/\.\.\//.test(text.slice(Math.max(0, start - 8), end))) return true;
+  return false;
+}
+
+function goalPathAlreadyTracked(token, folders, tracked) {
+  const folderSet = new Set(folders);
+  if (tracked.has(token)) return true;
+  if (token.includes('/')) {
+    const top = token.slice(0, token.indexOf('/'));
+    if (folderSet.has(top)) return true;
+  }
+  return false;
+}
+
+export function goalNewPaths(goal, { folders = [], files = [] } = {}) {
+  const text = typeof goal === 'string' ? goal : '';
+  const rootFiles = new Set(rootLevelFiles(files));
+  const tracked = new Set(files);
+  const found = new Set();
+
+  for (const match of text.matchAll(GOAL_PATH_FILE_G)) {
+    if (goalPathMatchIgnored(text, match.index, match.index + match[0].length)) continue;
+    const token = cleanGoalToken(match[0]);
+    if (!GOAL_PATH_FILE.test(token) || goalPathIgnored(token)) continue;
+    if (goalPathAlreadyTracked(token, folders, tracked)) continue;
+    if (!token.includes('/')) {
+      if (rootFiles.has(token)) continue;
+      found.add(token);
+      continue;
+    }
+    const top = token.slice(0, token.indexOf('/'));
+    if (!FOLDER.test(top) || top === 'node_modules') continue;
+    found.add(`${top}/`);
+  }
+
+  for (const match of text.matchAll(GOAL_PATH_FOLDER_G)) {
+    if (goalPathMatchIgnored(text, match.index, match.index + match[0].length)) continue;
+    const token = cleanGoalToken(`${match[1]}/`);
+    const folder = token.slice(0, -1);
+    if (!FOLDER.test(folder) || folder === 'node_modules' || goalPathIgnored(token)) continue;
+    if (new Set(folders).has(folder)) continue;
+    found.add(`${folder}/`);
+  }
+
+  GOAL_PATH_FOLDER_G.lastIndex = 0;
+  for (const match of text.matchAll(/[A-Za-z0-9._-]+\//g)) {
+    if (goalPathMatchIgnored(text, match.index, match.index + match[0].length)) continue;
+    const token = cleanGoalToken(match[0]);
+    if (!token.endsWith('/') || token.includes('://')) continue;
+    const folder = token.slice(0, -1);
+    if (folder.includes('/') || !FOLDER.test(folder) || folder === 'node_modules' || goalPathIgnored(token)) continue;
+    if (new Set(folders).has(folder)) continue;
+    found.add(`${folder}/`);
+  }
+
+  return [...found].filter(Boolean).sort().slice(0, 10);
+}
 
 // Tracked files directly at the repo root, as exact scope entries. Dotfiles are left out like dot-folders, and
 // so are names a lead's own output could take.
@@ -133,8 +214,9 @@ export function manifestForGoal(goal, { folders = [], files = [], sensitive, lea
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 64) throw goalError('goal-concurrency', '--concurrency must be an integer 1–64');
   const names = [...new Set(folders)].filter(name => !name.startsWith('.') && FOLDER.test(name) && name !== 'node_modules').sort();
   const rootFiles = rootLevelFiles(files);
-  if (!names.length && !rootFiles.length) throw goalError('goal-no-folders', 'the repo has no top-level folders or files to split');
-  const units = Math.max(names.length, 1);
+  const newPaths = goalNewPaths(text, { folders: names, files });
+  if (!names.length && !rootFiles.length && !newPaths.length) throw goalError('goal-no-folders', 'the repo has no top-level folders or files to split');
+  const units = Math.max(names.length || newPaths.length, 1);
   let count;
   if (leads === 'auto') count = Math.min(units, GOAL_DEFAULTS.maxLeads);
   else if (Number.isInteger(leads) && leads >= 1 && leads <= GOAL_DEFAULTS.maxLeads) {
@@ -146,6 +228,10 @@ export function manifestForGoal(goal, { folders = [], files = [], sensitive, lea
   // ever change them. They join the smallest bucket as exact paths, while it stays within the scope limit.
   const smallest = buckets.reduce((best, bucket) => (bucket.length < best.length ? bucket : best), buckets[0]);
   if (rootFiles.length && smallest.length + rootFiles.length <= MAX_SCOPE_ENTRIES) smallest.push(...rootFiles);
+  for (const entry of newPaths) {
+    if (smallest.length >= MAX_SCOPE_ENTRIES) break;
+    if (!smallest.includes(entry)) smallest.push(entry);
+  }
   if (!smallest.length) throw goalError('goal-no-folders', `the repo has no top-level folders, and its ${rootFiles.length} root files exceed the ${MAX_SCOPE_ENTRIES}-entry scope limit`);
   return {
     version: 1,
