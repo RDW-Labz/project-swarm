@@ -15,8 +15,10 @@ Machine config (`SWARM_CONFIG`) and per-project config (`.project-swarm.json` â†
 | Key | Values | Default |
 |-----|--------|---------|
 | `skipSkeleton` | `true`, `false`, or `"auto"` | `"auto"` |
+| `supervise` | `true` or `false` (machine config only) | `false` |
 | `maxJobs` | integer 1â€“64 | free worker slots for this pass |
 
+- **`supervise`**: when `true`, `swarm watch --all` also runs one autopilot loop for every active registered project (not scratch roots, not unapproved or empty ledgers, not projects with `.swarm/autopilot/off`). Off by default; turn a single project off with `swarm autopilot off`.
 - **`skipSkeleton`**: when `true`, `go --scope` is called with `--skip-skeleton`. When `false`, the skeleton-first gate always applies. **`auto`** skips the skeleton gate once the ledger has at least **10** tickets in `done` status (day-0 bootstrap); younger projects keep the skeleton.
 - **`maxJobs`**: ceiling for how many tickets autopilot may start in one wave; never above **64** or above free slots on this pass.
 
