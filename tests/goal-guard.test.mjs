@@ -46,6 +46,14 @@ test('what looks like a command: a --flag anywhere, or a known subcommand starti
   assert.equal(commandLikeGoal(''), null);
 });
 
+test('commandLikeGoal checks only the first goal line so spec bodies with flags are not refused', () => {
+  const issueGoal = 'Issue #50: Daily report\n\nRun with --force when needed.\nnode x.mjs --issue 49';
+  assert.equal(commandLikeGoal(issueGoal), null, 'flags and commands in the body are ignored');
+  assert.ok(commandLikeGoal('do the thing --max-usd 5\n\nextra body'), 'flag on the first line is still refused');
+  assert.ok(commandLikeGoal('status\n\nlong markdown spec'), 'known subcommand on the first line is still refused');
+  assert.equal(commandLikeGoal('Issue #50: Daily report\r\n\r\n--force\r\nnode x.mjs --issue 49'), null, 'CRLF matches LF');
+});
+
 test('swarm "status --json" is refused with "Did you mean", before any plan: no run directory, no spend; the same through swarm go and with a flag inside the quotes', async t => {
   const r = await repo(t);
   for (const args of [['--root', r.root, 'status --json'], ['--root', r.root, 'go', 'status --json'], ['--root', r.root, 'go', 'make it nice --yes'], ['--root', r.root, 'doctor all']]) {
