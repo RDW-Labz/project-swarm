@@ -147,6 +147,6 @@ test('runVerifyInstallCommand exits 1 on problems and supports --json', async (t
   const parsed = JSON.parse(jsonCli.stdout.trim());
   assert.equal(parsed.ok, false);
   assert.ok(parsed.problems.some((p) => p.kind === 'changed'));
-  const rootCli = await runVerifyInstallCommand(['--json', '--root', source], { installRoot: '/ignored' });
+  const rootCli = await runVerifyInstallCommand(['--json', '--install', source], { installRoot: '/ignored' });
   assert.equal(rootCli.exitCode, 1);
 });

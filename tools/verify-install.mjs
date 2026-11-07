@@ -96,15 +96,15 @@ export async function runVerifyInstallCommand(args, { installRoot } = {}) {
   for (let i = 0; i < args.length; i += 1) {
     const flag = args[i];
     if (flag === '--json') json = true;
-    else if (flag === '--root') {
+    else if (flag === '--install') {
       i += 1;
-      if (i >= args.length) return { stdout: 'missing value for --root\n', exitCode: 2 };
+      if (i >= args.length) return { stdout: 'missing value for --install\n', exitCode: 2 };
       root = args[i];
     } else if (flag.startsWith('-')) return { stdout: `unknown flag: ${flag}\n`, exitCode: 2 };
     else positional.push(flag);
   }
   if (!root) return { stdout: 'install root required\n', exitCode: 2 };
-  if (positional.length > 1) return { stdout: 'Usage: swarm verify-install [--json] [--root DIR] [VERSION_DIR]\n', exitCode: 2 };
+  if (positional.length > 1) return { stdout: 'Usage: swarm verify-install [--json] [--install DIR] [VERSION_DIR]\n', exitCode: 2 };
   let versionDir = positional[0] ?? null;
   const result = await verifyInstall({ installRoot: root, versionDir });
   if (json) {
