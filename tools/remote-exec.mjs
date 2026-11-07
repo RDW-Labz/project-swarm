@@ -92,7 +92,9 @@ function readLine(stdin) {
 
 function signalGroup(pid, signal) {
   try { process.kill(-pid, signal); }
-  catch { try { process.kill(pid, signal); } catch { /* already gone */ } }
+  catch { try { process.kill(pid, signal); } catch (error) {
+    if (error?.code !== 'ESRCH') console.error('[tools/remote-exec.mjs] signalGroup kill:', error?.message ?? error, pid, signal);
+  } }
 }
 
 // Kill leftover jobs by id. A record may name a pid and a cost the worker reported.
@@ -108,7 +110,9 @@ export function killRemoteJobs(ids, { dir = jobsDir(), stdout = process.stdout }
     if (!record || typeof record !== 'object') continue;
     if (typeof record.costUsd === 'number' && Number.isFinite(record.costUsd)) { cost += record.costUsd; reported = true; }
     if (Number.isInteger(record.pid) && record.pid > 0) signalGroup(record.pid, 'SIGKILL');
-    try { fs.unlinkSync(file); } catch { /* already reaped */ }
+    try { fs.unlinkSync(file); } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/remote-exec.mjs] unlink job record:', error?.message ?? error, file);
+    }
   }
   stdout.write(`${JSON.stringify(reported ? { costUsd: cost } : {})}\n`);
 }
@@ -132,7 +136,9 @@ export async function serveRemoteExec({ stdin = process.stdin, stdout = process.
         const record = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (typeof record.costUsd === 'number' && Number.isFinite(record.costUsd)) writeRecord(file, JSON.stringify({ costUsd: record.costUsd }));
         else fs.unlinkSync(file);
-      } catch { /* the kill command will not find a pid */ }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/remote-exec.mjs] stop job record:', error?.message ?? error, file);
+      }
     }
     cleanup();
     process.exit(1);

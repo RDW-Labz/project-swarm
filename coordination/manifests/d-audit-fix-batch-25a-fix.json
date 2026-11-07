@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-25a-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 25a fixup (from Opus review of PR #461). Edit ONLY tools/status.mjs. Logging only: no change to return values, fallbacks, or control flow.\n\nprojectStatus is polled (status/watch/board), so the two console.error calls this batch added in tools/status.mjs repeat on every poll:\n- the run state.json read catch (~line 30) and\n- the spendToday catch (~line 68).\nMake both log ONCE per process per distinct (context, error code or message):\n- Add a small private module-level helper, e.g. `const loggedOnce = new Set(); function logOnce(context, error) { const key = `${context}:${error?.code ?? error?.message ?? String(error)}`; if (loggedOnce.has(key)) return; loggedOnce.add(key); console.error(`[tools/status.mjs] ${context}:`, sanitizeWorkerText(String(error?.message ?? error), 300)); }`. Do not export it.\n- Import sanitizeWorkerText from './worker-text.mjs' (signature: sanitizeWorkerText(value, max)).\n- Replace the two console.error calls with logOnce(...), keeping the same silence conditions (ENOENT/SyntaxError for the run state read, ENOENT for spendToday).\nThe helper must not be able to throw in a way that escapes the catch: wrap its body in try { ... } catch { /* logging must never break status */ }.\n\nThen run: node --import ./tests/_isolate-config.mjs --test tests/status.test.mjs and confirm green. One-line summary.",
+      "context": [
+        "tools/worker-text.mjs"
+      ],
+      "outputs": [
+        "tools/status.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/bare-status.test.mjs",
+        "tests/runner-pointer.test.mjs",
+        "tests/scope-integrity.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/status.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

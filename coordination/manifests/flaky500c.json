@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "flaky500c",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "The rewritten test '500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare lazily' (tests/lanes-run.test.mjs) still fails on the GitHub runners (macOS and ubuntu node 22) with 'other providers were served during the gemini pause' (assert servedDuringPause > 0, expected true, actual false), duration about 20 s. Diagnose: the event-based window probably closes immediately because gemini has 16 concurrent requests in flight when the 402 for job 2 returns, and any of those in-flight gemini requests (or one that started just before the 402 completed) counts as 'the gemini lane resumed', so zero other-provider requests are counted. Fix the definition: mark the pause as established only when the 402 response has been RETURNED (set a flag after the await that precedes the return), count as 'resumed' only a gemini request that STARTED after that flag was set (gemini workers already in flight do not count), and count other-provider requests that started between the flag and the first such gemini request; require at least 1. If the lane does not hold new gemini starts while paused, assert that instead (no gemini request starts between the flag and the pause end observed through the lane state file or the run state), but never compare wall-clock milliseconds. Also make sure the 500-job test does not depend on a fixed small sleep: gate the fake provider responses with the test's own counters. Verify by running the test file 20 times with the node test runner under CPU stress (run 6 busy node loops in the background, and also with --test-concurrency=8 over lanes-run plus 10 other test files) and report the failure count (must be 0). Test-only changes.",
+   "context": [
+    "tests/lanes-run.test.mjs",
+    "tests/spend.test.mjs",
+    "tools/lanes.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/lanes-run.test.mjs",
+    "tests/spend.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "test-only change; full suite before merge"
+  }
+ ]
+}

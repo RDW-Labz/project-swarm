@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "partsguard3",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "sensitive": true,
+   "prompt": "Hardening of the guard change just made (swarm run with a manifest path; integrate --approve-manifest) in tools/orchestrator-allow.mjs, from an Opus review. (1) Restrict the run manifest path: a positional for swarm run is allowed only when the relative path, after normalising dot segments and double slashes, starts with coordination/manifests/ or .swarm/manifests/ and ends in .json, with no dot-dot segment and not absolute. Paths under .swarm/workspaces/, .swarm/worktrees/ and .swarm/runs/ (and any other .swarm subfolder) must be denied, because workers write there. (2) --approve-manifest must be denied for every swarm subcommand except integrate, including scope, change and resume, so it never passes the guard where it has no effect. Keep every other behaviour and every existing assertion. Tests: in tests/orchestrator-parts-flow.test.mjs add denied cases for run on a path under .swarm/workspaces/, .swarm/worktrees/, .swarm/runs/ and .swarm/other/, allowed cases for run under coordination/manifests/ and .swarm/manifests/ (with ./ and double slash spellings), and denied --approve-manifest cases for scope gate, scope split, change and resume, in both spellings. No credential-looking literals. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-parts-flow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-parts-flow.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/orchestrator-allow.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}

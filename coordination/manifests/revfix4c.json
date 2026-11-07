@@ -1,0 +1,33 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "revfix4c",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/swarm/core-31.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-31.mjs",
+    "tests/guard-backup-fixes3.test.mjs"
+   ],
+   "prompt": "Fix one review finding with a test in tests/guard-backup-fixes3.test.mjs (injected fakes only). tools/swarm/core-31.mjs: wrap the readMachineFn() call in runChecks in try/catch and carry on without the memory gate if it throws (no noisy log; the tests check must still run and its result must still count). Keep every existing test passing.",
+   "ignoreTests": [
+    "tests/cache-context-normalize.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/ignore-tests-reason.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/run-cleanup.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ]
+  }
+ ]
+}

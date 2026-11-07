@@ -1,0 +1,21 @@
+{
+  "grader": "independent claude-opus review call (separate from the builder), given only the images and the written criteria",
+  "scores_transcribed_by": "builder",
+  "scores": {
+    "hive": {
+      "layout": 2.8,
+      "ring": 2.5,
+      "streams": 1.5,
+      "cards": 3.3,
+      "colour": 2.8,
+      "typography": 3.2,
+      "panels": 3.0,
+      "motion": 1.8
+    }
+  },
+  "overall": {
+    "hive": 2.6
+  },
+  "blurred_ssim_vs_target": null,
+  "idle_cpu_note": "headless Chromium with software rendering; real browsers are lower"
+}

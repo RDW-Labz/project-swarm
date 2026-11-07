@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "jobs": [
+    {
+      "id": "T-0112",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/board-action-guard.mjs",
+        "tests/board-action-guard-unit.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "contracts/watch-s4-ops.json",
+        "tools/phone.mjs",
+        "tools/inbox.mjs",
+        "tools/approval-policy.mjs"
+      ],
+      "prompt": "Ticket T-0112 (sensitive): refuse merge, deploy and cap actions from phone or board API paths server-side. Contract: contracts/watch-s4-ops.json (owner action routes, x-owner-action-policy). Write tools/board-action-guard.mjs exporting EXACTLY this interface (other jobs code against it): REFUSED_KINDS (frozen array: 'merge','deploy','cap-raise','spend','key','migration'), and guardBoardAction({ kind, source, itemKind } = {}) -> { allowed: boolean, reason: string }. Rules: source is 'board' or 'phone' for these paths; any kind (or itemKind) in REFUSED_KINDS, any unknown or non-string kind, and any unknown source are refused (fail closed); match kinds case-insensitively after trimming but never by substring tricks (e.g. 'merge-request' is refused because it starts with a refused word followed by a separator; document the exact rule). Only 'approve' and 'deny' decisions on items whose itemKind is not refused are allowed. reason is a short fixed string, never echoing raw input. Tests in tests/board-action-guard-unit.test.mjs cover every refused kind from both sources, case and whitespace variants, unknown kinds and sources, and the allowed path. (The full cross-module test file tests/board-action-guard.test.mjs belongs to T-0131 later; do not create it.) Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps (no wall clock, env, TTY or network); never write token-shaped literals (use obviously fake short values like 'tok-test'). Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`. If a rule cannot be met inside your outputs, return blocked."
+    },
+    {
+      "id": "T-0111",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/board-owner-actions.mjs",
+        "tests/board-owner-actions-handlers.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "contracts/watch-s4-ops.json",
+        "tools/board-inbox.mjs",
+        "tools/inbox.mjs",
+        "tools/remote.mjs",
+        "tools/approval-policy.mjs"
+      ],
+      "prompt": "Ticket T-0111 (sensitive): tailnet-only owner approve and deny handlers with a confirm step and audit log entries. Implement the handler logic for the contract routes POST /api/owner/actions/{itemId}/prepare, POST /api/owner/actions/{itemId}/decision and GET /api/owner/audit in contracts/watch-s4-ops.json (follow its request/response schemas and status codes exactly). Write tools/board-owner-actions.mjs exporting createOwnerActions({ listItems, appendAudit, readAudit, guard, now, randomId, ownerIdentities, confirmTtlMs = 120000 }) with all I/O injected, returning { prepare(itemId, req), decide(itemId, body, req), audit(req) } that each return { status, body }. req carries { headers, local, agentSession } as the server will pass it. Rules: refuse (per contract codes) when the x-watch-token check flag req.tokenOk is not true, when the tailnet sign-in identity header is missing or not in ownerIdentities, when req.agentSession is true, when req.local is true via a remote board, or when the token arrived in the query (req.tokenInQuery). itemId must match a strict pattern and exist in listItems() and be an item the approval policy leaves to the owner (needsHuman from tools/approval-policy.mjs); otherwise 404/409 per contract. guard is the T-0112 module function guardBoardAction({ kind, source, itemKind }) -> { allowed, reason } (import nothing from it; it is injected); call it with source 'board' and refuse when not allowed. prepare returns a single-use confirm id bound to itemId + identity, expiring after confirmTtlMs; decide requires decision 'approve'|'deny' plus that confirm id, consumes it (replay refused), and appends one audit entry { at, itemId, decision, identity, outcome } for every decision AND every refusal of a decide call (never log tokens or raw headers). audit returns the entries newest first, owner-gated the same way. Do not touch tools/watch-server.mjs (route wiring is T-0114). Tests in tests/board-owner-actions-handlers.test.mjs cover every refusal, confirm expiry, replay, wrong identity for a confirm id, guard refusal, audit entries and that no token appears in audit output. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps (no wall clock, env, TTY or network); never write token-shaped literals (use obviously fake short values like 'tok-test'). Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`. If a rule cannot be met inside your outputs, return blocked."
+    },
+    {
+      "id": "T-0123",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/watch-assets/board-owner-actions.js",
+        "tests/board-owner-actions-ui.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "contracts/watch-s4-ops.json",
+        "tools/watch-assets/board.js",
+        "tools/board-inbox.mjs"
+      ],
+      "prompt": "Ticket T-0123 (sensitive): Approve and Deny controls with a confirm step for the board's Needs you panel. Write tools/watch-assets/board-owner-actions.js, a browser ES module (no build step, no framework, same style as tools/watch-assets/board.js) exporting renderOwnerActions(container, item, { fetchImpl, token, signedIn, doc = document, now }) and ownerActionAvailable(item, { signedIn }). Show Approve and Deny only when signedIn is true (tailnet sign-in present) and the item is one the policy leaves to the owner (item.needsOwner === true; check board-inbox.mjs for the real field name and use it). The confirm step is an inline second click (button turns into 'Confirm approve?' / 'Confirm deny?' plus Cancel), never window.confirm/alert. Flow: POST /api/owner/actions/{encodeURIComponent(id)}/prepare, then POST .../decision with { decision, confirmId } per the contract schemas; send the token ONLY in the x-watch-token header, never in a URL; build DOM with createElement/textContent only (no innerHTML with item data). Show the server's refusal message as text, disable buttons while a request is in flight, and never render controls for merge/deploy/cap/spend/key/migration items. Do NOT edit board.js (mounting is T-0138). Tests in tests/board-owner-actions-ui.test.mjs use a minimal fake DOM and a fake fetch: hidden when not signed in or not owner-policy; two-step confirm; header-only token; no innerHTML; refusal text shown; refused kinds never get controls. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps (no wall clock, env, TTY or network); never write token-shaped literals (use obviously fake short values like 'tok-test'). Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`. If a rule cannot be met inside your outputs, return blocked."
+    }
+  ]
+}

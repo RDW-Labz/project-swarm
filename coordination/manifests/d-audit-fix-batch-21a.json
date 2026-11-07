@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-securityreview-batch-21a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 21a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/security-review.mjs' section. Edit ONLY tools/security-review.mjs. Visibility only: do NOT change control flow, return values, hashes, parsed verdicts, or throws. This file gates security reviews, so behavior must be byte-for-byte identical apart from the added stderr lines.\n\nThe file is unchanged since the audit; lines 38, 118, 143, 149 are current.\n\nNo logger exists in this file. Use: console.error('[tools/security-review.mjs] <short context>:', error?.message ?? error)\n\n1. Line 38, filesHash: `try { bytes = await fs.readFile(path.join(root, f)); } catch { /* a missing file hashes as absent */ }`. Stay silent for error?.code === 'ENOENT' (missing file, expected). Log anything else (EACCES, EISDIR, ...) with the file f, because such a file still hashes as 'absent' and that should be visible. bytes stays null exactly as today.\n2. Line 118: `} catch { /* prose or summary plus verdict line */ }` around a JSON.parse attempt on review text. Prose input makes JSON.parse throw a SyntaxError, which is the normal case: stay silent when error instanceof SyntaxError; log anything else. Fall through as today.\n3. Line 143, parseReviewVerdicts: `} catch { /* not a whole-json envelope */ }` around reviewsFromJson(JSON.parse(trimmed), ...). Stay silent for SyntaxError; log anything else (a throw from reviewsFromJson would be a bug). Fall through as today.\n4. Line 149, parseReviewVerdicts: `} catch { /* no verdict line */ }` around JSON.parse(last) + reviewsFromJson. Stay silent for SyntaxError; log anything else. Still return null afterwards as today.\n\nDo NOT touch any other catch. Do not refactor, reformat, rename, or change exports.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run the covering tests (grep tests/ for security-review) with: node --import ./tests/_isolate-config.mjs --test <files>, confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/security-review.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/ledger-merge.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/review-structured-verdict.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

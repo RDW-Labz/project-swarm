@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t3lanehealth",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable).\nGoals g-d59fecb3 + g-ce7a13df + g-f36125f2(1): lane health persistence race. In tools/lane-health.mjs, recordJobResult and tick call persist() fire-and-forget (~line 373: persist().catch(() => {})), with no flush or stop, and overlapping persists are not serialized. So (a) tests and short-lived processes can lose or race the last write: tests/lane-health-core.test.mjs:186 'monitor: probation then full routability after 3 checks and 2 jobs' fails under load with ENOTEMPTY when it rmdirs its temp lane-health folder while a write is in flight; (b) two overlapping persists can land an older snapshot after a newer one. Fix in the product: serialize persists through one promise chain (each persist writes the latest state at the time it runs); add monitor.flush() that awaits the chain, and make monitor.stop() clear timers and then flush (if stop already exists, make sure no write runs after its promise resolves). Keep the existing persist error handling and the file format and mode unchanged. In tests/lane-health-core.test.mjs, call stop()/flush() before temp cleanup. New tests in tests/lane-health-persist.test.mjs (first line: import './_isolate-config.mjs';) use a slow fake fs: two overlapping persists land newest-last; flush waits for an in-flight write; nothing writes after stop() resolves. Do not change routing or timers beyond what this needs. Never add retries or longer timeouts as the fix. The ignored tests cover behaviour that must not change; the coordinator runs the full suite before ship.",
+      "context": [],
+      "outputs": [
+        "tools/lane-health.mjs",
+        "tests/lane-health-core.test.mjs",
+        "tests/lane-health-persist.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/self-manage-monitor.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3lanehealth",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/lane-health-core.test.mjs",
+        "tests/lane-health-persist.test.mjs"
+      ]
+    }
+  ]
+}

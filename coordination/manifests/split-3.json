@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-fix-uses",
+      "agent": "auto",
+      "prompt": "A real run of tools/split-module.mjs on tools/swarm.mjs moved 6,000 lines and then failed at load: the moved line const CLI_AGENTS = [claude, codex, cursor, ...EXTRA_CLI_AGENTS]; landed in a new module without the import of EXTRA_CLI_AGENTS. Root cause in tools/split-scan.mjs: an identifier directly after the spread operator (three dots) is treated as a member access (the previous token is a dot) and left out of uses. Fix the scanner so the spread operator is its own token and the identifier after it is a use; also check the same class of mistakes and fix them: identifier after a rest element in parameters or destructuring (function f(...args), const [a, ...rest] = x, { ...others }), identifier after a numeric literal with a dot (1.e3 is not member access), a keyword used as a property name after a dot (obj.default, obj.class: these are property names, not uses), a template literal expression, tagged templates (tag`x` uses tag), computed keys ([KEY]: value uses KEY), shorthand properties ({ KEY } uses KEY), class members, default parameter values, labels, import attributes, and object method shorthand names (not uses). When unsure over-approximate (report the name as used). Then strengthen tools/split-module.mjs verify and move with two independent checks that do not rely on the scanner: (A) unresolved-name check using a SECOND method: tokenize the new module text and the rewritten FILE text with a simple regex pass that collects every identifier-like token not preceded by a dot, then require each one to be (a) a JavaScript keyword or global (a fixed list plus Object.getOwnPropertyNames(globalThis)), (b) declared or imported anywhere in that file by a simple declaration regex, (c) a property key, local variable or parameter (accept anything that appears right before a colon, or in a parameter list, or after const, let, var, function, class, catch, or in a destructuring pattern), and otherwise report it as possibly unresolved; the move FAILS when a moved item's uses (from the scanner) or this second pass finds a name that is imported by the ORIGINAL file but is not imported or declared in the new module; (B) smoke import: after writing in a temp copy, run node --input-type=module -e with a dynamic import of the new module and of FILE (with a timeout of 20 seconds, ignoring modules that call process.exit at load only when a flag --no-smoke is given) and fail on any ReferenceError or SyntaxError at load. Add tests: a fixture reproducing the spread case (the move must include the import), rest params, a rest element in an object pattern, a keyword property name, a failing case where the import is deliberately dropped (verify must catch it by the unresolved-name check), and a real-file test: apply plan stage 1 (the patterns stage: all constants and regular expressions that depend only on imports) to a temp copy of tools/swarm.mjs and require smoke import success. Do not edit tools/swarm.mjs. No dependencies, no token-shaped literals. ignoreTests reason: only the scanner, the mover and their tests change.",
+      "context": [
+        "tools/split-scan.mjs",
+        "tools/split-module.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tools/swarm.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-scan.mjs",
+        "tools/split-module.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "timeoutMs": 3000000
+    }
+  ]
+}

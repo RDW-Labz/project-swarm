@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "gatecap",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Create a new standalone module tools/gate-failure-capture.mjs (ES module, no dependencies, not wired anywhere yet) and its test tests/gate-failure-capture.test.mjs (node:test, fake spawn and temp folders, no network, no real browsers). Purpose: when a merge-queue or integrate gate check fails, the gate records no assertion or stack today (atlas-seafloor lost a browser test failure that way). The module provides: (1) parseFailedTests(output, kind): returns up to 50 failing test ids from the output of pytest (lines starting with FAILED or ERROR, id is the text before ' - ') or node:test (TAP 'not ok N - name' lines with the file from the preceding 'location' or 'test at' line when present); kind is 'pytest' | 'node-test' | 'auto' (auto picks by looking at the text). (2) buildRerunArgv(argv, failed, kind): returns a new argv that re-runs only those tests: for pytest take the original argv up to and including 'pytest' (or the python -m pytest prefix), drop -q and any path or {affected} arguments, then add '-rA', '-p', 'no:cacheprovider' and the failing ids; for node-test keep the argv up to '--test' flags and add --test-name-pattern for each failed name and the failing files; return null when it cannot build a safe rerun. (3) async rerunFailed({argv, cwd, env, failed, kind, timeoutMs, spawnImpl, maxBytes}): runs the rerun argv with spawnImpl (default child_process.spawn, shell never), kills the process group on timeout (default 120000 ms) with SIGTERM then SIGKILL, collects at most maxBytes (default 65536) of combined output keeping the tail, redacts values of environment variables whose names match KEY|TOKEN|SECRET|PASSWORD|PAT and any 'Bearer ...' or 'sk-...' string, returns {ok, exitCode, signal, timedOut, tail, argv}. (4) gateEnvFingerprint({cwd, env, ports, concurrency, timeoutMs, cleanedDirs, browserPath, node}): returns a plain object with cwd, a short allowlist of environment values (HOME, PATH, TZ, LANG, CI, NODE_OPTIONS, PLAYWRIGHT_BROWSERS_PATH, SWARM_PORT_BASE, VIRTUAL_ENV), the sorted list of the other environment variable NAMES only (never values), ports, concurrency, timeoutMs, cleanedDirs, browserPath, node version. (5) diffFingerprints(a, b): returns {same: boolean, differences: [{field, a, b}]} comparing every field and the env allowlist values and the extra variable names. (6) async saveGateCapture(runDir, ticketId, capture): writes JSON to <runDir>/gate-failures/<ticketId>.json (ticketId must match /^[A-Za-z0-9._-]{1,64}$/ else throw; refuse a symlinked folder or file; create the folder with mode 0o700 and the file with 0o600; atomic write via temp file and rename; file kept under 256 KB by trimming the tail field) and returns the path. Tests must cover: parsing of both kinds, argv building for both kinds and null for unsafe input, timeout kill via a fake child, output trimming and secret redaction, fingerprint never containing a secret value, diff output, the safe-path and symlink refusal in saveGateCapture. Do not edit any other file.",
+   "context": [
+    "tools/base-check-failure-report.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/gate-failure-capture.mjs",
+    "tests/gate-failure-capture.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}

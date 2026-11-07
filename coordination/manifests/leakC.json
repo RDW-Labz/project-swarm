@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "leakC",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/swarm/core-41.mjs",
+    "tests/cursor-process-group.test.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tests/cursor-process-group.test.mjs",
+    "tests/server-restart.test.mjs"
+   ],
+   "prompt": "Fix review findings in the cursor lane process-group kill (tools/swarm/core-41.mjs; do not edit tools/swarm/core-1.mjs), tests in tests/cursor-process-group.test.mjs and tests/server-restart.test.mjs. 1 HIGH the test 'kill the recorded group on complete' passes no killImpl, so the fallback sends real signals to a hard-coded group (process.kill(-6100, ...)): every test in this file passes a fake killImpl (one that records calls and throws ESRCH when asked), and add an assertion that no test in the file can reach the real process.kill (replace it with a guard that throws in the test setup). 2 MEDIUM after SIGTERM poll the group every 50 to 100 ms (injectable sleep) and stop at the first 'no such process'; send SIGKILL only if the group is still seen alive at the end of the 5 second window, never once it was seen gone, and re-verify with a signal-0 probe immediately before SIGKILL. 3 MEDIUM stopCursorChild must not call the old stopChild fallback after the group kill when the group was refused or is already gone (no second SIGTERM to -pid later, and a refused pid is never killed through the fallback): fold both into one routine with one decision. 4 MEDIUM stop() must start the kill sequence once: use termination ??= (or an explicit guard) so a timeout or cancel arriving after the leader exited does not start a second sequence on the same pgid. 5 MEDIUM tests/server-restart.test.mjs afterEach (kills near lines 65, 70, 156, 319) kills pids read from a registry file or health response: kill only children the test itself spawned and still holds (keep the ChildProcess handles and kill through them; use child.kill and await 'exit'), never a pid read from a file or HTTP response. 6 LOW drop the dead ownPgid check (Node has no process.getpgid): guard with pid > 1 and pid !== process.pid and pid !== process.ppid. 7 LOW add a short comment in the lane code that descendants that start their own session escape the group kill (known limit). Tests for each (fake killImpl, fake sleep and clock): early group exit means no SIGKILL, a surviving group gets SIGKILL after the window, a refused pid is never signalled, double stop starts one sequence, the server-restart helper kills only handles it holds. Keep every existing test passing (tests/cursor*.test.mjs, tests/server-restart*.test.mjs, tests/lanes*.test.mjs).",
+   "ignoreTests": [
+    "tests/helpers/swarm-source.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ]
+  }
+ ]
+}

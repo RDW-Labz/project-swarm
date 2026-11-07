@@ -1,12 +1,358 @@
 # Changelog
 
-## 1.160.0
+## 1.167.37
 
-Board batch 2: split quality and benchmark panels, both Macs on one board, progress from the newest approved ledger, billed-only cap on the board.
-- **Panels:** Split quality panel (R-027) and Benchmark scorecard panel on Swarm Watch.
-- **One board:** both Macs on one board (R-028), a Handled for you list, Open chat (R-029) and capacity pool cards.
-- **Build progress:** a project card follows the newest approved ledger among its linked worktrees, ticket percent comes from the main ledger, per-scope milestones, ETA and requirements covered fixes.
-- **Billed caps on the board:** the cap bar, its label and the forecast follow the billed-only project cap.
+Train 9 hotfix: the Cockpit ticket-stack stage list sorts numerically.
+- The Cockpit TICKET STACK sub-line and the other stage lists now sort stage ids S1, S2, ..., S11 numerically instead of ticket-id order (s1..s7, s10, s9, s8, s11); lane/area/type category order is unchanged;
+- Tests: a page-wide scan checks every stage list rendered on the Cockpit for numeric order, plus the stage-count span and the stack sub-line;
+- Version 1.167.37.
+
+## 1.167.36
+
+Train 9, tin 3: display accuracy and direct-build mode.
+- Stage order: stage ids sort numerically (S1, S2, ..., S10) in the Cockpit stage rule and every stage list, instead of string order (S1, S10, S2);
+- Done 24h: the Hive reads real ticket completions from each project's ticket log (unique tickets marked done in the last 24 hours) and shows 0 when there were none, instead of an em dash;
+- Direct-build mode: a project entry with directBuild true hides its swarm ticket counts in the Hive and Cockpit (header, tiles and totals), is skipped by the needs-you inbox, and still appears as a project; needs-you also auto-hides superseded or cancelled ticket rows and blockers older than 48 hours;
+- Cancelled note: the Cockpit footer now states that cancelled tickets are not counted in the live ticket total or the percent (57 percent is 230 of 407, and the 407 already excludes the 13 cancelled); the Hive tooltip says live tickets;
+- Tests: numeric stage order, ticket-log done-24h count and snapshot sum, direct-build inbox/totals/card/Cockpit tiles, stale/superseded inbox filtering, and the cancelled note;
+- Hive ring: at window heights under 1000 px the ring shrinks (narrow-layout canvas 300 px; desktop stage capped) so the first row of project cards is visible without scrolling; large screens keep the full ring;
+- Version 1.167.36.
+
+## 1.167.35
+
+Train 9, tin 2: one source for all counts.
+- The Command Center now computes ticket counts once on the server from the full ledger: one live set (human tickets included; cancelled, proposed and superseded left out), one done count and percent, and one dependency-aware ready count. The Hive cards and panels and the Cockpit header, NOW card, ticket stack and footer render those same numbers; the cockpit no longer guesses needs-you from ticket statuses or counts every todo+ready as ready;
+- needs-you comes from the owner inbox on both pages (card.blocked.needYou); the snapshot exposes board totals and live patches recompute them, so counts cannot drift between a full rebuild and a change patch;
+- Tests: canonical counts over human/cancelled/proposed/superseded and dependency-aware ready, Hive/Cockpit parity on one fixture, stripped-ledger payloads, and full-rebuild vs patch totals;
+- Version 1.167.35.
+
+## 1.167.34
+
+Train 9, tin 1: one board owner.
+- swarm watch --all now finds the running keep-up board on its stable identity (port 51058) through the token-free loopback /api/health probe (or the board registry record), prints its link, opens it with --open, and exits instead of starting a second board on a new port. A stale identity, a non-watch health response or no board starts one board as before; the identity is read only and never repaired by discovery;
+- swarm update restarts a launchd-owned board with launchctl kickstart -k gui/<uid>/com.project-swarm.board and waits for the updated version, instead of spawning a detached manual board; if the launchd job is not loaded while its port is busy it skips with a bootstrap hint. The remote server restart path is unchanged;
+- Tests: read-only identity discovery, identity-first reuse, board.json fallback, stale identity, query-token rejection, health-only detection, launchd kickstart with no signal or spawn, unloaded-job skip, and the manual restart path; 55 focused tests;
+- Version 1.167.34.
+
+## 1.167.33
+
+Hotfix: the Command Center scrolls again on Hive and Cockpit.
+- Scroll: removed the body viewport lock (100vh height, max-height and overflow hidden) that made wheel, trackpad, touch, PageDown and Space do nothing; the document now scrolls whenever the content is taller than the window;
+- Hive responsive: the shell fills the window below its 1320 px max width, and at 1340 px and below the ring scales down above a wrapping card grid (previously only below 900 px); the 1600 px desktop ellipse layout is unchanged and there is no horizontal overflow;
+- Cockpit: shares the scroll shell and has no vertical lock;
+- Tests: a real browser scroll test at 1600x900, 1280x800, 800x900 and 390x844 for Hive and Cockpit: wheel, touch and keyboard reach the last card and return to the top, and scrollWidth equals clientWidth;
+- Version 1.167.33.
+
+## 1.167.32
+
+Release train 8: a live Command Center change feed, bounded live detection, change-driven snapshot rebuilds, and review/guard follow-ups.
+- Live feed: the watch server stats each project's small board inputs about once a second (tickets, orchestrator events and state, run state files, inbox, lanes and history) and identifies the affected project without a full build. A token/cookie-authenticated SSE endpoint (/api/command-center/events, the same security headers, no token in logs or URLs) sends a compact change event; the cached snapshot's changed project card and aggregate counters are patched in place, and the client patches the Hive card, Cockpit and header counters through the per-project route without a full snapshot fetch. The 5 s poll stays as a fallback; hidden tabs pause and reduced motion is honored. Fixture change-to-screen: median 1002 ms desktop and 1001 ms phone-4G; no full snapshot fetch during updates;
+- Bounded detection: each second the detector scans the project's own root plus only family worktrees active in the last ten minutes (441 roots to 6 on this Mac); full snapshots still read the complete family;
+- Snapshot CPU: the 60 s cache is change-driven. A watched change refreshes after the TTL; with no change the server serves the cached entry and does one deep full rebuild every five minutes for inputs the live feed does not watch. The one-hour dashboard soak held server RSS and browser heap flat (steady-state medians), with no SSE or file-watcher growth and the interval CPU under the 5% gate;
+- Harnesses: tools/watch-soak.mjs (server RSS and interval CPU from ps cputime, browser heap via CDP, EventSource and file-watcher counts, API count; flat/leak verdict, exit 1 on a leak) and tools/watch-live-latency.mjs (reversible inbox/tickets change to the DOM, per-run and median, desktop and phone 4G profiles, tokens redacted); tests for both;
+- Merge gate: the local review record is now bound to its run manifest and named job (a review job that declares exactly the result file), not any completed Opus job;
+- Stress: an invalid STRESS_TEST_COMMAND fails with a clear message and exit 2; SIGINT/SIGTERM kill the round process group, wait for the child to exit (bounded) and then exit 130 or 143;
+- Tabs: the Hive Command Center and Cockpit tab links keep location.search; the routes test sends the rendered links to the running server; no-window hrefs are asserted;
+- Docs: corrected the stale 1.167.29 merge-gate text, documented the 1.167.28 to 1.167.29 ledger re-approval and with-concurrency's detached process group;
+- Version 1.167.32.
+
+## 1.167.31
+
+Release train 7: a warm cached board snapshot and D-fix batch 27c.
+- Board snapshot: /api/command-center and its project route now share one board snapshot cache with a 60 second TTL, stale-while-revalidate (a stale response is served at once while one background rebuild runs) and a nonblocking startup warm. This replaces the OOM-prone per-project caches. On the real nine-project board with a dashboard open the server CPU fell from 44.6 percent to 0.87 percent; usable is about 233 ms and Hive to Cockpit about 49 ms; security headers, tokens, cookies, ETag/304 and the response shape are unchanged;
+- tools/watch-perf.mjs accepts ps time as m:ss.ss, h:mm:ss.ss or plain seconds, and still redacts the watch token;
+- D-fix: silent-catch visibility in swarm/core-51 (batch 27c);
+- Version 1.167.31.
+
+## 1.167.30
+
+Release train 6: a fast Command Center and a hardened owner-only gate.
+- Command Center performance: gzip/brotli, ETag/304 and real cache headers (fonts immutable, JS/CSS revalidated) replace no-store, and the Command Center snapshot is cached for 2 s; Cockpit, the tour and the palette lazy-load with the Cockpit module graph and the first project's data warmed during Hive idle; the robot is deferred; ambient animation is capped at 30 fps (robot 15 fps) and goes static after 5 s idle, pausing when hidden, off-screen or under reduced motion; polling is 5 s and pauses hidden; DOM updates are incremental. Measured on the real 9-project board: usable 3518 to 195 ms desktop and 5251 to 943 ms on a 1.6 Mbps/100 ms phone profile; Hive to Cockpit 3114 to 131 ms and 4099 to 111 ms; idle page CPU 91.8 to 3.4 percent and 95.8 to 3.2 percent; Hive payload 497 to 157 KB and 434 to 81 KB; API calls 23 to 12 per minute;
+- Owner gate: the tickets supersede and --set superseded owner check no longer accepts SWARM_OWNER=1, refuses any agent/worker env marker first, walks the process ancestry to refuse agent shells and ptys, and requires both stdin and stdout to be TTYs; a test-only hook replaces the env override in tests; tools/watch-perf.mjs and npm run perf:cc measure the Command Center against a real board URL;
+- Version 1.167.30.
+
+## 1.167.29
+
+Release train 5: process-group kill paths, ticket-ledger hardening, and a merge gate that verifies the review run's own record.
+- Kill paths: the guarded runner spawns the command in its own process group, signals the group (with a child-pid fallback) from the wrapper and the watcher only after the start-time and command-line identity match, and the watcher escalates once to SIGKILL; test:stress now kills the current round's process group on Ctrl-C (exit 130) or SIGTERM (143);
+- Ledger: supersede writes once under the scope lock from the fresh ledger, prunes superseded tickets from dependents' dependsOn and logs the prune, `ticketSetHash` now omits superseded tickets and proposed or unapproved tickets so the hash matches the live set only, the build plan counts the same live set as ledgerStats, and last-touch reads id/ticket/ids/tickets log shapes while skipping corrupt lines; after upgrading from 1.167.28, a ledger that was approved while it still contained superseded tickets reads as not approved until you run `swarm scope approve --yes` once with no ticket changes;
+- Owner-only: the supersede gate now refuses Claude, Codex and Cursor agent/worker sessions (and non-TTY callers) unless SWARM_OWNER=1, and the same gate covers tickets --set superseded;
+- Merge gate: a release PR carries only a machine marker in the body that names the review result JSON; `swarm merge` reads the runner's local record at `.swarm/runs/<runId>/review-record.json`, requires the run complete and its review job on claude with opus, requires a metadata-only result commit at the PR head whose sole parent is the reviewed code head, and verifies the committed result JSON's sha256, verdict pass and full 40-character head before any `gh pr merge`; there is no committed review-run record under coordination/review/; Reviews parsing is fence-aware;
+- D-fix: silent-catch visibility in scope-commands and server-restart (batches 27a and 27b);
+- Version 1.167.29.
+
+## 1.167.28
+
+Release train 4: release-review merge gate, guarded-runner hardening, and owner-only bulk ticket supersede.
+- Merge gate: swarm merge refuses a release PR (title starts with a semver) unless its Reviews section has a passing verdict naming the current head commit (full or 7+ char prefix; last matching verdict wins; fail, blocker or missing refuses; non-release PRs unchanged);
+- Guarded runner: the watcher verifies the child's process start time and command line before SIGTERM/SIGKILL, so a reused pid is never signalled; old markers without identity restore without signalling; termSentAt is re-read and merged; a SIGTERM-ignoring orphan is escalated to SIGKILL once after 30 seconds when the watcher is gone; a self-orphan still fails with 143;
+- Stress: test:stress runs each round in a detached process group and kills the whole group on timeout;
+- Lane health: persist failure logs include the error code;
+- Tickets: new owner-only swarm tickets supersede --before <date>. The dry-run lists every candidate (id, status, stage, last touch and its basis, title) and writes nothing; --yes applies one journaled bulk transition to the new terminal status superseded, only from proposed, todo, ready and blocked;
+- Version 1.167.28.
+
+## 1.167.27
+
+Hotfix: the guarded runner identifies its child before it signals anything.
+- Guarded runner: completes the 1.167.26 identity fix: within one boot the recorded child is signalled only when BOTH its process start time and its command line match the live pid; a missing, unreadable or mismatched identity restores the value and clears the marker instead of killing;
+- No silent success: a command that finds itself as the orphaned child of a dead guarded run now fails with exit 143 and a clear stderr error instead of exiting 0; a safe stale marker restores and the command runs;
+- EPERM: an owner or child that is alive only by EPERM belongs to another user, so the marker is restored and cleared instead of wedging the guard;
+- Tests: 42 concurrency-guard tests, including pre-boot reused pid, EPERM owner and child, start-time and command-line mismatches, and the self-orphan failure path.
+
+## 1.167.26
+
+Release train 3: silent-failure visibility across the toolbelt, load-flake fixes at the root, and Phase 2 lock tests.
+- Silent catches: the D-fix audit (g-33a7a4ae) now makes more than 200 previously silent catches across roughly 100 tool modules log a bounded message, while expected missing-file and permission cases stay silent; no control flow, fallback or throw changed;
+- Flakes: five load-flaky tests are fixed at the root, not retried or quarantined (concurrency-guard Ctrl-C tests, handbuild chat-merge hook, field lessons salvage, local-lane slot release, lane-health persistence), and lane-health persist writes are serialized and flushed;
+- Stress: new npm run test:stress reruns the previously flaky test files for five rounds at concurrency 8, failing fast with the child output (STRESS_ROUNDS and STRESS_CONCURRENCY override the defaults);
+- Ask: swarm ask --context <empty file> no longer crashes reading costUsd;
+- Cleanup: the visual-qa screenshots atomicWrite helper no longer closes its file handle twice when rename fails;
+- Locks: Phase 2 lock-race tests (24 passing) plus 8 recorded todo bugs in base-check-lock, projects and integration-lock, ready for their product fixes.
+
+## 1.167.25
+
+Release train 2: money caps, paid-lane safety and verify-job provenance.
+- **Spend:** one spend cap, $2.50 per Mac per Chicago day in stop mode by default, and agents can no longer raise the daily limit at all (only the owner can);
+- **Anthropic:** one day cap (the spend lane default, $20) and one price table in tools/rates.mjs (Haiku 5.5 corrected to $0.10/$0.50 per MTok; Fable 5.1 added) that the Anthropic lane derives its prices from;
+- **Paid lanes:** rented, OpenAI and Gemini keys now pass the same paused-lane check as Anthropic and OpenRouter, and validate refuses any job on a paused paid lane;
+- **Guard:** the orchestrator check that blocks shell redirects into coordination/manifests/ or .swarm/ now compares real paths, so a symlinked project root (such as /tmp) no longer lets one through;
+- **Scope:** scope sync and swarm tickets --delivered need a passing security review for any ticket touching auth, api or db paths, deletes included;
+- **Verify jobs:** in orchestrator mode a shell verify job runs only when the runner rebuilt it from the approved ticket ledger; a hand-written shell job is still refused;
+- **Tests:** the cancellation-cleanup test now fails in 15 seconds instead of hanging when a kill is denied.
+
+## 1.167.24
+
+Hotfix: swarm commands no longer exit silently inside Claude Code sessions.
+- **Fix:** in 1.167.23, swarm validate, run, go and ticket exited 0 and did nothing when run from a Claude Code session in a project with orchestrator mode on, because the runner gate loaded the orchestrator hook script, which exits when its input ends; the gate now reads the hook check from a module with no side effects;
+- **Tests:** an end-to-end test runs the real CLI with CLAUDECODE=1, orchestrator mode on, the hook installed and input closed, and a static test keeps every tool module from importing the hook script.
+
+## 1.167.23
+
+Release train 1: four fixes for the parts build and the orchestrator guard.
+- **Branches:** integrate can commit to branches the project names in .project-swarm.json integrate.commitBranches (exact names or a trailing star), never to main, master or the default branch, and says why when it commits nothing;
+- **Splits:** swarm resolve --superseded-splits [--stage S] [--dry-run] clears parked split blockers that a newer ingest of the same stage replaced, and keeps the current ones;
+- **Guard:** in orchestrator mode, swarm run, go and ticket read the manifest and refuse checks, setup, preChecks or mutantCheck commands that are not vetted in coordination/checks.json or the profile verify command, and refuse shell jobs;
+- **Approve:** swarm scope approve --auto-ok lets the orchestrator approve a change-order split only when code shows no paid lanes, no migrations, no deploy or merge to main and no cancelled done work, logs every decision and otherwise leaves a Needs-you item; plain approve stays owner-only.
+
+## 1.167.22
+
+Three queue and worker fixes found building the parts project.
+- **Owners:** a test file that a done ticket already owns is no longer taken away from the next ticket's outputs, so a ticket is not left with empty outputs;
+- **Paths:** an acceptance line that names a dot folder such as .github/workflows/ci.yml keeps its leading dot, so valid CI tickets are no longer parked as owned by nobody;
+- **Blocked:** a Codex or Cursor job whose reply says it is blocked and whose outputs did not change is now blocked with the worker's own note as the reason and is never marked complete, and a job that completes with no changed output gets a completed-without-changes warning.
+
+## 1.167.21
+
+The paid lanes are off for real.
+- **Pause:** when the anthropic or openrouter lane is paused in the machine config, the key readers refuse before reading any key and swarm validate refuses a job that names that agent explicitly, so a paused lane can no longer spend money through an explicit agent in a manifest; finished runs can still be integrated and shipped;
+- **Routing:** job type routes list the paid lane last and a paused lane is removed from the typed list;
+- **Tests:** tests that touch the paid keys isolate the machine config by themselves.
+
+## 1.167.20
+
+The parts session can run its manifests and integrate runs.
+- **Run:** swarm run on a manifest path under the coordination manifests folder or the .swarm manifests folder is allowed in orchestrator mode (worker workspaces, worktrees and run folders are not);
+- **Integrate:** integrate with a comma list of jobs and the approve-manifest flag (integrate only) are allowed;
+- **Tickets:** the depends-on edit flag is allowed in the ticket edit list;
+- **Tests:** the parts-flow test covers every one of these in both spellings and the denied counterparts.
+
+## 1.167.19
+
+The orchestrator guard stops denying the parts session's own flow.
+- **Scope:** swarm scope gate and scope split with ingest, merge, max-repairs and accept-waves (accept-waves only for scope split) are allowed, and a change order with one quoted description and the yes flag is allowed, while scope approve, a bare change with yes and every other owner verb stay denied
+- **Help:** swarm help, -h and --version are allowed in the node swarm.mjs with --root spelling as well as in plain swarm
+- **Writes:** the orchestrator may now edit the scope markdown file under docs and scope (that one file, md only)
+- **Tests:** a parts-flow test runs the real guard decision for every one of these in both spellings
+
+## 1.167.18
+
+Claude shell jobs now obey the paid-lane pause.
+- **Pause:** a claude shell job (the sonnet-shell and opus-shell models) uses the paid worker API key, so it is now refused when the anthropic lane is paused or lanes.claude.shellPaused is true, at swarm validate and again before the key is read at run start; finished shell runs can still be integrated and shipped while paused
+- **Keys:** plain subscription claude jobs no longer inherit an ambient ANTHROPIC_API_KEY or the worker key from the shell environment
+- **Config:** lanes.claude.shellPaused is a new accepted lane setting
+- **Tests:** the claude shell tests isolate the machine config by themselves
+
+## 1.167.17
+
+The orchestrator guard closes the last bypasses found in review.
+- **Runners:** npm, pnpm and yarn flags that load code or change the folder (node-options, userconfig, prefix, workspace, filter, cwd, script-shell, require, import, loader, custom reporters) are denied, and a runner operand that the orchestrator may write (a plan, handoff or ledger file) is refused whatever its extension.
+- **Tickets:** swarm ticket with a check option, swarm ship, and swarm tickets with a tests option are denied, and setting a ticket to approved stays denied.
+- **Folders:** a cd back to the project root from a plan or docs folder works, cd with a dash and a cd that stops short of the root are denied, and writes chained after it are still checked.
+
+## 1.167.16
+
+The orchestrator guard stops blocking the orchestrator's own commands.
+- **Guard:** swarm commands (go --scope, tickets with --note, --retry-note and the other edit flags, change --yes, backlog, integrate, merge, update) are always allowed in orchestrator mode; owner approvals (resolve, done, scope approve, decide, handbuild approve) stay denied.
+- **Reads:** gh pr and run view, grep, cat, git status and log, --help as the last word, and read-only paths under the home claude folder are allowed, and the word claude only counts when it is the program being launched.
+- **Tests:** playwright, vitest, npm test, node --test and pytest run with a narrow flag set, and a bare test run is refused while code files sit in the orchestrator's own folders.
+- **Writes:** the orchestrator may write only ledger, plan, manifest, handoff and state files in text formats (md, json, jsonl, yaml); source, node_modules, build output and the swarm workspaces are denied, and there is no worker exemption any more because swarm workers never load project hooks.
+- **Messages:** the deny text names real commands (swarm ticket, swarm tickets, swarm backlog add) instead of swarm diagnose.
+
+## 1.167.15
+
+Notes reach workers, longer check timeouts, waves start again.
+- **Notes:** a note from the owner or the orchestrator (swarm tickets ID --set ready --note TEXT, or --note alone) is saved on the ticket and shown to the next worker as guidance; the system retry note stays separate, --retry-note TEXT replaces it and --clear-note clears both.
+- **Timeouts:** a ticket can set a longer check timeout (swarm tickets ID --check-timeout MS, 60 s to 30 min) and the project profile verify block can set timeoutMs for every ticket; the default stays 5 minutes.
+- **Waves:** human tickets no longer use the job cap and the wave builder picks fairly across stages, so later stages are not starved.
+- **Autopilot:** the service can start waves again (the child go --scope runs under its parent's lock) and reports early start failures through a log file.
+- **Gate and lanes:** standalone failing-test rerun and environment fingerprint modules, the lane health core (adapter registry, free GET-only probes, probation) and the lane monitor, reroute, recovery and events modules are in, not wired yet.
+
+## 1.167.14
+
+Needs-you fixes itself, and the leaked test servers are gone.
+- **Needs-you:** autopilot triages every inbox item first; only money, live deploys, login or billing problems and real choices reach the owner (each with a Decision needed text), everything else is retried up to 3 times and then becomes a swarm-fix goal; integrate-checkout items always go to the owner.
+- **Integrate:** autopilot integrates even when the checkout has untracked files; it blocks only on tracked edits, merge or rebase in progress, or a collision with the run's output paths, and splitter and review runs never raise integrate items.
+- **Split:** repairs fix missing files (create or dependency), missing acceptance, screen ids and rejected-dependency chains automatically instead of parking tickets.
+- **Leaks:** the cursor lane kills a job's whole process group when the job ends, and the server-restart tests stop their fake servers.
+
+## 1.167.13
+
+swarm remote off stops the real board.
+- **Remote:** swarm remote off treats a dead recorded board process as stopped and clears the record; when the saved port is held by a swarm board that the record does not name, it finds that listener and stops it after checking its command line and that the board answers (never another program, pids validated, re-checked right before the stop).
+- **Update:** servers kept because their identity could not be verified now print the exact command to restart them.
+
+## 1.167.12
+
+Board stay-up survives a restart.
+- **Board:** swarm watch --all --keep-up read its saved identity with a method real file handles do not have, so it crashed on every restart after the first; it now reloads the same link and port.
+- **Merge:** swarm merge reports merged when GitHub already deleted the branch (HTTP 404 on the remote branch delete).
+- **Ledger:** backup staging folders left by a killed backup are removed after an hour.
+
+## 1.167.11
+
+The swarm limits itself by real memory and never deletes a checkout that holds its state.
+- **Memory:** the machine limit reads available memory and swap (vm_stat and sysctl on macOS, meminfo on Linux), holds new job starts at hard pressure, shrinks wide waves at soft pressure, and lowers the node test concurrency of the merge-queue gate (never raises a configured value).
+- **Board:** swarm watch --all --keep-up never stops when idle and keeps one token and port across restarts (identity file in the config folder, mode 0600).
+- **Ledger:** every ledger write is backed up outside the checkout (newest 50 plus a daily copy for 90 days); swarm backup ledger now, list and restore bring it back.
+- **Guard:** gc, scratch cleanup and swarm merge refuse to delete or detach a checkout that holds swarm state, and log every deletion attempt to deletions.log.
+
+## 1.167.10
+
+Autopilot starts wide waves by default.
+- **Autopilot:** every pass starts all startable tickets up to the free slots (tickets that share files stay in sequence), passes --max-jobs and an automatic skeleton skip once the project has 10 done tickets; the autopilot config section has skipSkeleton (true, false or auto) and maxJobs (ceiling 64).
+- **Routing:** lane pass rates are read from the project being routed, not from the process directory.
+- **Tests:** the 500-job lane test no longer depends on wall-clock time.
+
+## 1.167.9
+
+Ticket jobs can finally run on the local lane.
+- **Local lane:** ticket jobs carry cacheContext, which the router's candidate check refused for every agent but anthropic, so the local lane (dev2) was silently rejected for every ticket and the work fell to Anthropic; the local lane now accepts the field and ignores it.
+
+## 1.167.8
+
+The local lane takes work, and tickets no longer park on files they create.
+- **Local lane:** a key-less probe that gets 401 or 403 means the endpoint is up and wants a key, so dev2 over a tunnel is routed instead of being marked unreachable; swarm doctor local --probe-local --verify-key checks the Keychain key without printing it.
+- **Splitter:** a path a ticket owns (files, tests of any ticket type, contracts it writes, new sources) is never reported as missing; a read owned by another ticket adds the dependency instead of parking; acceptance globs and foreign files add dependencies.
+
+## 1.167.7
+
+Approvals no longer idle for hours.
+- **Auto-approve:** owner policy windows can auto-approve file edits under docs/state (exact files, plain text, caps, kill switch, post-write checks); shell commands and git stay owner-only.
+- **Approvals:** a decision or approval waiting over an hour also goes out as a phone notification.
+- **Fields:** the cross-machine field report and the per-machine ticket id blocks.
+
+## 1.167.6
+
+Held tickets stay out of Needs you, and the first wide wave.
+- **Board:** tickets in review or todo status no longer leak into Needs you.
+- **Local lane:** swarm tunnel add, status and remove manage an auto-reconnecting launchd SSH tunnel; a down tunnel pauses the endpoint.
+- **Scope:** swarm scope gate --list and --fix-owners show and resolve the ticket-manager findings.
+- **Runner:** cacheContext is never empty or stale; scratch cleanup cannot fail a finished job; the pre-push guard checks the pushed range; integrate flags outputs it did not write; ticket ids come in per-machine blocks (T-0179); decisions waiting over an hour also go out as a phone notification.
+
+## 1.167.5
+
+Wide waves now start for tickets that list their own tests.
+- **Wave prep:** a ticket that lists its own tests no longer skips the cover for tests that mention its files in passing (T-0068 and every ticket touching tools/swarm.mjs); the tests go to context up to 25 and the rest to ignoreTests.
+
+## 1.167.4
+
+The project page no longer goes blank, and wide waves start.
+- **Board:** the project page rendered nothing when one panel failed (the removed spend panel threw and the error was swallowed); it now renders every panel, shows an error banner when loading fails, and has a large-ledger test.
+- **Wave prep:** one ticket that cannot be prepared (uncovered tests, a test file the ticket creates, oversized or binary context) is parked with a warning instead of aborting the whole wave, and tickets move to running only after the manifest validates.
+
+## 1.167.3
+
+New files are no longer refused as typos.
+- **Splitter:** a new write path never errors on similarity alone (warning only), and Next.js files, dynamic route folders, route groups, parallel slots, workflow files and test files are known conventions with no warning.
+- **Local lane:** any OpenAI-compatible endpoint (such as dev2) is a worker lane with a Keychain key, per-endpoint slots, loopback-only for sensitive jobs and no redirects on the key request.
+
+## 1.167.2
+
+Work now spreads across lanes.
+- **Routing:** API workers route Haiku first for build, fix and docs, Sonnet for large or risky or review jobs, Opus only for security reviews, with a daily cap in stop mode; Codex is paused by default.
+- **Wave prep:** go --scope no longer drops context for tickets that exist, skips acceptance reviews already covered, and keeps manifest errors readable.
+
+## 1.167.1
+
+Held tickets no longer flood the owner's Needs you.
+- **Board:** a ticket an orchestrator deliberately held (blocked, not waiting on dependencies) is never a Needs-you item unless it carries a specific question (swarm tickets ID --set blocked --question TEXT); the orchestrator that held it owns releasing it.
+
+## 1.167.0
+
+Self-correcting splits, local disk cleanup, structured review verdicts and restart-any-board.
+- **Splitter:** a split that fails validation is re-split with the exact errors fed back up to 3 rounds (--max-repairs); change orders re-split automatically; unresolved ones become parked blockers naming the tickets and file; guards for tests with code, no references to files another ticket creates, and protected files.
+- **Disk:** a run's worktrees are removed after integrate or abandon, failed and cancelled run workspaces are kept 7 days (SWARM_KEEP_FAILED_DAYS) and never removed while an open ticket references them, and swarm gc (dry run by default, --apply, --all-projects, --json --usage) cleans old runs and stale scratch.
+- **Review:** review jobs use a strict response schema and the verdict is recorded from the structured result, with prose kept as notes.
+- **Update:** swarm update restarts any running board or remote server found by process, with or without a record.
+- **Resume:** a ticket in review without a review run now writes its acceptance-review manifest first, a missing manifest gives a clear error, and a start failure repeated twice parks the ticket.
+- **Board:** federated snapshot and owner Approve/Deny routes on the watch server (tailnet only; merge, deploy and cap actions refused).
+- **Hooks:** every swarm hook points at current; swarm change previews are allowed; acceptance reviews skip tickets in other worktrees with a note.
+
+## 1.166.0
+
+Safer restarts, partial-run retry and fixes from the parts-app field report.
+- **Update:** a live restart lock is never stolen, the server record stores its runner path so servers started from any install path are restarted, and a held autopilot is not counted busy by update --when-idle.
+- **Integrate:** a partly blocked run stays integrable; the retry integrates only the remaining jobs.
+- **Autopilot:** read-only runs count as integrated and never raise integrate blockers; a failed run already re-run by hand is not retried (swarm resolve RUN --handled); quiet polls write nothing.
+- **Dependency gate:** a package.json change that touches no dependency field and no install script skips the audit.
+- **Guard:** free text in notes, asks, tickets and commit messages never trips the hand-build guard; refusals name the rule and the matched token.
+- **Failure regression:** new failure causes become regression test stubs at run end (profile option failureRegression, off by default).
+
+## 1.165.2
+
+No money figure is left on Swarm Watch.
+- **Board:** the orchestrator panel, run pages, plan views, API responses, event stream, history and CSV carry no money figures; NO CAP shows as a plain warning; a test requests every route and scans every board script and page for money.
+- **Board:** one percent function everywhere, activity counted across every checkout and scratch folder, installed version shown, nameless projects hidden, finished projects as a quiet card.
+
+## 1.165.1
+
+The board shows no money figures it cannot prove, and Live no longer flaps.
+- **Board:** billed today, billed all time, list value, the cap cells and Spend today are removed from the board, project page, overview and their API responses (spend files and cap enforcement are unchanged).
+- **Board:** the project page Live chip has one owner and says connecting only after two missed polls; the run stream sends a ping every 10 seconds.
+- **Scope:** a project can list extra root files in scopeRootFiles, and one bad ticket is rejected alone instead of the whole split.
+- **S2:** build tickets own their tests; job ignoreTests can exceed 100 files with a reason.
+
+## 1.165.0
+
+Resolved blockers never return, generated files never dirty the tree, and the update restarts servers safely.
+- **Autopilot:** a resolved blocker is never raised again for the same run; smoke, lane-test and probe runs never raise complete-but-not-integrated blockers; under-filled waves are batched into one wave.
+- **Generated state files (HANDOFF, usage ledger, build plan, .swarm):** never count as a dirty tree; HANDOFF regenerates only on real change and lists pending approvals from every worktree.
+- **Integrate:** commits its own verified output on swarm branches; per-branch integration lock; policy commit windows for generated files; ignoreTestsReason job field; machine-wide budget raise request.
+- **Runner version pointer:** The runner version pointer lives in an untracked local file; hook paths always point at current; reason words never trip the hand-build guard; a pinned version reports its own version.
+- **swarm update:** restarts the board and remote servers (SIGTERM, identity-checked), swarm update --when-idle, swarm forget, scratch projects never reach the owner inbox, commit-msg guard for manifest commits.
+
+## 1.164.0
+
+Update restarts servers, --when-idle, forget, scratch projects stay out of the owner inbox, manifest commit guard.
+- **Servers:** swarm update restarts a running board and swarm remote serve on the new version, same port and flags, gracefully (SIGTERM, never SIGKILL), confirmed through a health route; a server in your terminal is not killed and gets a restart needed banner; --no-restart skips it.
+- **Update when idle:** swarm update --when-idle [--timeout MIN] waits for a gap between waves, holds only new launches, never kills a run, exits 75 on timeout; the plain update is still refused while busy.
+- **Scratch and test projects:** never post to the owner inbox, the phone or swarm-inbox, requests filed from them are auto-denied, the registry skips them and drops entries whose folder is gone; a scratch root is under .project-swarm-scratch, an OS temp folder, a folder with a tmp, temp, test, tests or __tests__ segment, a tmp-test folder, or marked scratch.
+- **swarm forget PATH** removes dead projects from the registry only (no project file is touched); --dry-run, --missing, --scratch, --yes for bulk.
+- **Manifest commits:** a commit-msg hook refuses a commit whose subject starts with Manifest when anything outside coordination/manifests is staged (a failed git add can leave files staged).
+
+## 1.163.0
+
+tools/swarm.mjs is split into modules (pure move).
+- **Split:** 24 modules under tools/swarm/ (patterns, warnings, mutants, shell sandbox, checks, run state, context, integrate, workspace and 15 layered core modules) hold about 5,700 lines moved out of tools/swarm.mjs, which goes from 9,520 to 4,020 lines. Every moved name stays exported from tools/swarm.mjs by re-export, so no importer changes and behavior is identical.
+- **Tooling:** tools/split-scan.mjs (acorn AST scanner, scope-aware uses) and tools/split-module.mjs (plan, move and verify with a byte-for-byte check, unresolved-name check, smoke import and dynamic import rewrite) did the move; acorn 8.18.0 and acorn-walk 8.3.5 are dev dependencies, npm ci --ignore-scripts runs in CI.
+- **Tests:** tests/split-scan.test.mjs, tests/split-module.test.mjs and a shared helper so tests that grep the source read the combined swarm source.
+
+## 1.162.0
+
+Hotfix: guard regressions from 1.159 and version pinning.
+- **Guard:** orchestrators can file hand-build requests in every invocation form (node PATH/swarm.mjs, --root, env and cd prefixes); only approve, deny, on, off, install, uninstall and decide stay owner-only. The inline-code detector no longer fires on direct script calls.
+- **Read-only forms allowed:** git rev-parse, branch --show-current and listing, remote -v, config --get, ls-files, ls-remote, describe, for-each-ref, merge-base, cat-file, blame, tag -l, stash list, worktree list and more; gh pr, issue, run, release, workflow and repo views and lists, gh auth status, gh api in GET form; vercel git ls. Every write form stays blocked.
+- **Pinning:** a project with pinned true or pinnedVersion x.y.z in .project-swarm.json is skipped by swarm update (printed as skipped, pinned at x.y.z), its hooks and guard are not refreshed, its version is never pruned, update --projects lists pinned projects separately, swarm pin PROJECT VERSION installs the version from its git tag if needed and swarm unpin PROJECT releases it; the board card shows a pinned at x.y.z badge.
 
 ## 1.159.0
 

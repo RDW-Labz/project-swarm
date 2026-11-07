@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2blk4",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable).\nTrain 2 Opus DELTA review (claude-opus-5-5, run 1793225514314-4bc22f38) found one NEW BLOCKER in tools/shell-writes.mjs. Fix it exactly, minimally, in the surrounding style. Problem: redirects after cd now resolve against local.cwd (good), but the cd step itself is resolved lexically: omResolveCd (~2390-2396) and omCdTargetOk (~2346) apply '..' with path.resolve before realpath, and the cd target is the first argument not starting with '-' (~2611), so option flags such as -P/-L/-e/-@ are silently ignored (omCdHasDash only rejects a bare '-'). Under `cd -P`, or plain cd through a symlinked component followed by '..', bash moves physically. Exploit: symlink docs/plans/L -> ../../.swarm/runs; `cd -P docs/plans/L/.. && echo '{...}' > project/daily-limit.json` - the guard thinks cwd is docs/plans and allows it, bash writes .swarm/project/daily-limit.json (raises the daily limit). Same with coordination/manifests. FIX: (1) in the cd step refuse ANY option argument (any arg starting with '-', including -P, -L, -e, -@, --) - return false as for other refused commands; (2) resolve the cd target with the SAME component-wise lstat/realpath walk omWriteTargetRel now uses (factor it into one shared helper both call; refuse '..' after a symlinked component; follow symlinked components physically), and set local.cwd to the resulting physical path; omCdTargetOk must use the same walk; (3) FOLLOW-UP in the same walk for redirect leaves: refuse an existing regular-file leaf whose stat.nlink > 1 (hard link to elsewhere). Keep every other guard behaviour identical. Tests: add to tests/t2-redirect-symlink.test.mjs: `cd -P docs/plans/L/.. && echo x > project/y.json` refused; `cd docs/plans/L/.. && echo x > project/y.json` (no -P) refused; `cd -L docs` refused (option); `cd docs && echo x > plans/a.md` still allowed; a hard-linked leaf in docs/plans refused; all existing cases unchanged. Do not touch any other file.",
+      "context": [
+        "tests/om-redirect-realpath.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tests/t2-redirect-symlink.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/auto-approve.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-reason-words.test.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/orchestrator-allow.test.mjs",
+        "tests/orchestrator-mode-default.test.mjs",
+        "tests/orchestrator-mode-review2.test.mjs",
+        "tests/orchestrator-mode-review3.test.mjs",
+        "tests/orchestrator-mode-review4.test.mjs",
+        "tests/orchestrator-mode-timeout.test.mjs",
+        "tests/orchestrator-mode.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2blk4",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/t2-redirect-symlink.test.mjs",
+        "tests/om-redirect-realpath.test.mjs"
+      ]
+    }
+  ]
+}

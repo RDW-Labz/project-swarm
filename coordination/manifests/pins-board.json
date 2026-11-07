@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "pins-board",
+      "agent": "auto",
+      "prompt": "The version pinning change (tools/pins.mjs, already in the tree, with pinOf(pointer) and the pointer fields pinned and pinnedVersion in .project-swarm.json) needs its board part re-applied on top of the CURRENT board files (the mini's board batch changed tools/board-data.mjs and tools/watch-assets/board.js, so the earlier edit was dropped to avoid a conflict). Add: tools/board-data.mjs puts pinnedVersion (the pinned version string, or null when the project is not pinned) on each project overview and detail, read from the project's pointer with pinOf (a pinned project with only pinned true uses pointer.version); a read error gives null and never breaks the board. tools/watch-assets/board.js renders a small badge with the exact text pinned at x.y.z on the project card when pinnedVersion is set, using the existing chip or badge styling of the card (look at how other card chips are rendered in the current file), and nothing when it is null; if the project page has a header chip row in tools/watch-assets/project.js add the same badge there. The existing test tests/pins.test.mjs board overview exposes pinnedVersion and board.js badge text currently fails because the board edit is missing: make it pass without weakening it. Keep every board test passing (tests/board-page.test.mjs and the other board tests). Write only tools/board-data.mjs, tools/watch-assets/board.js, tools/watch-assets/project.js and tests/pins-board.test.mjs (new, assertions for the field with pinned true, with pinnedVersion, with both, with neither, and an unreadable pointer; and the badge text). No token-shaped literals. ignoreTests reason: only board files and their tests change.",
+      "context": [
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/project.js",
+        "tools/pins.mjs",
+        "tests/pins.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/project.js",
+        "tests/pins-board.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/bench-replay.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/board-peers.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/board.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/managers/r038-version-merge.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

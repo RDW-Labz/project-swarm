@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain5delta2",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner rule: Opus delta review of the train 5 money blocker fix",
+      "prompt": "Delta review round 2 of release train 5. The round-1 blocker (money in the Command Center API/UI) was fixed; the round-1 delta then failed with ONE blocker: the Cockpit Classic tab linked to '/classic' with no page token, so the watch server answered 403. The fix is in coordination/review/train5-delta2.diff (against the delta head 0bdce95d); the changed source and tests are in context.\n\nWhat changed: cc-cockpit-mount.js now appends the current location.search to BOTH the Command Center and Classic tab hrefs (keeping aria-current), and tests/command-center-routes-flag.test.mjs renders the Cockpit with a fake location.search '?t=abc' and asserts '/classic?t=abc' and '/command-center?t=abc' instead of the old source regex.\n\nPass bar: confirm the token blocker is CLOSED (the rendered Classic anchor preserves the query/token, and the test would fail on the tokenless form) and there is no NEW blocker: the Cockpit mount still works without a defaultView/location (SSR/tests), the Hive tab behavior is unchanged, no money/login regression, no test weakened. Everything else is a follow-up. The runner stamps the reviewed head into your result; do NOT add or change a head field. Write ONLY coordination/review/train5-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+      "context": [
+        "coordination/review/train5-delta2.diff",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs"
+      ],
+      "outputs": [
+        "coordination/review/train5-review.json"
+      ],
+      "resultFile": "coordination/review/train5-review.json",
+      "timeoutMs": 2400000
+    }
+  ]
+}

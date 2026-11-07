@@ -1,0 +1,23 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8016",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/watch-assets/index.html:44-55 (no spend/dollar KPIs); tools/watch-server.mjs:280-283,315-320,402 (stripMoney on /api/snapshot and SSE); tools/watch-cli.mjs:430-443,533,545-562 (stripMoney on /api/board, /api/project, /api/live, /api/run); tools/watch-assets/board.js:427-454,204-207 (lanes tab, spend table hidden); tools/watch-assets/orchestrator-view.js:70 (tokens only); tests/board-no-money.test.mjs:169-245 (all watch-assets HTML + run Watch GET / and board /project,/run bodies)",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": false,
+          "evidence": "tests/board-no-money.test.mjs:328-336 (every board browser script avoids money output patterns); tests/board-no-money.test.mjs:248-303,339-384 (board routes and run Watch APIs/SSE with spend fixture); tools/watch-cli.mjs:564-571 (board.history and historyCsv return readHistory/historyCsv without stripMoney)",
+          "gap": "No test seeds SWARM_HISTORY_FILE with spend events and asserts /api/history (or /history.csv) has no money-shaped fields; history handlers are not redacted like other spend-backed board APIs, so line 2 is neither fully met nor guarded by a failing test."
+        }
+      ]
+    }
+  ]
+}

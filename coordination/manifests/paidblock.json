@@ -1,0 +1,48 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "paidblock",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "sensitive": true,
+   "prompt": "URGENT money safety (owner order 2026-10-27): the machine-config lane pause (lanes.anthropic.paused and lanes.openrouter.paused true) only removes a lane from automatic routing; a manifest job with the explicit agent anthropic or openrouter still validates and runs and spends real money (3.33 dollars today from explicit anthropic Sonnet and Opus jobs in another project). Make the pause a hard block. (1) tools/anthropic.mjs readAnthropicKey and tools/openrouter.mjs readOpenRouterKey are the only places the paid API keys are read (environment first, then the keychain): before reading anything, load the machine config the same way tools/claude-shell.mjs resolveWorkerKey does (loadLocalConfig with the same env handling, config injectable through the options object for tests) and, when lanes.anthropic.paused (or lanes.openrouter.paused for the openrouter reader) is true, throw an Error whose message starts with anthropic-lane-paused (or openrouter-lane-paused) and says the paid lane is paused and no key was read; code property equal to that prefix. Check every caller of both readers (swarm run dispatch, swarm ask, doctor and status/probe paths, spend or budget commands): a caller that only wants to know whether a key exists (doctor, status) must catch it and report the lane as paused instead of crashing; dispatch and ask must fail with the clear message before any request is made. (2) Validation: in validateProject in tools/swarm/core-51.mjs (the same place the claude shell pause check lives) refuse a manifest that has any job whose agent is anthropic or openrouter when that lane is paused, with the same message text and code; do NOT put it in validateManifest (finished runs must still integrate). Also make sure a job routed by agent auto can never resolve to a paused paid lane (the router already skips paused lanes; add a test if missing). (3) Do not change caps, models or any other behaviour; plain Claude CLI, Cursor, Codex and Hermes are unaffected. Tests in tests/paid-lane-paused.test.mjs with injected config and an injected exec that records calls: paused anthropic reader throws and never calls exec or reads the environment key; paused openrouter reader likewise; unpaused reads as before; validateProject refuses an explicit anthropic job and an explicit openrouter job while paused, passes them when not paused, passes a plain claude job while paused; validateManifest on a saved manifest with an anthropic job still passes while paused. Build fake key values at run time (repeat a short string), no credential-looking literals, never read the real keychain. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/anthropic.mjs",
+    "tools/openrouter.mjs",
+    "tools/swarm/core-51.mjs",
+    "tools/claude-shell.mjs",
+    "tools/router.mjs",
+    "tools/local-config.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/anthropic.mjs",
+    "tools/openrouter.mjs",
+    "tools/swarm/core-51.mjs",
+    "tests/paid-lane-paused.test.mjs"
+   ],
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/anthropic-lane.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/ask-125.test.mjs",
+    "tests/batch-run.test.mjs",
+    "tests/field-lessons-batch-aa-core.test.mjs",
+    "tests/field-lessons-batch-ab-core.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-p.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/lanes-run.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/router.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ]
+  }
+ ]
+}

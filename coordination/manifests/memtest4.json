@@ -1,0 +1,14 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "memtest4",
+   "agent": "cursor", "model": "composer-2.5",
+   "tier": "cheap",
+   "context": ["tools/autotune.mjs", "tests/memory-aware-limits.test.mjs"],
+   "outputs": ["tests/memory-aware-limits.test.mjs"],
+   "prompt": "In tests/memory-aware-limits.test.mjs the test 'darwin failed probe returns pressure-unknown (not freemem fallback)' (around line 89-95) expects availRamGb 0; the contract is now availRamGb null with pressureUnknown true on a failed darwin probe. Update that expectation only (and any sibling expectation of 0 for the unknown case); change nothing in tools/ and weaken nothing else."
+  }
+ ]
+}

@@ -1,0 +1,39 @@
+{
+  "grader": "independent claude-opus review call (separate from the builder), given only the images and the written criteria",
+  "scores_transcribed_by": "builder",
+  "scores": {
+    "hive": {
+      "layout": 3.4,
+      "ring": 3.6,
+      "streams": 2.2,
+      "cards": 3.5,
+      "colour": 3.4,
+      "typography": 3.6,
+      "panels": 3.9,
+      "motion": 3.0,
+      "phone": 3.3
+    },
+    "cockpit": {
+      "layout": 3.6,
+      "rows": 3.4,
+      "entity": 3.3,
+      "boxes": 3.5,
+      "loop": 3.9,
+      "stream": 3.3,
+      "stack": 3.8,
+      "header": 3.4,
+      "colour": 3.3,
+      "typography": 3.1,
+      "phone": 3.0
+    }
+  },
+  "overall": {
+    "hive": 3.3,
+    "cockpit": 3.4
+  },
+  "blurred_ssim_vs_target": {
+    "hive": "0.611829",
+    "cockpit": "0.560682"
+  },
+  "idle_cpu_note": "headless Chromium with software rendering; real browsers are lower"
+}

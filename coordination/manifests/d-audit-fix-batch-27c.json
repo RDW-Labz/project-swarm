@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-27c",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 27c (logging-only visibility round). Edit ONLY tools/swarm/core-51.mjs. This file contains base-check caching, the integration journal and temporary worktree cleanup; it is not a money, kill or lock file, so no separate Opus review is required for this batch. Visibility only: do NOT change control flow, return values, fallbacks, throws, exports, cleanup or journal behavior, command output, or tests. No refactors or reformatting.\n\nAudit: docs/state/silent-failures.md. Line numbers below are CURRENT on origin/swarm/train6 (2a8dda7, 1.167.29). Locate each catch by the quoted code; bind the error exactly as described. Keep the same recompute/cleanup behavior after every change.\n\nPer-catch specification (file order):\n\n1. line 74: `try { const record = JSON.parse(cached.toString('utf8')); if (record.checksKey === checksKey) return record; } catch { /* recompute below */ }` in the base-check cache read. LOG-ALWAYS with fixed safe detail: bind error and `console.error('[tools/swarm/core-51.mjs] unusable base-check cache:', error instanceof SyntaxError ? 'invalid JSON' : (error?.name ?? 'failed'));`. Never log error.message or the cached contents. The function must still fall through and recompute.\n\n2. line 263: `try { await pending.catch(() => {}); await recoverIntegrationJournal(root); }` inside the SIGINT/SIGTERM interrupt handler. LEAVE the `pending.catch(() => {})` exactly as is: it is the queue serializer and the handler must exit after restoring the journal.\n\n3. line 328: `if (added) { try { await git(root, ['worktree', 'remove', '--force', worktree]); } catch { /* best-effort cleanup */ } }`. SILENT-ENOENT. Bind error. If error?.code !== 'ENOENT', `console.error('[tools/swarm/core-51.mjs] base-check worktree cleanup:', error?.code ?? 'failed');`. Do not log the worktree path or the git message. Keep the cleanup best-effort and the surrounding flow unchanged.\n\n4. line 329: `if (temporary) await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});`. LEAVE (forced temporary-directory cleanup).\n\n5. line 435: `try { info = await fs.lstat(target); } catch { /* missing: caught by bytesAt below */ }`. LEAVE (a missing resource is reported by bytesAt immediately below).\n\nDo not touch any other catch. Forbidden shortcuts: `catch (e) { e; }`, `.catch((_e) => ...)` with no real log, `void error`, unused binding.\n\nAfter editing: run `node --import ./tests/_isolate-config.mjs --test tests/base-checks-placeholders.test.mjs tests/ci-queue.test.mjs tests/swarm-source-helper.test.mjs`. If a test fails because it asserts empty stderr on the newly logged cache or worktree path, STOP and return blocked with the test name; do not edit a test. Final summary: one line per numbered catch saying changed (with the exact log text) or LEFT, plus the test result.",
+      "context": [
+        "docs/state/silent-failures.md",
+        "tests/base-checks-placeholders.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/swarm-source-helper.test.mjs"
+      ],
+      "outputs": [
+        "tools/swarm/core-51.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [],
+      "ignoreTestsReason": "The focused base-check and CI-queue tests are in context and run by the worker and by integrate."
+    }
+  ],
+  "checks": [
+    {
+      "name": "core51-units",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/base-checks-placeholders.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/swarm-source-helper.test.mjs"
+      ]
+    }
+  ]
+}

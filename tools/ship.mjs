@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { packagingChangeWarnings } from './packaging-check.mjs';
 import { loadLocalConfig } from './local-config.mjs';
+import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -74,7 +75,12 @@ export async function resolveToolchainBin(prog, { env = process.env, home = os.h
   const pathDirs = String(env.PATH ?? '').split(':').filter(Boolean);
   const tried = [path.join(dir, prog), path.join(dir, 'bin', prog), ...pathDirs.map(entry => path.join(entry, prog))];
   for (const candidate of tried) {
-    try { await access(candidate); return { path: candidate, tried }; } catch { /* try the next candidate */ }
+    try { await access(candidate); return { path: candidate, tried }; } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'EACCES' && code !== 'EISDIR') {
+        console.error('[tools/ship.mjs] resolveToolchainBin:', error?.message ?? error);
+      }
+    }
   }
   return { path: null, tried };
 }
@@ -238,7 +244,10 @@ async function readAddedTestFileLines(exec, root, payloadBase, integratedFiles) 
             .map(line => line.slice(1))
             .join('\n');
         }
-      } catch { /* fall back to a whole-file read below */ }
+      } catch (error) {
+        text = null;
+        if (error?.code !== 'ENOENT') console.error('[tools/ship.mjs] readAddedTestFileLines git diff:', error?.message ?? error);
+      }
     }
     if (text === null) {
       try { text = await fs.readFile(path.join(root, file), 'utf8'); } catch { continue; /* removed or unreadable: nothing to scan */ }
@@ -279,7 +288,9 @@ async function pushedFileNames(exec, root, payloadBase) {
     try {
       const diffRes = await exec('git', ['diff', '--name-only', `${baseSha}...HEAD`], { cwd: root });
       if (diffRes && diffRes.code === 0) for (const line of diffRes.stdout.split('\n')) if (line.trim()) files.add(line.trim());
-    } catch { /* no usable diff against base */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/ship.mjs] pushedFileNames git diff:', error?.message ?? error);
+    }
   }
   return files;
 }
@@ -350,7 +361,9 @@ export async function loadPrivateNames(root, file, { env = process.env, home = o
   }
   const rootFile = path.join(root, 'coordination/private-names.txt');
   try { return await load(rootFile); }
-  catch { /* fall through to the local config */ }
+  catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/ship.mjs] loadPrivateNames coordination file:', error?.message ?? error);
+  }
   let config;
   try { config = loadLocalConfig({ home, env }); } catch { config = {}; }
   if (config?.privateNames) {
@@ -869,14 +882,18 @@ export async function inferDefaultBranch(exec, root) {
       const branch = /^refs\/remotes\/origin\/(.+)$/.exec(symbolic.stdout.trim())?.[1];
       if (branch && HEAD_RE.test(branch)) return branch;
     }
-  } catch { /* try the remote's human-readable fallback */ }
+  } catch (error) {
+    console.error('[tools/ship.mjs] inferDefaultBranch symbolic-ref:', error?.message ?? error);
+  }
   try {
     const remote = await exec('git', ['remote', 'show', 'origin'], { cwd: root });
     if (remote?.code === 0) {
       const branch = /^\s*HEAD branch:\s*(\S+)/m.exec(remote.stdout)?.[1];
       if (branch && HEAD_RE.test(branch)) return branch;
     }
-  } catch { /* no usable default branch */ }
+  } catch (error) {
+    console.error('[tools/ship.mjs] inferDefaultBranch remote show:', error?.message ?? error);
+  }
   return null;
 }
 
@@ -1001,8 +1018,8 @@ export async function verifyPreExistingOnBase({ root, argv, integratedFiles, bas
   } catch {
     return { checked: false };
   } finally {
-    if (added) { try { await exec('git', ['worktree', 'remove', '--force', checkout], { cwd: root }); } catch { /* best-effort cleanup */ } }
-    await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+    if (added) { try { await exec('git', ['worktree', 'remove', '--force', checkout], { cwd: root }); } catch (error) { console.error('[tools/ship.mjs] verifyPreExistingOnBase worktree remove:', error?.message ?? error); } }
+    await fs.rm(temporary, { recursive: true, force: true }).catch((error) => { console.error('[tools/ship.mjs] verifyPreExistingOnBase temp dir rm:', error?.message ?? error); });
   }
 }
 
@@ -1065,10 +1082,19 @@ function positiveTargetedPass(output, file, runner) {
   return false;
 }
 
+async function shipStatusStdout(exec, root) {
+  const statusRes = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
+  if (!statusRes || statusRes.code !== 0) throw new Error('git status failed');
+  return String(statusRes.stdout ?? '');
+}
+
 async function cleanHeadAt(exec, root, expectedSha) {
   try {
-    const status = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
-    if (!status || status.code !== 0 || String(status.stdout ?? '').trim() !== '') return false;
+    const dirty = await dirtyFiles(root, {
+      untracked: false,
+      runStatus: () => shipStatusStdout(exec, root),
+    });
+    if (dirty.length) return false;
     const head = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
     return Boolean(head && head.code === 0 && head.stdout.trim() === expectedSha);
   } catch {
@@ -1188,8 +1214,8 @@ async function verifiedFlakyEvidence({ root, repo, payload, sha, ci, ciRollup, c
       return { eligible: false, reason: `local or base probe lacked positive passing evidence for ${file}` };
     }
   } finally {
-    if (added) { try { await exec('git', ['worktree', 'remove', '--force', checkout], { cwd: root }); } catch { /* best effort */ } }
-    await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+    if (added) { try { await exec('git', ['worktree', 'remove', '--force', checkout], { cwd: root }); } catch (error) { console.error('[tools/ship.mjs] verifiedFlakyEvidence worktree remove:', error?.message ?? error); } }
+    await fs.rm(temporary, { recursive: true, force: true }).catch((error) => { console.error('[tools/ship.mjs] verifiedFlakyEvidence temp dir rm:', error?.message ?? error); });
   }
   if (!await cleanHeadAt(exec, root, sha)) return { eligible: false, reason: 'head or tracked tree changed after base probe' };
   return { eligible: true, files, runIds, headSha: sha, baseSha, beforeRollup: ciRollup, failedNames };
@@ -1204,10 +1230,10 @@ async function addedTestFileNames(exec, root, payloadBase) {
   // throws for either call here (a repo shape it does not model, a transient git error) is treated
   // the same as one that resolves cleanly with nothing to report: no new test files found.
   try {
-    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root }).catch(() => null);
+    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root }).catch((error) => { void error; return null; });
     const baseSha = baseRes && baseRes.code === 0 ? baseRes.stdout.trim() : null;
     if (!baseSha) return [];
-    const diffRes = await exec('git', ['diff', '--name-only', '--diff-filter=A', `${baseSha}...HEAD`], { cwd: root }).catch(() => null);
+    const diffRes = await exec('git', ['diff', '--name-only', '--diff-filter=A', `${baseSha}...HEAD`], { cwd: root }).catch((error) => { void error; return null; });
     if (!diffRes || diffRes.code !== 0) return [];
     return diffRes.stdout.split('\n').map(line => line.trim()).filter(line => line && TEST_FILE_RE.test(line));
   } catch {
@@ -1662,9 +1688,16 @@ export async function ship(options) {
   if (mutantsSkippedRedBase && requireSections.some(name => name.toLowerCase() === 'mutation check')) {
     return { ...base, status: 'refused', reason: 'mutants skipped: red base (checks failed); required Mutation check section cannot be satisfied' };
   }
-  const statusRes = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
-  if (statusRes.code !== 0) return { ...base, status: 'refused', reason: 'git status failed' };
-  if (statusRes.stdout.trim() !== '') return { ...base, status: 'refused', reason: 'commit first' };
+  let dirtyBeforeShip;
+  try {
+    dirtyBeforeShip = await dirtyFiles(root, {
+      untracked: false,
+      runStatus: () => shipStatusStdout(exec, root),
+    });
+  } catch {
+    return { ...base, status: 'refused', reason: 'git status failed' };
+  }
+  if (dirtyBeforeShip.length) return { ...base, status: 'refused', reason: `commit first${formatDirtyListing(dirtyBeforeShip)}` };
   const shaRes = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
   if (shaRes.code !== 0 || shaRes.stdout.trim() === '') return { ...base, status: 'refused', reason: stepFailed('rev-parse', shaRes) };
   const sha = shaRes.stdout.trim();
@@ -2169,7 +2202,7 @@ export async function ship(options) {
     const passedRunIds = failedRunIds(ciRollup, passedNames);
     const fullLogs = [];
     for (const id of passedRunIds) {
-      const logRes = await exec('gh', ['run', 'view', id, '--repo', repo], { cwd: root }).catch(() => null);
+      const logRes = await exec('gh', ['run', 'view', id, '--repo', repo], { cwd: root }).catch((error) => { void error; return null; });
       if (logRes && logRes.code === 0) fullLogs.push(logRes.stdout);
     }
     const durations = fullLogs.flatMap(parsePytestDurations);

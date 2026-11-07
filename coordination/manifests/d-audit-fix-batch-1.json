@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-gc-ledger-autopilot",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md). Read that doc's methodology section first (top of file) and the three per-file sections for tools/gc.mjs, tools/ledger-backup.mjs, tools/autopilot.mjs (search for '### tools/gc.mjs', '### tools/ledger-backup.mjs', '### tools/autopilot.mjs' - each lists exact line numbers and the catch form found there: try-catch-no-binding, dot-catch-arrow, or dot-catch-noop-expr).\n\nFor EACH flagged line in those three files only (do not touch any other file, do not fix findings in other files even if you notice them while reading):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next).\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition already evidenced by context - e.g. an optional file that may not exist yet (ENOENT), a best-effort cleanup step, a first-run-has-no-history case. For these, keep the swallow (do not change control flow or add noisy logging for the expected path), but if the catch currently swallows ANY error unconditionally, narrow it: check the error's code/message for the specific expected case (e.g. `error?.code === 'ENOENT'`) and continue silently only for that case; for anything else unexpected, add minimal visibility (see point 3) before continuing with the SAME behavior as today (still no throw, same return value) - the goal is 'stop eating unrelated bugs disguised as the expected case', not changing what the function returns.\n   (b) A genuinely UNEXPECTED-error catch with no narrower expected case. Add minimal visibility only: a one-line log of the error's message (prefer this file's own existing convention if there's an established logger/journal/appendEvent call nearby in the same file - match it; otherwise `console.error('[tools/<file>.mjs] <short context>:', error?.message ?? error)`). Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next - this is a visibility-only fix, not a behavior change. tools/autopilot.mjs already has a documented 'fail closed' convention near line 704-800 (read it) where some catches build an `error:` field onto a returned object instead of logging - if the catch you're fixing is part of that same fail-closed call chain, match that existing convention (populate the existing error-carrying field) rather than bolting on a separate console.error.\n3. If a catch binds no error variable (`catch {}` / `catch { ... }` / `.catch(() => {})`), add the binding (`catch (error) { ... }` / `.catch((error) => { ... })`) so you have something to inspect/log - this alone does not change behavior.\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration and will send back any regression as a follow-up. List, in your final summary, which of the ~37 flagged lines you narrowed (case a) vs. just added logging to (case b), with one line each.",
+      "context": [
+        "docs/state/silent-failures.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/gc.mjs",
+        "tools/ledger-backup.mjs",
+        "tools/autopilot.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/autopilot-blocker-resolved.test.mjs",
+        "tests/autopilot-busy.test.mjs",
+        "tests/autopilot-integrate-clean.test.mjs",
+        "tests/autopilot-ledger-only.test.mjs",
+        "tests/autopilot-lock-parent.test.mjs",
+        "tests/autopilot-lock.test.mjs",
+        "tests/autopilot-no-outputs.test.mjs",
+        "tests/autopilot-policy-pass.test.mjs",
+        "tests/autopilot-quiet-poll.test.mjs",
+        "tests/autopilot-readonly-runs.test.mjs",
+        "tests/autopilot-retry-duplicates.test.mjs",
+        "tests/autopilot-start-ready.test.mjs",
+        "tests/autopilot-wide-waves.test.mjs",
+        "tests/autopilot.test.mjs",
+        "tests/b7-review-fixes.test.mjs",
+        "tests/brain-commands.test.mjs",
+        "tests/fix-1167-12.test.mjs",
+        "tests/generated-state.test.mjs",
+        "tests/guard-backup-fixes.test.mjs",
+        "tests/guard-backup-fixes4.test.mjs",
+        "tests/integrate-autocommit.test.mjs",
+        "tests/ledger-backup.test.mjs",
+        "tests/ledger-merge.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/memory-fixes.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/run-kind-nonintegrating.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/wave-batch.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "worker workspace doesn't include the test suite (isolated-file copy per swarm skill); full local suite runs against the integrated result before shipping, not inside the worker"
+    }
+  ]
+}

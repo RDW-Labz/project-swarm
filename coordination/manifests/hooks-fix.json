@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "hooks-fix",
+      "agent": "auto",
+      "prompt": "tests/orchestrator-lane.test.mjs test hooks: opt-out file, refresh-only on update, unique temp file, mode kept now fails (line 396: a project set up with the checkpoint hook gets the orchestrator hooks on a refresh-only update: expected updated, got unchanged). The change that re-points all hooks must NOT remove the existing intended behavior: with refreshOnly, a project that already has the checkpoint hook or any orchestrator hook still gets the missing orchestrator hook entries added (ensureHookSpecs / ensureOrchestratorHooks / refreshProjectInstallHooks in tools/install.mjs); only a project with none of our hooks stays untouched. Restore that behavior while keeping the re-pointing of every existing swarm hook command to current. Keep tests/hooks-repoint-all.test.mjs passing and add one case for it there. Run tests/orchestrator-lane.test.mjs, tests/hooks-repoint-all.test.mjs and every test file with hook or install or handbuild in the name. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/install.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/hooks-repoint-all.test.mjs",
+        "tools/handbuild-commands.mjs",
+        "tools/swarm/core-12.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/install.mjs",
+        "tools/handbuild-commands.mjs",
+        "tests/hooks-repoint-all.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/handbuild-guard-verbs.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/install.test.mjs",
+        "tests/installed-swarm.test.mjs",
+        "tests/link.test.mjs",
+        "tests/phase10-swarm-command.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/pins-cycle.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/pointer-safety.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/runner-pointer.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/t101-vendored-skills.test.mjs",
+        "tests/update.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}

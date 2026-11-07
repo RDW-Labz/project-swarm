@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-tin2-cockpit-ready",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable.\n\nTrain 9 tin 2 review found one blocker: the Cockpit headline/tiles use the canonical server counts, but its ready column, NEXT UP card and '+N more' overflow still derive readiness from the stripped commandCenterLedger, which has no dependsOn (and no type). Dependency-blocked todo tickets are therefore rendered as ready and as NEXT UP next to a correct 'ready 15' tile. Fix the blocker and the closely related followups below. Do not change unrelated behavior.\n\nBLOCKER FIX:\n1. tools/command-center-snapshot.mjs buildProjectCockpit: add `readyIds` to the returned payload. Use the board card's dependency-aware ready list: when project.card.next.items is an array, readyIds = its ids as strings (filter empty), else null. (card.next.items is built from readyTickets over the full ledger, so it is the same canonical ready set as counts.ready.) Keep every existing field.\n2. tools/watch-assets/cc-cockpit-mount.js: when project.readyIds is an array, build a readyFn from that set and pass it to BOTH cockpitLedgerRows(ledger, readyFn, ...) and renderReadyEmptyState(col, ledger, readyFn), so the ready rows, the NOW/NEXT UP card and the overflow counts use the server's dependency-aware ready set. When readyIds is absent, keep the current readyTickets fallback. The server counts still drive the header/tiles.\n3. tools/watch-assets/cc-cockpit-mount.js headerCounters fallback (the branch used when project.counts is absent): do NOT guess need-you from review + open human ticket statuses. Use project.card.blocked.needYou when it is a finite number, otherwise 0; keep preferring project.total/project.done for tickets/done. This removes the 8-vs-5 status guess from older payloads.\n\nTEST FIDELITY:\n4. tests/cc-cockpit-mount.test.mjs: add a render test with a stripped ledger that has one genuinely ready ticket R-1 and one todo T-1 with NO dependsOn in the rows (because commandCenterLedger strips it), project.readyIds = ['R-1'], project.counts = { total: 9, done: 3, ready: 1, review: 0, blocked: 0, todo: 1, cancelled: 0, proposed: 0, superseded: 0, remaining: 6, percentDone: 33, counted: 9, needsYou: 7 }, and project.card.blocked.needYou = 7. Assert: the NEXT UP card shows R-1 and the '1 / 1' ready count; T-1 is not rendered in the ready/left column as ready and is not the NEXT UP lead; the header tickets/done/need-you show the server counts (9 / 3 / 7), not the ledger-row guesses.\n5. tests/command-center-counts.test.mjs: strengthen the 'stripped commandCenterLedger plus server counts' test so the sources cannot be confused. Make counts differ from what the stripped rows would produce (for example counts total 9, ready 0, done 4) and assert mergeCardTicketCounts returns those values AND source is the counts field, not the ledger fallback. Keep the existing canonical-definition and cross-page tests.\n6. tests/cc-hive-mount.test.mjs: give proj-a a realistic `counts` object (from its ledger: total 4, done 2, ready 0, blocked 1, review 1, todo 0, cancelled 0, proposed 0, superseded 0, remaining 2, percentDone 50, counted 4) so the Hive DOM test exercises the canonical counts path instead of the ledger-rows fallback; keep the same rendered expectations (tickets4, done2 of 4, 50%). Keep the explicit fallback coverage elsewhere in the suite.\n\nCONSTRAINTS: no hard-coded sample data in production paths; no new dependencies; keep the Command Center payload money-free; do not change the canonical definitions in tools/ticket-counts.mjs; do not edit .swarm/; keep the Cockpit's rows from the ledger (only the ready selection changes).\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/command-center-counts.test.mjs tests/cc-cockpit-mount.test.mjs tests/cc-hive-mount.test.mjs tests/command-center-snapshot.test.mjs tests/command-center-live.test.mjs tests/command-center-lists.test.mjs -> all pass.",
+      "context": [
+        "tools/command-center-snapshot.mjs",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cockpit-lists.js",
+        "tools/ticket-counts.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/command-center-counts.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/command-center-live.test.mjs",
+        "tests/command-center-lists.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/command-center-snapshot.mjs",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/command-center-counts.test.mjs",
+        "tests/cc-hive-mount.test.mjs"
+      ],
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "cockpit ready/counts fix; focused suites run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-tin2-cockpit-ready",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-counts.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/command-center-live.test.mjs",
+        "tests/command-center-lists.test.mjs"
+      ]
+    }
+  ]
+}

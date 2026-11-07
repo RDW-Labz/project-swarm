@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "b5-eval-group",
+      "agent": "auto",
+      "prompt": "tests/lessons-commands.test.mjs test eval commands list, validate and write a manifest for the shipped evals fails with INVALID managers: unreadable: ENOENT: evals/managers holds replay fixtures for the Ticket Manager modules (README.md, s11-budget-cap, s13-lane-down, s13-ticket-context, stale-pointer, used by tools/managers/replay.mjs and tests/managers) and is not an eval, but listEvals in tools/evals.mjs (line ~136) treats every folder under evals as an eval. Add an explicit opt-out: a folder under evals that contains a file named .eval-group is a fixture group, skipped by listEvals and by every command that lists or validates evals (look for other readers of the evals directory in tools/lessons-commands.mjs and tools/evals.mjs), and everything else keeps being validated exactly as today (a folder without eval.json and without the marker is still reported INVALID). Create the empty-bodied marker file evals/managers/.eval-group (one line of text: fixture group for the manager replays, not an eval) as an output. Add tests in tests/evals-groups.test.mjs: a group folder is skipped by list and validate, an unmarked folder without eval.json is still INVALID, the shipped evals count stays 12 plus the managers group skipped. Write only the named files. No token-shaped literals. ignoreTests reason: only evals files change.",
+      "context": [
+        "tools/evals.mjs",
+        "tools/lessons-commands.mjs",
+        "tests/lessons-commands.test.mjs",
+        "evals/managers/README.md",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/evals.mjs",
+        "tools/lessons-commands.mjs",
+        "evals/managers/.eval-group",
+        "tests/evals-groups.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/lesson-import.test.mjs",
+        "tests/evals.test.mjs"
+      ]
+    }
+  ]
+}

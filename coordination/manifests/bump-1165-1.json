@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "bump-1-165-1",
+      "agent": "auto",
+      "prompt": "Bump the version from 1.165.0 to 1.165.1. In package.json and package-lock.json (both places in the lock: the top version and packages[\"\"].version) change 1.165.0 to 1.165.1. In README.md change every 1.165.0 pin (kickoff text, tag name) to 1.165.1. In these tests replace the 1.165.0 pin with 1.165.1 where it is the current-version pin (assertions, test titles, the pin map in the AH release test): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. In CHANGELOG.md add a NEW top entry ## 1.165.1 above the 1.165.0 entry (keep it unchanged) with the lead-in line: The board shows no money figures it cannot prove, and Live no longer flaps. And these bullets with a bold lead word like the 1.165.0 entry: Board: billed today, billed all time, list value, the cap cells and Spend today are removed from the board, project page, overview and their API responses (spend files and cap enforcement are unchanged). | Board: the project page Live chip has one owner and says connecting only after two missed polls; the run stream sends a ping every 10 seconds. | Scope: a project can list extra root files in scopeRootFiles, and one bad ticket is rejected alone instead of the whole split. | S2: build tickets own their tests; job ignoreTests can exceed 100 files with a reason. Change nothing else. Run the six listed test files; all must pass. ignoreTests reason: only version pins and the changelog change; the fixture ledger is a frozen data copy.",
+      "context": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "outputs": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "timeoutMs": 600000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/acceptance-review-worktree.test.mjs",
+        "tests/anthropic-lane.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/fixtures/make-practice-project.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/goal.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/leads.test.mjs",
+        "tests/lessons120-ship.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/repo-map.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/router.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/swarm-produced-hash.test.mjs",
+        "tests/ticket-context.test.mjs",
+        "tests/ticket-target-worktree.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}

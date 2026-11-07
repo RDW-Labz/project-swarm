@@ -1,0 +1,58 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "contract": "coordination/review/cc-design-contract.md",
+ "jobs": [
+  {
+   "id": "ccnavfix",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "Two Command Center nav tests still fail after the artifact port (details in coordination/review/cc-port-failures.txt): tests/command-center-nav.test.mjs (read-only) \"hive node click opens cockpit for that card project id\" fails with \"cockpit breadcrumb visible\" and \"cockpit breadcrumb click returns to hive with node cards visible\" fails with \"breadcrumb nav-block\". Navigation goes through mountCcRouter in tools/watch-assets/cc-router.js (now in your outputs). Read the test to see exactly which element it treats as the cockpit breadcrumb (selector, the nav-block display/visibility it checks) and how the router switches views, then make the router + Cockpit mount show that breadcrumb (The Hive > PROJECT-NAME, styled like the artifact cockpit top bar in docs/design/reference/command-center-artifact/cockpit-desktop.png) when the Cockpit is shown and hide it on the Hive, and make clicking it return to the Hive with node cards visible. Keep the ported look; keep every other test in context passing (tests/command-center-boot.test.mjs, tests/cc-cockpit-mount.test.mjs). tools/watch-assets/cc-cockpit-orbit.js is readable context.",
+   "context": [
+    "coordination/review/cc-port-failures.txt",
+    "coordination/review/cc-design-contract.md",
+    "tests/command-center-nav.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tools/watch-assets/command-center-boot.js",
+    "tools/watch-assets/cc-cockpit-orbit.js",
+    "docs/design/reference/command-center-artifact/cockpit-desktop.png",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/command-palette.test.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-router.js",
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tools/watch-assets/cc-cockpit.css"
+   ],
+   "timeoutMs": 1500000
+  }
+ ],
+ "checks": [
+  {
+   "name": "cc-units",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-routes-flag.test.mjs",
+    "tests/watch-assets-browser-safe.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/command-center-nav.test.mjs",
+    "tests/command-center-snapshot.test.mjs",
+    "tests/command-center-tour.test.mjs",
+    "tests/watch-vendor.test.mjs",
+    "tests/command-palette.test.mjs"
+   ]
+  }
+ ]
+}

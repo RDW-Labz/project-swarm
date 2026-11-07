@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8012-gaps3",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tests/board-accuracy-card.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "coordination/reviews/acc-review-t8012-3.json",
+        "tools/board-data.mjs",
+        "tools/build-progress.mjs",
+        "tools/tickets.mjs"
+      ],
+      "prompt": "T-8012 review gaps (coordination/reviews/acc-review-t8012-3.json), tests only in tests/board-accuracy-card.test.mjs: (1) the facts.untrackedRuns oracle must NOT call offLedgerRuns (or any tools/ export): restate the rule inside the test from the run files and ledger JSON read from disk (14-day window or live; exclude nonIntegrating and ids/manifest names matching smoke, lane-test, lane-bench, probe, doctor; count a run when any job id is not a ticket id in any family ledger); (2) the next.ready / next.items oracle must NOT call ticketsReadyToRun or any tools/ export: restate the ready rule from the ledger JSON (status ready or todo and every dependsOn id is done; exclude human, cancelled, proposed); (3) expected titles in next.items must apply the same visible-text cleanup the card applies (read boardTitle/sanitizeWorkerText in tools/board-data.mjs ~605 and restate the transformation in the test, e.g. trimming and length cap) and include a fixture title that the cleanup changes. Add a guard test that fails if the test file imports anything from ../tools/ other than the functions under test (projectOverview/boardSnapshot) and the fixture helper. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-card.test.mjs`."
+    }
+  ]
+}

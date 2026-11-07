@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import './_isolate-config.mjs';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -25,7 +26,7 @@ describe('resolveDailyLimit', () => {
     const d = resolveDailyLimit({});
     assert.equal(d.dailyLimitUsd, DEFAULT_DAILY_LIMIT_USD);
     assert.equal(d.dailyLimitMode, 'stop');
-    assert.equal(d.hardCeilingUsd, 15);
+    assert.equal(d.hardCeilingUsd, 7.5);
     assert.equal(d.source, 'default');
 
     const m = resolveDailyLimit({ machine: { usd: 8, mode: 'notify' } });

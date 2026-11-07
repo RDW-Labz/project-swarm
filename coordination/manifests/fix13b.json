@@ -1,0 +1,33 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "fix13b",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "tools/remote.mjs",
+    "tests/remote.test.mjs",
+    "tests/fix-1167-13.test.mjs"
+   ],
+   "outputs": [
+    "tools/remote.mjs",
+    "tests/remote.test.mjs",
+    "tests/fix-1167-13.test.mjs"
+   ],
+   "prompt": "The new logic in tools/remote.mjs takeDown (dead-pid detection with deps.alive, real-listener lookup with deps.listenerPids and deps.commandOf) breaks 20 existing tests in tests/remote.test.mjs (for example 'remote off removes the Tailscale entry, stops the board and deletes the token', 'tailscale serve failing leaves nothing running', 'if Funnel shows up after serve is set, everything is taken down') whose fake deps do not provide those new functions and expect the old behaviour (kill the recorded pid, report 'stopped the board'). Fix tools/remote.mjs so that every new dependency is OPTIONAL: when deps.alive is absent, behave exactly as before (use the recorded pid as is); when deps.listenerPids or deps.commandOf is absent, skip the real-listener search; the production deps object (the real one built for the CLI) provides all three. Do not edit the old tests except where one of them is truly about the changed contract (then adapt only that expectation). Keep tests/fix-1167-13.test.mjs passing (it injects the new deps). Run tests/remote.test.mjs, tests/remote-exec.test.mjs, tests/remote-exec-real.test.mjs and tests/fix-1167-13.test.mjs and make them all pass.",
+   "ignoreTests": [
+    "tests/adapters.test.mjs",
+    "tests/board-owner-routes.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/installed-swarm.test.mjs",
+    "tests/server-restart-review.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/watch-token-urls.test.mjs"
+   ]
+  }
+ ]
+}

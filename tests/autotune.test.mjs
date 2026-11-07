@@ -36,7 +36,10 @@ describe('readMachine', () => {
     });
     assert.equal(m.cores, 2);
     assert.equal(m.freeRamGb, 8);
+    assert.equal(m.availRamGb, 8);
     assert.equal(m.totalRamGb, 16);
+    assert.equal(m.swapUsedGb, 0);
+    assert.equal(m.swapTotalGb, 0);
     assert.equal(m.cpuPercent, 42);
   });
 });

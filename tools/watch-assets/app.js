@@ -2,15 +2,53 @@
 (function () {
   'use strict';
 
-  var params = new URLSearchParams(location.search);
-  var TOKEN = params.get('t') || '';
-  try {
-    if (TOKEN && window.history && history.replaceState) {
-      history.replaceState(history.state, '', location.pathname + location.hash);
+  var tokenRead = false;
+  var tokenValue = '';
+  function watchToken() {
+    if (tokenRead) { return tokenValue; }
+    tokenRead = true;
+    var params = null;
+    var hasQueryToken = false;
+    var queryToken = '';
+    var cleanSearch = '';
+    try {
+      params = new URLSearchParams((window.location && window.location.search) || '');
+      hasQueryToken = params.has('t');
+      queryToken = params.get('t') || '';
+      params.delete('t');
+      cleanSearch = params.toString();
+    } catch (e) {
+      var raw = String((window.location && window.location.search) || '').replace(/^\?/, '');
+      var kept = [];
+      raw.split('&').forEach(function (part) {
+        if (!part) { return; }
+        var pieces = part.split('='), key = pieces.shift().replace(/\+/g, ' '), value = pieces.join('=').replace(/\+/g, ' ');
+        try { key = decodeURIComponent(key); value = decodeURIComponent(value); } catch (ignore) { return; }
+        if (key === 't') { if (!hasQueryToken) { queryToken = value; } hasQueryToken = true; }
+        else { kept.push(part); }
+      });
+      cleanSearch = kept.join('&');
     }
-  } catch (e) {
-    if (window.console) console.error('could not clean address bar', e);
+    var stored = '';
+    try {
+      if (hasQueryToken) { window.sessionStorage.setItem('swarm-watch-token', queryToken); }
+      stored = window.sessionStorage.getItem('swarm-watch-token') || '';
+    } catch (e) { /* private browsing can disable session storage */ }
+    tokenValue = stored || queryToken;
+    if (hasQueryToken && params && window.history && typeof window.history.replaceState === 'function') {
+      try {
+        window.history.replaceState(window.history.state, '', window.location.pathname + (cleanSearch ? '?' + cleanSearch : '') + window.location.hash);
+      } catch (e) { /* leave the address alone if history is unavailable */ }
+    } else if (hasQueryToken && window.history && typeof window.history.replaceState === 'function') {
+      try {
+        window.history.replaceState(window.history.state, '', window.location.pathname + (cleanSearch ? '?' + cleanSearch : '') + window.location.hash);
+      } catch (e) { /* leave the address alone if history is unavailable */ }
+    }
+    return tokenValue;
   }
+  window.BoardLib = window.BoardLib || {};
+  window.BoardLib.watchToken = watchToken;
+  var TOKEN = watchToken();
   var TAB_NAMES = ['run', 'plan', 'commands', 'gallery'];
   var MAX_PENDING = 50;
   var registry = {};
@@ -27,16 +65,14 @@
   var importFailed = false;
   var needRunFetch = false;
   var streamSnapshotSeen = false;
+  var streamLastMessageAt = 0;
+  var STREAM_HEARTBEAT_MS = 10000;
   var pendingDeltas = [];
   var drawer = document.getElementById('drawer');
   var lastFocus = null;
 
-  function withToken(path) {
-    return path + (path.indexOf('?') < 0 ? '?' : '&') + 't=' + encodeURIComponent(TOKEN);
-  }
-
   function fetchJson(path) {
-    return fetch(withToken(path), { cache: 'no-store' }).then(function (res) {
+    return fetch(path, { cache: 'no-store', headers: { 'x-watch-token': TOKEN } }).then(function (res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
     });
@@ -115,18 +151,36 @@
       });
   }
 
-  function setConnection(ok) {
+  function setConnection(state) {
     var status = document.getElementById('status');
     if (!status) return;
+    var ok = state === true || state === 'live';
     if (ok) {
-      if (status.getAttribute('data-conn') === 'lost') {
+      if (status.getAttribute('data-conn')) {
         status.removeAttribute('data-conn');
         renderAll(true);
       }
     } else {
       status.setAttribute('data-conn', 'lost');
-      status.textContent = 'connection lost';
+      status.textContent = state === 'connecting' ? 'connecting' : 'connection lost';
     }
+  }
+
+  function streamStatus() {
+    if (window.BoardLib && window.BoardLib.streamState) {
+      return window.BoardLib.streamState({ lastMessageAt: streamLastMessageAt, now: Date.now(), heartbeatMs: STREAM_HEARTBEAT_MS });
+    }
+    if (!streamLastMessageAt || Date.now() - streamLastMessageAt > STREAM_HEARTBEAT_MS * 2) return { state: 'connecting' };
+    return { state: 'live' };
+  }
+
+  function updateStreamConnection() {
+    setConnection(streamStatus().state);
+  }
+
+  function noteStreamMessage() {
+    streamLastMessageAt = Date.now();
+    updateStreamConnection();
   }
 
   function flushDeltas() {
@@ -161,11 +215,12 @@
 
   function openStream() {
     if (!window.EventSource) {
-      setConnection(false);
+      setConnection('connecting');
       return;
     }
-    var es = new EventSource(withToken('/events'));
+    var es = new EventSource('/events');
     es.addEventListener('snapshot', function (ev) {
+      noteStreamMessage();
       var run = parseEvent(ev);
       if (run === undefined) return;
       streamSnapshotSeen = true;
@@ -173,13 +228,18 @@
       renderAll();
     });
     es.addEventListener('delta', function (ev) {
+      noteStreamMessage();
       applyDeltaEvent(parseEvent(ev));
     });
+    es.addEventListener('ping', function () {
+      noteStreamMessage();
+    });
     es.onopen = function () {
-      setConnection(true);
+      streamLastMessageAt = Date.now();
+      updateStreamConnection();
     };
     es.onerror = function () {
-      setConnection(false);
+      updateStreamConnection();
     };
   }
 
@@ -317,4 +377,5 @@
 
   openStream();
   setInterval(refreshAll, 5000);
+  setInterval(updateStreamConnection, 1000);
 })();

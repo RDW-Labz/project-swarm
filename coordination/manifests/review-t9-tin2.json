@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewt9tin2",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "train 9 tin 2 review: one source for all counts",
+      "prompt": "Delta review of train 9 tin 2 (one source for all counts) on Project Swarm, on top of 1.167.34 (df30c768). The combined code diff is in context at coordination/review/t9-tin2.diff; evidence is in t9-tin2-evidence.json. Full suite is green: 7678 tests, 7647 pass, 0 fail, 22 skipped, 9 todo; focused 62/62. An earlier full-suite run under heavy machine load failed only three load-sensitive tests; each passes isolated on the same head (see evidence.load_flakes).\n\nWhat changed:\n1. NEW tools/ticket-counts.mjs: ticketCountsOf(ledger) is the one canonical count source. Live set = all ledger tickets except status cancelled/proposed/superseded; human (type 'human') tickets ARE included. total/counted are the live length; done and percentDone are computed over that set; remaining = total - done; ready reuses the existing dependency-aware readyTickets(tickets); cancelled/proposed/superseded are reported for the footer but excluded from total.\n2. tools/board-data.mjs: projectOverview() and projectDetail() add counts: ticketCountsOf(ledger) next to ledger, from the same full selected ledger. needsYou is still the owner-inbox count in card.blocked.needYou (tools/board-inbox.mjs), not a ticket-status guess.\n3. tools/command-center-snapshot.mjs: buildProjectCard copies p.counts into card.ticketCounts, merges needsYou from card.blocked.needYou and percentDone from counts; fallback order is counts > p.ledger.tickets > p.tickets.byStatus. The snapshot gains a top-level totals object; patchCommandCenterSnapshot recomputes it. buildProjectCockpit returns the same canonical counts, done/total/percentDone, so the Cockpit header/tiles/footer read server counts instead of deriving them from the stripped commandCenterLedger (which loses dependsOn/type).\n4. Hive: hive-panels cardCounts reads counts.counted/percentDone (no double subtraction of cancelled); deriveHiveView prefers snapshot.totals. Cockpit: cc-cockpit-mount uses project.counts for tickets/done/need-you/ready/review/blocked/todo/cancelled and keeps row rendering from the ledger; cockpit-lists hides superseded rows.\n5. Tests: new tests/command-center-counts.test.mjs covers the canonical definitions (human/cancelled/proposed/superseded, dependency-ready, unapproved proposals, rounding, empty ledger), counts-over-byStatus, cross-page parity on one fixture, patch-vs-rebuild totals, and a stripped-ledger payload with counts. Existing tests updated only where they encoded the old divergent counts (command-center-snapshot, cc-hive-mount).\n\nLive evidence: on the real 1.167.34 board payload for project-swarm (420 ledger rows), the Hive card and Cockpit payload now agree: total 407, done 230, percentDone 57, ready 15, blocked 102, review 5, todo 61, cancelled 13, needsYou 8. The old pair was 408/407 tickets, 8/5 need you, 58/57%, and 70 cockpit-ready because the stripped ledger lost dependsOn.\n\nLook hard at: the live-set definition and any status/human miscount; readyTickets semantics on a full ledger; the fallback order (a payload with both counts and byStatus must never use byStatus); a patched snapshot diverging from a full rebuild (totals, needsYou, per-card counts); needsYou coming from the inbox rather than statuses; any client still deriving a headline count; Hive counted/percent double subtraction; Cockpit tiles reading stale row counts; money fields leaking into the Command Center payload; tests that encode stubs rather than real behavior; and whether the test updates weaken assertions. Report only real findings with file and line, a concrete failure, and a fix.\n\nWrite ONLY coordination/review/t9-tin2-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty. The runner stamps the reviewed head; do NOT add or change a head field.",
+      "context": [
+        "coordination/review/t9-tin2.diff",
+        "coordination/review/t9-tin2-evidence.json",
+        "tools/ticket-counts.mjs",
+        "tools/command-center-snapshot.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/cockpit-lists.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/command-center-counts.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "coordination/review/t9-tin2-review.json"
+      ],
+      "resultFile": "coordination/review/t9-tin2-review.json",
+      "timeoutMs": 1800000
+    }
+  ]
+}

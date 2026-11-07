@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-25c-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 25c fixup (from Opus review of PR #463). Edit ONLY tools/managers/lane-health/index.mjs and tools/lane-pass-routing.mjs. Logging conditions only; change nothing else.\n\n.swarm/runs is listed with readdir without withFileTypes, so a stray non-directory entry (macOS .DS_Store) makes the per-run stat/read throw ENOTDIR, which this batch currently logs on every call.\n1. tools/managers/lane-health/index.mjs: in both `fs.stat(manifestFile).catch((error) => { ... })` handlers this batch added (~line 58 and ~99), stay silent for error?.code === 'ENOENT' OR 'ENOTDIR'. Keep `return null;`.\n2. tools/lane-pass-routing.mjs: in both state.json read catches this batch added (~94 async, ~127 sync), stay silent for ENOENT, ENOTDIR, or SyntaxError; log the rest as now.\n\nThen run: node --import ./tests/_isolate-config.mjs --test tests/lane-health-core.test.mjs tests/lane-idle-words.test.mjs tests/lane-pass-routing.test.mjs tests/self-manage-monitor.test.mjs tests/split-module.test.mjs and confirm green. One-line summary per file.",
+      "context": [],
+      "outputs": [
+        "tools/managers/lane-health/index.mjs",
+        "tools/lane-pass-routing.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-health-core.test.mjs",
+        "tests/lane-idle-words.test.mjs",
+        "tests/lane-pass-routing.test.mjs",
+        "tests/self-manage-monitor.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

@@ -1,0 +1,706 @@
+{
+  "version": 1,
+  "concurrency": 21,
+  "jobs": [
+    {
+      "id": "T-0009",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0009: Autopilot pauses during integrate or e2e and resumes afterward\nR-002 Autopilot runs for every active project.\n  - Each project's orchestrator can start swarm autopilot, and it starts go --scope when ready tickets exist, nothing is running, and the cap has room.\n  - Autopilot pauses while the orchestrator integrates or runs e2e, and resumes after.\n  - swarm orchestrator up (#206) keeps autopilot and the orchestrator running across restarts.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Autopilot pauses while the orchestrator integrates or runs e2e, and resumes after.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A ticket blocked only by dependencies must become ready by itself as soon as all of them are done (in go --scope and in autopilot). [autopilot, blocked, dependencies, unlock]\n- Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing. [build, manifest, path-safety]\n- Run a toolchain sync once, outside the sandbox, before the worker starts, and grant the narrow extra reads that a synced toolchain actually needs to find itself. [build, manifest, sandbox, worker-output]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/autopilot.mjs",
+        "tools/autopilot-lock.mjs"
+      ],
+      "outputs": [
+        "tools/autopilot-pause.mjs"
+      ],
+      "acceptance": [
+        "Autopilot pauses while the orchestrator integrates or runs e2e, and resumes after."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0011",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0011: Each active project orchestrator can start autopilot for its root\nR-002 Autopilot runs for every active project.\n  - Each project's orchestrator can start swarm autopilot, and it starts go --scope when ready tickets exist, nothing is running, and the cap has room.\n  - Autopilot pauses while the orchestrator integrates or runs e2e, and resumes after.\n  - swarm orchestrator up (#206) keeps autopilot and the orchestrator running across restarts.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Each project's orchestrator can start swarm autopilot, and it starts go --scope when ready tickets exist, nothing is running, and the cap has room.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A ticket blocked only by dependencies must become ready by itself as soon as all of them are done (in go --scope and in autopilot). [autopilot, blocked, dependencies, unlock]\n- Run a toolchain sync once, outside the sandbox, before the worker starts, and grant the narrow extra reads that a synced toolchain actually needs to find itself. [build, manifest, sandbox, worker-output]\n- Let a research brief name any readable path, read-only, while still keeping a copy for provenance and refusing early on a path that cannot be read. [build, manifest, path-safety]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/projects.mjs",
+        "tools/autopilot.mjs",
+        "tools/autopilot-ready-deps.mjs"
+      ],
+      "outputs": [
+        "tools/projects-autopilot.mjs"
+      ],
+      "acceptance": [
+        "Each project's orchestrator can start swarm autopilot, and it starts go --scope when ready tickets exist, nothing is running, and the cap has room."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0014",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0014: Capture integrated tree bytes after integrate for dependent jobs\nR-003 Workers see integrated but uncommitted output.\n  - A job that depends on an earlier integrated run receives a snapshot of the integrated tree automatically.\n  - No orchestrator needs a local wip branch or a hand test run to pass state to a worker.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: A job that depends on an earlier integrated run receives a snapshot of the integrated tree automatically.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Run a toolchain sync once, outside the sandbox, before the worker starts, and grant the narrow extra reads that a synced toolchain actually needs to find itself. [build, manifest, sandbox, worker-output]\n- Hand off at the dispatch limit or when the next work is unrelated, whichever comes first. [build]\n- Keep a worker's own failure reason next to the job record, and never let a later generic message stand in for a blocked envelope. [build, redaction, secrets, worker-output]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/integration-audit.mjs"
+      ],
+      "outputs": [
+        "tools/run-integrated-snapshot.mjs"
+      ],
+      "acceptance": [
+        "A job that depends on an earlier integrated run receives a snapshot of the integrated tree automatically."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0021",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0021: Extract run pipeline from swarm.mjs into swarm-run module\nR-004 tools/swarm.mjs is split into modules.\n  - swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change.\n  - The full suite passes, and two queue items touching different modules can build in the same wave.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change.\nPut the tag in the title of the test that checks a line, for example test('AC2: rejects a reply link with a bad host'). A line no test can check (a size limit, a visual rule) may have no test: a reviewer will check it against your code.\nThis ticket owns and must write these test files: tests/swarm-modular-split.test.mjs.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing. [build, manifest, path-safety]\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- Derive the repo from the git remote instead of trusting a stale flag, and explain a redirect as a possible rename. [build, manifest]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/swarm-run.mjs",
+        "tests/swarm-modular-split.test.mjs"
+      ],
+      "acceptance": [
+        "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0023",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0023: Extract board and watch commands into swarm-board module\nR-004 tools/swarm.mjs is split into modules.\n  - swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change.\n  - The full suite passes, and two queue items touching different modules can build in the same wave.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing. [build, manifest, path-safety]\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- An updater must run the installer of the version it installs, in a fresh process, not the code already loaded. [build, installer, release, tool, updater]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/watch-cli.mjs"
+      ],
+      "outputs": [
+        "tools/swarm-board.mjs"
+      ],
+      "acceptance": [
+        "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0026",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0026: Extract argv dispatch from swarm.mjs into swarm-cli module\nR-004 tools/swarm.mjs is split into modules.\n  - swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change.\n  - The full suite passes, and two queue items touching different modules can build in the same wave.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing. [build, manifest, path-safety]\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- Derive the repo from the git remote instead of trusting a stale flag, and explain a redirect as a possible rename. [build, manifest]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/swarm-cli.mjs"
+      ],
+      "acceptance": [
+        "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0068",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0068: Wire release train commands into swarm CLI entry\nR-016 Releases ship as a train.\n  - Runner changes merge without their own version bump, and one release bump batches them on a schedule or on demand.\n  - swarm update still sees a clean version per release.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: swarm release-train status reports batched runner merges and the next bump from the live CLI.\nPut the tag in the title of the test that checks a line, for example test('AC2: rejects a reply link with a bad host'). A line no test can check (a size limit, a visual rule) may have no test: a reviewer will check it against your code.\nThis ticket owns and must write these test files: tests/swarm-release-train-cli.test.mjs.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- An updater must run the installer of the version it installs, in a fresh process, not the code already loaded. [build, installer, release, tool, updater]\n- Distinguish \"no newer tag yet\" from \"the tag is still on its way.\". [deploy, manifest, release, retries, updater]\n- A release that adds environment variables to check processes lists them clearly, and test code that exercises env isolation must explicitly unset or stub them. [release, test]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/release-train-merge.mjs",
+        "tools/release-train-bump.mjs",
+        "tools/release-train-update.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/adapters.test.mjs",
+        "tests/affected-queue.test.mjs",
+        "tests/api-short-report.test.mjs",
+        "tests/ask-125.test.mjs",
+        "tests/auto-run-check.test.mjs",
+        "tests/autopilot-ledger-only.test.mjs",
+        "tests/autopilot-lock.test.mjs",
+        "tests/autopilot-quiet-poll.test.mjs",
+        "tests/autopilot-ready-deps.test.mjs",
+        "tests/bare-status.test.mjs",
+        "tests/base-checks-placeholders.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-optin.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/central-checks.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/claude-shell.test.mjs",
+        "tests/cli-adapters.test.mjs",
+        "tests/cli-host.test.mjs",
+        "tests/codex-adapter.test.mjs"
+      ],
+      "outputs": [
+        "tools/swarm.mjs",
+        "tests/swarm-release-train-cli.test.mjs"
+      ],
+      "acceptance": [
+        "swarm release-train status reports batched runner merges and the next bump from the live CLI."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "ignoreTests": [
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/context-check.test.mjs",
+        "tests/cursor-adapter.test.mjs",
+        "tests/cursor-claims.test.mjs",
+        "tests/dispatch-refusals.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/env-example-context.test.mjs",
+        "tests/escalation-routing.test.mjs",
+        "tests/executors-run.test.mjs",
+        "tests/field-lesson-344.test.mjs",
+        "tests/field-lesson-347.test.mjs",
+        "tests/field-lesson-349.test.mjs",
+        "tests/field-lesson-350.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lesson-t80-core.test.mjs",
+        "tests/field-lesson-t80-import.test.mjs",
+        "tests/field-lesson-t80-ship.test.mjs",
+        "tests/field-lesson-t81-cli.test.mjs",
+        "tests/field-lesson188.test.mjs",
+        "tests/field-lessons-batch-a.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-aa-lessons.test.mjs",
+        "tests/field-lessons-batch-ab-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ah-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-c.test.mjs",
+        "tests/field-lessons-batch-d.test.mjs",
+        "tests/field-lessons-batch-e.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-g.test.mjs",
+        "tests/field-lessons-batch-h.test.mjs",
+        "tests/field-lessons-batch-i.test.mjs",
+        "tests/field-lessons-batch-j.test.mjs",
+        "tests/field-lessons-batch-k.test.mjs",
+        "tests/field-lessons-batch-l.test.mjs",
+        "tests/field-lessons-batch-m2.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-p.test.mjs",
+        "tests/field-lessons-batch-q.test.mjs",
+        "tests/field-lessons-batch-r.test.mjs",
+        "tests/field-lessons-batch-s.test.mjs",
+        "tests/field-lessons-batch-t1.test.mjs",
+        "tests/field-lessons-batch-u.test.mjs",
+        "tests/field-lessons-batch-v.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-y.test.mjs",
+        "tests/final-json.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/forget.test.mjs",
+        "tests/go-ignoretests.test.mjs",
+        "tests/goal-guard.test.mjs",
+        "tests/goal.test.mjs",
+        "tests/guard-change-preview.test.mjs",
+        "tests/guard-readonly-forms.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-guard-verbs.test.mjs",
+        "tests/handbuild-switch.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/hooks-repoint-all.test.mjs",
+        "tests/ignore-tests-reason.test.mjs",
+        "tests/install.test.mjs",
+        "tests/installed-swarm.test.mjs",
+        "tests/integrate-autocommit.test.mjs",
+        "tests/integrate-hashes.test.mjs",
+        "tests/integrate-partial-retry.test.mjs",
+        "tests/integrate-safety.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/leads-run.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-39-integrate.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/lessons.test.mjs",
+        "tests/lessons115.test.mjs",
+        "tests/lessons116.test.mjs",
+        "tests/lessons120-checks.test.mjs",
+        "tests/lessons120-mutants.test.mjs",
+        "tests/live-progress.test.mjs",
+        "tests/live-shell-sandbox.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/merge-queue.test.mjs",
+        "tests/monitor-view.test.mjs",
+        "tests/multi-edit.test.mjs",
+        "tests/no-manifest-review-refs.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/phase10-swarm-command.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phase11-cli.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/pointer-safety.test.mjs",
+        "tests/policy-change-order.test.mjs",
+        "tests/policy-cli-wiring.test.mjs",
+        "tests/policy-commit-window.test.mjs",
+        "tests/policy-defaults-v2.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/ports.test.mjs",
+        "tests/practice-tooling.test.mjs",
+        "tests/preflight.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/restart-any-server.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/routing-paths.test.mjs",
+        "tests/rule-wiring.test.mjs",
+        "tests/runner-pointer.test.mjs",
+        "tests/runner-version.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scale.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-loop-review-stall.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scout-125.test.mjs",
+        "tests/scout.test.mjs",
+        "tests/security-plain-integrate.test.mjs",
+        "tests/security-queue.test.mjs",
+        "tests/sensitive-providers.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart-round4.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/shell-loopback.test.mjs",
+        "tests/shell-scratch.test.mjs",
+        "tests/shell-setup.test.mjs",
+        "tests/ship-preflight.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/swarm-produced-hash.test.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/swarm.test.mjs",
+        "tests/sweep.test.mjs",
+        "tests/t86-worktree-relocation.test.mjs",
+        "tests/ticket-manifest.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tier.test.mjs",
+        "tests/toolchains.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/update-when-idle.test.mjs",
+        "tests/update.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/wave-prep-context.test.mjs",
+        "tests/wave-prep-robust.test.mjs",
+        "tests/wire-125.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    },
+    {
+      "id": "T-0073",
+      "type": "test",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0073: Tests for quarantine moves, retry context, and partial-wave integration\nR-017 One bad ticket can't hold a wave.\n  - Failed ticket outputs move to a quarantine folder automatically, and the retry gets them as read-only context.\n  - Passing tickets in a wave integrate through the merge queue while the failing one is bisected out.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Failed ticket outputs move to a quarantine folder automatically, and the retry gets them as read-only context.\n- AC2: Passing tickets in a wave integrate through the merge queue while the failing one is bisected out.\nPut the tag in the title of the test that checks a line, for example test('AC2: rejects a reply link with a bad host'). A line no test can check (a size limit, a visual rule) may have no test: a reviewer will check it against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A worker asked to add or change tested code needs a way to run the checks itself, inside a sandbox, and must report which checks it ran. [manifest, sandbox, test, worker-output]\n- Integration is all-or-nothing; every precondition, including a mutants file's shape, is checked before the first file is written. [manifest, mutation-testing, retries, test, worker-output]\n- Mutants only count against a base that is actually green. [integration, manifest, mutation-testing]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/wave-pass-integrate.mjs",
+        "tools/wave-quarantine-types.mjs",
+        "tools/wave-quarantine.mjs",
+        "tools/wave-retry-context.mjs",
+        "tests/acceptance-provable.test.mjs"
+      ],
+      "outputs": [
+        "tests/wave-quarantine.test.mjs"
+      ],
+      "acceptance": [
+        "Failed ticket outputs move to a quarantine folder automatically, and the retry gets them as read-only context.",
+        "Passing tickets in a wave integrate through the merge queue while the failing one is bisected out."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0090",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0090: Wire risk-based review batching into scope sync review manifests\nR-020 Reviews match risk and batch small work.\n  - Review tier follows risk: Opus for sensitive paths, Sonnet for normal code, Haiku for tests and docs.\n  - Small low-risk tickets share one review job.\n  - Manifest runs get the same review gate as ledger tickets.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: swarm scope sync --integrated requests batched Haiku reviews for small low-risk tickets.\nPut the tag in the title of the test that checks a line, for example test('AC2: rejects a reply link with a bad host'). A line no test can check (a size limit, a visual rule) may have no test: a reviewer will check it against your code.\nThis ticket owns and must write these test files: tests/scope-sync-review-batch-cli.test.mjs.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A change order split must only create tickets for the new requirement and see the real file layout; e2e tickets need a runner step that starts the app and runs the spec; the generated client and route should share one schema. [merge-queue\n- Document dependencies a ticket needs in the ticket and let a package.json ticket own them; design tickets should be buildable or closable by command; the deletes prompt must say the listed files may be deleted; typecheck for sync should i\n- Add a wiring ticket (or scout step) per stage that mounts new modules in the app and checks with a route-level test; cancelling a ticket must rewrite or reject dependents; review should be able to return to ready with the failing check te\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/review-batch.mjs",
+        "tools/manifest-review-gate.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/change-order-auto-split.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-recorder-lanes.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-approve-managers.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-ingest-acceptance.test.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tests/scope-sync-review-batch-cli.test.mjs"
+      ],
+      "acceptance": [
+        "swarm scope sync --integrated requests batched Haiku reviews for small low-risk tickets."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "ignoreTests": [
+        "tests/scope-ingest-owns-tests.test.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-ingest-sensitive.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-root-files.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/scope-split-guards.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tests/scope-split-repair-loop.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-repair.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths-new-files.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs",
+        "tests/wave-prep-robust.test.mjs"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    },
+    {
+      "id": "T-0091",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0091: Run ticket tests locally with verify agent none and zero model tokens\nR-021 Verify runs without a model.\n  - verify mode \"local\" runs the ticket's tests itself with no agent and no tokens.\n  - Tested tickets can then be built on any lane, including Cursor and Hermes.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: verify mode \"local\" runs the ticket's tests itself with no agent and no tokens.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A change order split must only create tickets for the new requirement and see the real file layout; e2e tickets need a runner step that starts the app and runs the spec; the generated client and route should share one schema. [merge-queue\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- An integration ticket is done only when its named route test file exists in the tree and passes; sync must refuse a tests path that is not a file, and a run touching routes must run next build. [path-safety, privacy, retries, split, token\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/verify-config.mjs"
+      ],
+      "outputs": [
+        "tools/verify-local-runner.mjs"
+      ],
+      "acceptance": [
+        "verify mode \"local\" runs the ticket's tests itself with no agent and no tokens."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0097",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0097: Raise or lower active worker limit based on CPU, RAM, and lane rate limits\nR-022 The machine limit tunes itself.\n  - The worker limit defaults from cores and free RAM, raises while CPU and RAM allow, and backs off on pressure or lane rate limits.\n  - Learned per-lane caps are kept per machine.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: The worker limit defaults from cores and free RAM, raises while CPU and RAM allow, and backs off on pressure or lane rate limits.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Run a toolchain sync once, outside the sandbox, before the worker starts, and grant the narrow extra reads that a synced toolchain actually needs to find itself. [build, manifest, sandbox, worker-output]\n- Separate “Evidence (measured)” from “Hypothesis” in every diagnostic prompt. [build, prompt, worker-output]\n- Keep a worker's own failure reason next to the job record, and never let a later generic message stand in for a blocked envelope. [build, redaction, secrets, worker-output]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/lanes.mjs"
+      ],
+      "outputs": [
+        "tools/adaptive-worker-tune.mjs"
+      ],
+      "acceptance": [
+        "The worker limit defaults from cores and free RAM, raises while CPU and RAM allow, and backs off on pressure or lane rate limits."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0121",
+      "type": "build",
+      "agent": "cursor",
+      "sensitive": false,
+      "prompt": "Ticket T-0121: Render the Split quality panel with green, amber and red metrics per project\nR-027 Split quality is graded.\n  - A Split quality panel per project shows overhead ratio, first-try pass rate, critical path, wave fill, collisions, review $ per ticket and ticket sizes, each green, amber or red.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: A Split quality panel per project shows overhead ratio, first-try pass rate, critical path, wave fill, collisions, review $ per ticket and ticket sizes, each green, amber or red.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A lint/test failure in a file other than the ticket's outputs must route to the owning ticket, not escalate the current one; a done ticket's integration must not pass with a failed check; split modules in the same stage must not each impl\n- A review finding that says the build will break must go back to the owning ticket before dependents run; env vars used by e2e specs belong in .env.example in the same ticket. [review, split, tool]\n- Acceptance lines must be enforced: before a ticket is done, every acceptance line needs a passing named test or an explicit pass/fail from the review job, listed per line in the report; any unmet line keeps the ticket in review. [review, \nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/watch-assets/board.css",
+        "contracts/watch-s4-ops.json",
+        "docs/design/reference/cockpit-target.png"
+      ],
+      "outputs": [
+        "tools/watch-assets/split-quality-panel.js"
+      ],
+      "acceptance": [
+        "A Split quality panel per project shows overhead ratio, first-try pass rate, critical path, wave fill, collisions, review $ per ticket and ticket sizes, each green, amber or red."
+      ],
+      "timeoutMs": 600000,
+      "allowProtectedContext": "design mockup for the ticket screens",
+      "model": "composer-2.5"
+    },
+    {
+      "id": "T-0130",
+      "type": "test",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0130: Tests for multi-machine federation and version drift flags\nR-028 One board covers every machine.\n  - Projects and orchestrators from the MacBook and the Mac mini appear on one board.\n  - Each card shows its machine and swarm version, and version drift is flagged.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Projects and orchestrators from the MacBook and the Mac mini appear on one board.\n- AC2: Each card shows its machine and swarm version, and version drift is flagged.\nPut the tag in the title of the test that checks a line, for example test('AC2: rejects a reply link with a bad host'). A line no test can check (a size limit, a visual rule) may have no test: a reviewer will check it against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Count every mutant's find in its target before a mutants run. [mutation-testing, test]\n- The contract generator must start the mock itself on a free port, fail when any test skips or no test runs, and offer an app mode (real base URL, valid example inputs from the OpenAPI examples) so the real routes are checked against the c\n- A directory- or glob-level guard covers every same-kind file in it, and a job that adds to a registry a test enumerates owns that test too. [test]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/watch-server.mjs",
+        "tests/acceptance-provable.test.mjs",
+        "tests/machine-share.test.mjs",
+        "contracts/watch-s4-ops.json"
+      ],
+      "outputs": [
+        "tests/board-federation.test.mjs"
+      ],
+      "acceptance": [
+        "Projects and orchestrators from the MacBook and the Mac mini appear on one board.",
+        "Each card shows its machine and swarm version, and version drift is flagged."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "contracts/watch-s4-ops.json",
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0142",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0142: Persist orchestrator handoff state to project memory and journal\nR-030 Orchestrators hand off before their context gets expensive.\n  - When an orchestrator's context passes a set size, it saves state to memory and a fresh session continues with no lost work.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Handoff state is written under .swarm/project with enough context for a new session to continue the same work.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Hand off at the dispatch limit or when the next work is unrelated, whichever comes first. [build]\n- Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing. [build, manifest, path-safety]\n- Brief premises need cheap existence checks. [build, prompt]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/orchestrator-context.mjs",
+        "tools/journal.mjs",
+        "tools/brief.mjs"
+      ],
+      "outputs": [
+        "tools/orchestrator-handoff.mjs"
+      ],
+      "acceptance": [
+        "Handoff state is written under .swarm/project with enough context for a new session to continue the same work."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0152",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0152: Apply project priority when granting machine-wide lane slots\nR-032 Slots are shared fairly across projects.\n  - Machine slots are split across active projects by priority, so one project can't starve the others.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: A lower-priority project cannot take slots reserved for higher-priority active projects.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Let a research brief name any readable path, read-only, while still keeping a copy for provenance and refusing early on a path that cannot be read. [build, manifest, path-safety]\n- Ownership guidance prevents false blocks. [build]\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/project-priority.mjs",
+        "tests/api-workers.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gpu.test.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tests/lanes-timer-leak.test.mjs",
+        "tests/lanes.test.mjs",
+        "tests/leads-run.test.mjs",
+        "tests/local-lane-review.test.mjs",
+        "tests/local-lane.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "outputs": [
+        "tools/lanes.mjs"
+      ],
+      "acceptance": [
+        "A lower-priority project cannot take slots reserved for higher-priority active projects."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0166",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Ticket T-0166: Push scanned field exports between swarm machines\nR-035 Field data from every project improves the swarm.\n  - swarm field export, push and report work across both machines with metadata only and secret and PII scanning.\n  - Each new failure cause becomes a regression test, and lane pass rates feed routing.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Field push transfers only metadata bundles that passed secret and PII scanning.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing. [build, manifest, path-safety]\n- Run a toolchain sync once, outside the sandbox, before the worker starts, and grant the narrow extra reads that a synced toolchain actually needs to find itself. [build, manifest, sandbox, worker-output]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/field-export.mjs",
+        "tools/remote.mjs"
+      ],
+      "outputs": [
+        "tools/field-push.mjs"
+      ],
+      "acceptance": [
+        "Field push transfers only metadata bundles that passed secret and PII scanning."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "hard": true
+    },
+    {
+      "id": "T-0207",
+      "type": "test",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0207: Replay tests for ticket manager scope gate and unblocker replan report\nR-036 Ticket Manager and Unblocker.\n  - The Ticket Manager keeps at least 5 ready tickets per active project.\n  - The Unblocker re-plans blocked tickets (R-013) and reports what it changed.\nR-013 A blocked ticket is re-planned automatically.\n  - A ticket that blocks, or fails twice, is re-split or rerouted without the orchestrator writing a manifest.\n  - The re-plan is logged with its reason.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: The Ticket Manager keeps at least 5 ready tickets per active project.\n- AC2: The Unblocker re-plans blocked tickets (R-013) and reports what it changed.\n- AC3: The re-plan is logged with its reason.\nPut the tag in the title of the test that checks a line, for example test('AC2: rejects a reply link with a bad host'). A line no test can check (a size limit, a visual rule) may have no test: a reviewer will check it against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A test for any evaluator or gate must run on the real data it will see in production and prove the attack path itself actually ran, not merely that the final verdict came back as expected. [evals, mutation-testing, path-safety, test]\n- A change order split must only create tickets for the new requirement and see the real file layout; e2e tickets need a runner step that starts the app and runs the spec; the generated client and route should share one schema. [merge-queue\n- A wire split must chain or merge integration tickets that edit the same shared file across stages, and must not reject .env.example as context when its own prompt shows it. [merge-queue, path-safety, prompt, scope, tool, worker-output]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "evals/managers/s13-ticket-context/fixture.json",
+        "tools/managers/base.mjs",
+        "tools/managers/index.mjs",
+        "tools/managers/journal.mjs",
+        "tools/managers/modes.mjs",
+        "tools/managers/register/ticket-unblock.mjs",
+        "tools/managers/registry.mjs",
+        "tools/managers/replay.mjs",
+        "tools/managers/scorecard.mjs",
+        "tools/managers/ticket-manager/index.mjs",
+        "tools/managers/ticket-manager/ready-pool.mjs",
+        "tools/managers/ticket-manager/scope-integrity.mjs"
+      ],
+      "outputs": [
+        "tests/managers/r036-ticket-unblocker.test.mjs"
+      ],
+      "acceptance": [
+        "The Ticket Manager keeps at least 5 ready tickets per active project.",
+        "The Unblocker re-plans blocked tickets (R-013) and reports what it changed.",
+        "The re-plan is logged with its reason."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}

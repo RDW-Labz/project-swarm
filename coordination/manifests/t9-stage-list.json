@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-stage-list",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. The Cockpit TICKET STACK sub-line still lists stages in ticket-id order: s1 / s2 / s3 / s4 / s5 / s6 / s7 / s10 / s9 / s8 / s11. In tools/watch-assets/cockpit-lists.js cockpitCategories, when the chosen category field is stage, sort the names numerically by the S<n> suffix (s1, s2, ..., s10, s11; case-insensitive); ids that are not S<n> sort after by localeCompare. Keep lane/area/type category order unchanged. This names list also feeds the Cockpit category legend and stage strip grouping, so all stage displays stay in numeric order. In tests/cc-cockpit-mount.test.mjs add a test that mounts a project whose ledger tickets have stages S1,S10,S9,S8,S11,S2,S3,S4,S5,S6,S7 and no lane, area or type, then scans every leaf element on the mounted page whose text contains three or more stage ids (match /\\bS\\d+\\b/gi) and asserts each list is in numeric order; assert the stage-count span (.stripl .st) and the stack sub-line (.stack .ck-hint) are both found. Do not weaken existing tests. Verify: node --import ./tests/_isolate-config.mjs --test tests/cc-cockpit-mount.test.mjs tests/command-center-lists.test.mjs -> pass.",
+      "context": [
+        "tools/watch-assets/cockpit-lists.js",
+        "tools/watch-assets/cockpit-view.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/command-center-lists.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/watch-assets/cockpit-lists.js",
+        "tests/cc-cockpit-mount.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-cockpit.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/watch-assets-dom-collections.test.mjs"
+      ],
+      "ignoreTestsReason": "Focused cockpit tests run here; the listed suites run in the full suite after integration."
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-stage-list",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/command-center-lists.test.mjs"
+      ]
+    }
+  ]
+}

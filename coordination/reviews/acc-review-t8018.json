@@ -1,0 +1,29 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8018",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:184-197 (pause/quota before other idle reasons), 262-302 (plain idle copy with manifest routing); tests/lane-idle-words.test.mjs: idle copy never uses the old recent jobs named phrase; each idle reason uses plain sentences with the lane name; provider limit on the latest job surfaces before the generic idle line; tests/lane-idle.test.mjs: lane idle reasons use the requested priority and explain every branch",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/lane-pass-routing.mjs:22-27,40 (isProviderLimitFailure skips quota/credit/rate-limit failures in lanePassRates); tools/board-data.mjs:965-968 (same helper for recent lastProviderLimitAt); tests/lane-idle-words.test.mjs: lanePassRates ignores provider quota and credit failures for routing; tests/lane-pass-routing.test.mjs: provider credit and quota failures do not count toward lane pass rates",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tests/lane-idle-words.test.mjs: idle copy never uses the old recent jobs named phrase; each idle reason uses plain sentences with the lane name; lanePassRates ignores provider quota and credit failures for routing; tests/lane-idle.test.mjs and tests/lane-pass-routing.test.mjs add branch/priority and routing integration coverage",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

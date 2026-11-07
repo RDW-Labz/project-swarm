@@ -4,7 +4,8 @@
 // - every request carries provider.data_collection = "deny"; a body without it is refused;
 // - anthropic/* models are pinned to the Anthropic provider, with no fallback;
 // - deepseek/* models may only write bookkeeping files (PR payloads, changelogs, mutants files,
-//   metrics), never code;
+//   metrics), never code, unless the operator sets lanes.openrouter.allowCodeOutputs to true
+//   (default off / unset). Sensitive jobs are still refused; this flag never lifts sensitive: false.
 // - spend caps: $5 per job and $5 per UTC day, checked against a worst-case estimate before
 //   each request and recorded from the provider's reported cost after it.
 // The key is read by the swarm parent only (env OPENROUTER_API_KEY, else the macOS keychain item
@@ -104,18 +105,50 @@ export function isBookkeepingJob(outputs) {
   }
   return true;
 }
-export function assertBookkeepingOnly(job) {
+export function assertBookkeepingOnly(job, { allowCodeOutputs = false } = {}) {
+  if (allowCodeOutputs === true) return;
   const bad = nonBookkeepingOutputs(job.model, job.outputs);
   if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`);
 }
 
+// Operator opt-in for non-sensitive OpenRouter/DeepSeek code outputs. True only when the value
+// is boolean true; unset and false keep today's bookkeeping-only rule. Accepts either a machine
+// config (`{ lanes: { openrouter: { allowCodeOutputs } } }`) or a resolved lane map.
+export function openrouterAllowsCodeOutputs(source = {}) {
+  const lane = source?.lanes?.openrouter ?? source?.openrouter;
+  return lane?.allowCodeOutputs === true;
+}
+
+// Manifest overwrites machine config when the field is present, matching resolveLanes merge.
+// `allowCodeOutputs: true` from a caller (router, executeApi) wins outright.
+export function resolveOpenRouterAllowCodeOutputs({ allowCodeOutputs, config, manifest, env = process.env } = {}) {
+  if (allowCodeOutputs === true) return true;
+  const fromManifest = manifest?.lanes?.openrouter?.allowCodeOutputs;
+  if (fromManifest === true) return true;
+  if (fromManifest === false) return false;
+  if (config !== undefined) return openrouterAllowsCodeOutputs(config);
+  try { return openrouterAllowsCodeOutputs(loadLocalConfig({ env })); } catch { return false; }
+}
+
+export const OPENROUTER_LANE_PAUSED = 'openrouter-lane-paused';
+export function openrouterLanePausedProblem(config) {
+  if (config?.lanes?.openrouter?.paused !== true) return null;
+  return `${OPENROUTER_LANE_PAUSED}: the paid openrouter lane is paused and no key was read`;
+}
+export function assertOpenrouterLaneNotPaused(config) {
+  const problem = openrouterLanePausedProblem(config);
+  if (problem) throw Object.assign(new Error(problem), { code: OPENROUTER_LANE_PAUSED });
+}
+
 // The key: env first (tests, CI), else the keychain on macOS. Never logged, never returned
 // in any result.
-export function readOpenRouterKey(env = process.env, { platform = process.platform, exec = execFileSync, config } = {}) {
+export function readOpenRouterKey(env = process.env, { platform = process.platform, exec = execFileSync, config, loadConfig = loadLocalConfig, home } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env, home: home ?? env?.HOME });
+  assertOpenrouterLaneNotPaused(resolvedConfig);
   const fromEnv = env[OPENROUTER_KEY_ENV];
   if (typeof fromEnv === 'string' && fromEnv.length) return fromEnv;
   if (env.SWARM_OPENROUTER_NO_KEYCHAIN === '1' || platform !== 'darwin') return null;
-  const item = openRouterKeyItem(config ?? loadLocalConfig({ env }));
+  const item = openRouterKeyItem(resolvedConfig);
   try {
     const out = exec('/usr/bin/security', ['find-generic-password', '-s', item.service, '-a', item.account, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
     const key = String(out).trim();

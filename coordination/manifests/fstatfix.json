@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "fstatfix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "timeoutMs": 1800000,
+   "context": [
+    "tools/board-keepalive.mjs",
+    "tests/memory-fixes.test.mjs"
+   ],
+   "outputs": [
+    "tests/memory-fixes.test.mjs"
+   ],
+   "prompt": "tests/memory-fixes.test.mjs still has fake FileHandle objects that expose fstat(), but tools/board-keepalive.mjs now calls handle.stat() (a real Node FileHandle has stat, not fstat), so the tests 'rejects a conflicting --port when identity already exists', 'opens identity with O_NONBLOCK so a FIFO cannot block' and 'reuses saved port when --port matches' fail with 'handle.stat is not a function'. Fix only the tests: rename the fake handle method fstat to stat in every fake in this file (and in any other test file under tests/ that fakes a FileHandle for board-keepalive, state-guard or ledger-backup; search for fstat in tests/). Do not change tools/. Do not weaken any assertion. Run tests/memory-fixes.test.mjs and make it pass."
+  }
+ ]
+}

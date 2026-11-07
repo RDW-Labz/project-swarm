@@ -1,0 +1,69 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "locallane4",
+   "agent": "auto",
+   "prompt": "Opus re-review of the local lane still FAILs on: (1) HIGH tools/api-adapters.mjs: the chat request that carries the bearer key and the prompt (around line 607 to 615, the fetch in executeApi for agent local) has no redirect option. Set redirect: 'error' on that fetch for the local lane only and add a test that a 302 response makes the job fail without a second request being sent. (2) MEDIUM tools/lanes.mjs around line 360: when one waiter's endpoint is full the claim loop stops, blocking waiters for other endpoints that have room; use continue so other waiters can still be granted, and return a full reason only when nothing was granted. Add a test. (3) LOW doctor local still throws when lanes.local is malformed: report it as a failed check with the validation message instead. Add to tests/local-lane-review.test.mjs; keep tests/local-lane.test.mjs, tests/lanes.test.mjs, tests/router.test.mjs, tests/api-workers.test.mjs passing.",
+   "context": [
+    "tools/lanes.mjs",
+    "tools/router.mjs",
+    "tools/api-adapters.mjs",
+    "tools/local-lane.mjs",
+    "tests/local-lane.test.mjs",
+    "tests/lanes.test.mjs",
+    "tests/router.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/_isolate-config.mjs",
+    "tests/local-lane-review.test.mjs"
+   ],
+   "outputs": [
+    "tools/lanes.mjs",
+    "tools/router.mjs",
+    "tools/api-adapters.mjs",
+    "tools/local-lane.mjs",
+    "tests/local-lane-review.test.mjs"
+   ],
+   "timeoutMs": 3000000,
+   "ignoreTests": [
+    "tests/adapters.test.mjs",
+    "tests/anthropic-lane.test.mjs",
+    "tests/batch-c-eval.test.mjs",
+    "tests/best-of-adapter.test.mjs",
+    "tests/board-accuracy-card.test.mjs",
+    "tests/board-accuracy-page.test.mjs",
+    "tests/cap-reroute.test.mjs",
+    "tests/field-lessons-batch-aa-core.test.mjs",
+    "tests/field-lessons-batch-n.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-y-adapters.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/gpu-lineup.test.mjs",
+    "tests/gpu.test.mjs",
+    "tests/helpers/board-accuracy-fixture.mjs",
+    "tests/job-types.test.mjs",
+    "tests/kickoff.test.mjs",
+    "tests/lanes-run.test.mjs",
+    "tests/lanes-timer-leak.test.mjs",
+    "tests/leads-run.test.mjs",
+    "tests/lesson-37-eval.test.mjs",
+    "tests/machine-share.test.mjs",
+    "tests/multi-edit.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/review-structured-verdict.test.mjs",
+    "tests/router-ready.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/split-repair.test.mjs",
+    "tests/watch-ui.test.mjs",
+    "tests/worker-skills.test.mjs"
+   ],
+   "ignoreTestsReason": "tests in context cover the change; full suite before merge"
+  }
+ ]
+}

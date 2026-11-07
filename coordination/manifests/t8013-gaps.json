@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8013-gaps",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tests/board-card-ui.test.mjs",
+        "tools/watch-assets/board.js"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "coordination/reviews/acc-review-t8013.json",
+        "tools/board-data.mjs"
+      ],
+      "prompt": "T-8013 acceptance gap (coordination/reviews/acc-review-t8013.json): tests/board-card-ui.test.mjs only opens the 'ready' list. Add tests that click the 'wait on other tickets' and 'need you' counts on a rendered card (fake DOM, card data from projectOverview over tests/helpers/board-accuracy-fixture.mjs with a dependency chain, a releasable held ticket, a human job, a journal blocker, an open decision and a proposed ticket) and assert: the list opens; it shows every item of card.blocked.items / card.blocked.needYouItems in order with id and title; each item's <code> text equals that item's command exactly (and items with a null command show no code element); the copy button copies that exact command (stub navigator.clipboard). Change only the test file unless a real UI bug shows up (then fix tools/watch-assets/board.js and say so). Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-card-ui.test.mjs`.",
+      "ignoreTests": [
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-peers.test.mjs",
+        "tests/board.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/integration-lock-branch.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/managers/r038-version-merge.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-s4-contract.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests load board.js for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

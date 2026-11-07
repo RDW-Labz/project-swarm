@@ -8,12 +8,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardInbox, inboxText } from '../tools/board-inbox.mjs';
-import { writePhoneConfig } from '../tools/phone.mjs';
+import { writePhoneConfig, syncPhone, readPhoneState, waitingLongEnoughForPhoneNotify, PHONE_NOTIFY_WAIT_MS } from '../tools/phone.mjs';
 import { projectId } from '../tools/projects.mjs';
 import { appendEvent } from '../tools/journal.mjs';
 import { createLedger, writeLedger } from '../tools/tickets.mjs';
 import { createBoardApi } from '../tools/watch-cli.mjs';
 import { createWatchServer } from '../tools/watch-server.mjs';
+import { decisionBoardSafeForOwner, ownerItemsFromBoardInbox } from '../tools/board-owner-actions.mjs';
 
 const NOW = Date.UTC(2026, 9, 19, 12, 0, 0);
 const assets = fileURLToPath(new URL('../tools/watch-assets', import.meta.url));
@@ -36,6 +37,33 @@ async function world(t) {
   return { home, A, B, phoneDirectory };
 }
 
+test('protectedTopic scans the full decision before display clip so owner board-safe stays fail-closed', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  const pastTitleClip = `${'alpha '.repeat(200)} merge to main`;
+  const manyChoices = Array.from({ length: 10 }, (_, i) => `choice-${i}`);
+  manyChoices[9] = `${'z'.repeat(45)} deploy`;
+  const collect = async () => [{
+    kind: 'decision',
+    id: 'past-clip-protected',
+    title: pastTitleClip,
+    text: pastTitleClip,
+    choices: manyChoices,
+    default: 'choice-0',
+    boardSafe: true,
+    since: new Date(NOW).toISOString(),
+    unblocks: 0,
+  }];
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect, ledgerOf: async () => null, phoneDirectory: path.join(home, 'none') });
+  const item = inbox.items.find(i => i.id === 'past-clip-protected');
+  assert.equal(item.protectedTopic, true);
+  assert.equal(/merge/i.test(item.title ?? ''), false, 'clipped title hides the protected word');
+  assert.equal(item.choiceOptions?.length, 9, 'only nine choices are shown');
+  assert.equal(/deploy/i.test((item.choiceOptions ?? []).join(' ')), false, 'clipped choices hide the protected word');
+  const ownerItem = ownerItemsFromBoardInbox({ items: [{ ...item, projectId: A.id, projectRoot: A.root }] })[0];
+  assert.equal(decisionBoardSafeForOwner(ownerItem), false);
+});
+
 test('the panel lists what waits in each project: decisions, human tasks, blockers and proposed tickets; each with the command to run at the computer; other projects do not leak into each other', async t => {
   const w = await world(t);
   const inbox = await boardInbox({ projects: [w.A, w.B], now: NOW, phoneDirectory: w.phoneDirectory });
@@ -53,6 +81,59 @@ test('the panel lists what waits in each project: decisions, human tasks, blocke
   assert.equal(by('b-1').command, `swarm --root ${w.B.root} resolve b-1`, 'a blocker can always be dismissed');
   assert.match(by('b-1').next, /Read the message, fix the cause, then dismiss it/);
   assert.equal(inbox.items[0].id, 'h-dns', 'the item that unblocks the most comes first within a project');
+});
+
+test('T-0182: a decision waiting less than an hour does not open a phone issue; one waiting longer does; an open issue is not duplicated', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  const phoneDirectory = path.join(home, 'phone');
+  await writePhoneConfig(phoneDirectory, { repo: 'o/r', owner: 'me', owners: ['me'], enabled: true });
+  await fs.writeFile(path.join(phoneDirectory, 'state.json'), JSON.stringify({ repo: 'o/r', issues: {} }));
+  const youngSince = new Date(NOW - 30 * 60 * 1000).toISOString();
+  const oldSince = new Date(NOW - PHONE_NOTIFY_WAIT_MS - 5 * 60 * 1000).toISOString();
+  assert.equal(waitingLongEnoughForPhoneNotify({ since: youngSince }, NOW), false);
+  assert.equal(waitingLongEnoughForPhoneNotify({ since: oldSince }, NOW), true);
+  const decisionItem = (id, since) => ({
+    key: `${A.root}|decision|${id}`,
+    root: A.root,
+    projectName: 'a',
+    kind: 'decision',
+    itemId: id,
+    title: 'Pick one',
+    options: ['yes', 'no'],
+    default: 'yes',
+    secondStep: false,
+    since,
+  });
+  const gh = (() => {
+    let nextNumber = 1;
+    return async (args, { input } = {}) => {
+      const [cmd, ...rest] = args;
+      if (cmd === 'api' && rest[0] === '-X' && rest[1] === 'POST' && /\/issues$/.test(rest[2])) {
+        const number = nextNumber++;
+        return JSON.stringify({ number });
+      }
+      if (cmd === 'api' && /\/issues\/\d+\/comments/.test(rest[0])) return '[]';
+      return null;
+    };
+  })();
+  const deps = {
+    gh,
+    items: async () => [decisionItem('young', youngSince), decisionItem('old', oldSince)],
+    now: () => NOW,
+    runSwarm: async () => ({ ok: true, text: '' }),
+    decideInbox: async () => ({ ok: true, text: '' }),
+  };
+  const first = await syncPhone({ dir: phoneDirectory, deps });
+  assert.equal(first.ok, true);
+  const state = await readPhoneState(phoneDirectory, 'o/r');
+  const byId = Object.fromEntries(Object.values(state.issues).map(r => [r.itemId, r]));
+  assert.equal(byId.young, undefined, 'young item stays off the phone');
+  assert.equal(byId.old?.status, 'open');
+  assert.equal(first.created.length, 2, 'stale decision plus panic button');
+  const second = await syncPhone({ dir: phoneDirectory, deps });
+  assert.equal(second.created.length, 0, 'repeat sync does not duplicate');
+  assert.equal(Object.values(state.issues).filter(r => r.key === `${A.root}|decision|old`).length, 1);
 });
 
 test('phone: an item that was also asked on the phone says so, with its state and expiry; the panic button is not an item; the phone summary counts open and confirming questions', async t => {
@@ -106,21 +187,21 @@ test('the board serves it read-only behind the token: /api/board carries inbox, 
   t.after(() => server.close());
   const token = new URL(url).searchParams.get('t');
   const get = (p, headers = {}) => new Promise((resolve, reject) => http.get(new URL(p, url), { headers }, res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject));
-  const hiddenByDefault = await get(`/api/board?t=${token}`);
+  const hiddenByDefault = await get('/api/board', { 'x-watch-token': token });
   assert.deepEqual([JSON.parse(hiddenByDefault.body).projects.length, JSON.parse(hiddenByDefault.body).inbox.total], [0, 0], 'these projects live in the temp directory: hidden unless asked for');
-  const board = await get(`/api/board?t=${token}&scratch=1`);
+  const board = await get('/api/board?scratch=1', { 'x-watch-token': token });
   assert.equal(board.status, 200);
   const data = JSON.parse(board.body);
   assert.equal(data.inbox.total, 5);
   assert.equal((await get('/api/board?t=wrong')).status, 403);
   assert.equal((await get('/api/board')).status, 403);
-  const html = await get(`/?t=${token}`);
+  const html = await get(`/classic?t=${token}`);
   assert.match(html.body, /id="needs"/);
   assert.match(html.body, /id="needsChip"/);
-  const js = await get(`/assets/board.js?t=${token}`);
+  const js = await get('/assets/board.js');
   assert.doesNotMatch(js.body, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   assert.match(js.body, /Read-only: the board never answers anything/);
-  const post = await new Promise((resolve, reject) => { const r = http.request(new URL(`/api/board?t=${token}`, url), { method: 'POST' }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); }); r.on('error', reject); r.end(); });
+  const post = await new Promise((resolve, reject) => { const r = http.request(new URL('/api/board', url), { method: 'POST', headers: { 'x-watch-token': token } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); }); r.on('error', reject); r.end(); });
   assert.ok(post >= 400, 'no write method');
 });
 
@@ -258,10 +339,53 @@ test('feedback 4: a pull request and its merge are one row (the merge); an unmer
   assert.deepEqual((await readHistory({ file, fold: true, exclude: new Set(['p2']) })).events.map(e => e.key).sort(), ['merge:p1:172', 'pr:p1:173']);
 });
 
+test('held tickets: a manual block without a hold question stays off Needs you; with a hold question the item shows that text; dependency blocks stay excluded', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
+  const question = 'Should we ship the migration before the API freeze?';
+  await writeLedger(A.root, createLedger({
+    scope,
+    tickets: [
+      tk('T-0200', 'blocked', { blockReason: 'manual' }),
+      tk('T-0201', 'blocked', { blockReason: 'manual', holdQuestion: question }),
+      tk('T-0199', 'done'),
+      tk('T-0202', 'blocked', { blockReason: 'deps', dependsOn: ['T-0199'] }),
+    ],
+  }));
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect: async () => [], ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null), phoneDirectory: path.join(home, 'none') });
+  const held = inbox.items.filter(i => i.kind === 'held-ticket');
+  assert.deepEqual(held.map(i => i.id), ['T-0201']);
+  assert.equal(held[0].text, question);
+  assert.equal(held[0].command, `swarm --root ${A.root} tickets T-0201 --release`);
+});
+
+test('held tickets: review and todo are not held-ticket Needs-you items (only blocked tickets are)', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
+  await writeLedger(A.root, createLedger({
+    scope,
+    tickets: [
+      tk('T-0300', 'review'),
+      tk('T-0301', 'todo'),
+      tk('T-0302', 'blocked', { blockReason: 'manual', holdQuestion: 'Release when ready?' }),
+    ],
+  }));
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect: async () => [], ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null), phoneDirectory: path.join(home, 'none') });
+  const held = inbox.items.filter(i => i.kind === 'held-ticket');
+  assert.deepEqual(held.map(i => i.id), ['T-0302']);
+  assert.equal(inbox.items.some(i => i.id === 'T-0300'), false);
+  assert.equal(inbox.items.some(i => i.id === 'T-0301'), false);
+});
+
 test('feedback 5: test and temp projects are left out by default (lanes, totals, inbox, history) with a switch to show them, and a count of what is hidden', async t => {
   const { isScratchRoot } = await import('../tools/projects.mjs');
+  const { isBoardTempRoot } = await import('../tools/scratch-roots.mjs');
   assert.equal(isScratchRoot('/Users/me/project-swarm/.tmp-test-x/field-lessons-x-Ng9Cw2'), true);
-  assert.equal(isScratchRoot('/private/var/folders/cy/x/T/board-abc'), true);
+  assert.equal(isBoardTempRoot('/private/var/folders/cy/x/T/board-abc'), true, 'board hide includes OS temp trees');
   assert.equal(isScratchRoot('/tmp/anything'), true);
   assert.equal(isScratchRoot('/Users/me/project-repos/parts-request-app'), false);
   assert.equal(isScratchRoot('/Users/me/project-swarm'), false);
@@ -287,4 +411,50 @@ test('feedback 5: test and temp projects are left out by default (lanes, totals,
   const html = await fs.readFile(path.join(assets, 'board.html'), 'utf8');
   assert.match(html, /id="scratch"/);
   assert.match(await fs.readFile(path.join(assets, 'board.js'), 'utf8'), /scratch=1/);
+});
+
+test('direct-build projects are omitted from needs-you inbox', async (t) => {
+  const home = await tmp(t);
+  const A = proj(home, 'shop');
+  const direct = { ...proj(home, 'parts'), directBuild: true };
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const collect = async ([root]) => (root === A.root
+    ? [{ kind: 'human', id: 'h-1', title: 'Real task', steps: [], unblocks: 1, since: new Date(NOW).toISOString() }]
+    : [{ kind: 'human', id: 'h-2', title: 'Should not appear', steps: [], unblocks: 1, since: new Date(NOW).toISOString() }]);
+  const inbox = await boardInbox({ projects: [A, direct], now: NOW, collect, ledgerOf: async () => null, phoneDirectory: path.join(home, 'none') });
+  assert.deepEqual(inbox.items.map(i => i.id), ['h-1']);
+  assert.equal(inbox.total, 1);
+});
+
+test('needs-you auto-hide drops stale blockers and superseded ticket rows', async (t) => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
+  const eightDaysAgo = new Date(NOW - 8 * 86400000).toISOString();
+  const threeDaysAgo = new Date(NOW - 3 * 86400000).toISOString();
+  const twoDaysAgo = new Date(NOW - 2 * 86400000).toISOString();
+  const oneDayAgo = new Date(NOW - 86400000).toISOString();
+  const ledger = createLedger({
+    scope,
+    tickets: [
+      tk('T-9001', 'superseded'),
+      tk('T-9002', 'blocked', { blockReason: 'manual', holdQuestion: 'Still need you?' }),
+    ],
+  });
+  ledger.updatedAt = twoDaysAgo;
+  await writeLedger(A.root, ledger);
+  const collect = async () => [
+    { kind: 'blocker', id: 'old-block', title: 'Stale', since: eightDaysAgo, unblocks: 0 },
+    { kind: 'blocker', id: 'block-3d', title: 'Three days', since: threeDaysAgo, unblocks: 0 },
+    { kind: 'blocker', id: 'block-1d', title: 'One day', since: oneDayAgo, unblocks: 0 },
+  ];
+  const inbox = await boardInbox({
+    projects: [A],
+    now: NOW,
+    collect,
+    ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null),
+    phoneDirectory: path.join(home, 'none'),
+  });
+  assert.deepEqual(inbox.items.map(i => i.id).sort(), ['T-9002', 'block-1d']);
 });

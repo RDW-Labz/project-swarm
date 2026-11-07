@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-24d",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 24d (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/scale.mjs, tools/scope-loop.mjs, tools/split-quality.mjs, tools/state-backup.mjs, tools/state-guard.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/scale.mjs\nLogger prefix: console.error('[tools/scale.mjs] <short context>:', error?.message ?? error)\n- Line 148 `try { const st = JSON.parse(await fs.readFile(...)); startedJobs = ...; } catch { /* not written yet */ }`: SILENT-ENOENT/SyntaxError (state.json not written yet, or mid-write), log the rest; no fallback value, `startedJobs` keeps its previous value and the poll loop retries.\n- Line 165 `} finally { await api.close?.().catch(() => {}); }`: close/cleanup catch on a watch API connection that can't normally throw \u2014 LOG-ALWAYS with a different binding; no fallback value, best-effort close.\n\n### tools/scope-loop.mjs\nLogger prefix: console.error('[tools/scope-loop.mjs] <short context>:', error?.message ?? error)\n- Line 351 `const existing = await readReviewManifest(projectRoot, ticketFile).catch(() => null);`: SILENT-ENOENT (acceptance-review manifest not created yet), log the rest; keep null fallback (guarded by `if (existing && !existing.jobs?.length)`).\n- Line 480 `try { summary = await summaryNow(); } catch { /* the ledger itself is the problem */ }`: building the final failure summary \u2014 LOG-ALWAYS (a lost diagnostic summary on the error path is as bad as a lost audit write), include the step/error context; keep `summary = null` fallback.\n\n### tools/split-quality.mjs\nLogger prefix: console.error('[tools/split-quality.mjs] <short context>:', error?.message ?? error)\n- Line 56 `} catch { /* damaged log lines do not invalidate the panel */ }`: SILENT-SyntaxError (one ticket-event log line is torn/corrupt), log the rest; no fallback value, that one event line is skipped.\n- Line 66 `readLedger(root).catch(() => null),`: SILENT-ENOENT (a corrupt ledger must be visible, so SyntaxError is logged) (no ledger yet, or torn write), log the rest; keep null fallback (one entry of the `Promise.all` array).\n\n### tools/state-backup.mjs\nLogger prefix: console.error('[tools/state-backup.mjs] <short context>:', error?.message ?? error)\n- Line 125 `try { await readManifest(root, id); complete.push(id); } catch { /* incomplete: left alone */ }`: SILENT-ENOENT/SyntaxError (backup manifest missing or torn mid-write), log the rest; no fallback value, the incomplete backup id is just left out of `complete`.\n- Line 177 `} catch { // unreadable or incomplete backup: skipped }`: SILENT-ENOENT/SyntaxError (same, when listing backups), log the rest; no fallback value, the backup entry is omitted from `out`.\n\n### tools/state-guard.mjs\nLogger prefix: console.error('[tools/state-guard.mjs] <short context>:', error?.message ?? error)\n- Line 165 `await handle.chmod(0o600).catch(() => {});`: part of writing a security-relevant audit record \u2014 LOG-ALWAYS, include the deletions.log path; no fallback value, write proceeds regardless.\n- Line 170 `} catch { /* never throws */ }`: lost audit write (the whole deletions.log append is swallowed if it throws) \u2014 LOG-ALWAYS, include the caller/outcome context; no fallback value, `recordDeletion` just returns.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/scale.mjs",
+        "tools/scope-loop.mjs",
+        "tools/split-quality.mjs",
+        "tools/state-backup.mjs",
+        "tools/state-guard.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/acceptance-review-skip.test.mjs",
+        "tests/autopilot-lock-parent.test.mjs",
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/guard-backup-fixes.test.mjs",
+        "tests/guard-backup-fixes4.test.mjs",
+        "tests/human-progress.test.mjs",
+        "tests/scale.test.mjs",
+        "tests/scope-loop-resume-review.test.mjs",
+        "tests/scope-loop-review-stall.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-quality.test.mjs",
+        "tests/state-backup.test.mjs",
+        "tests/state-guard.test.mjs",
+        "tests/ticket-target-worktree.test.mjs",
+        "tests/wave-prep-context.test.mjs",
+        "tests/wave-prep-robust.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

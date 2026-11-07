@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-24c",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 24c (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/managers/version/stale.mjs, tools/phone-commands.mjs, tools/policy-run.mjs, tools/release-train-update.mjs, tools/report-commands.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/managers/version/stale.mjs\nLogger prefix: console.error('[tools/managers/version/stale.mjs] <short context>:', error?.message ?? error)\n- Line 270 `} catch { /* no local board registry */ }`: SILENT-ENOENT/SyntaxError on reading the board registry file only, log the rest (e.g. a connection error from `readBoardServerVersions` reaching a registered-but-unreachable board); no fallback value, board staleness finding simply isn't added.\n- Line 282 `} catch { /* remote off */ }`: SILENT-ENOENT/SyntaxError on reading the remote state file only, log the rest (e.g. a connection error reaching a registered-but-unreachable remote); no fallback value, remote staleness finding isn't added. ALSO stay silent for error?.code === 'ECONNREFUSED' (remote board not running is the normal \"remote off\" state); also check error?.cause?.code for fetch errors.\n\n### tools/phone-commands.mjs\nLogger prefix: console.error('[tools/phone-commands.mjs] <short context>:', error?.message ?? error)\n- Line 41 `const ledger = await readLedger(project.root).catch(() => null);`: SILENT-ENOENT (a corrupt ledger must be visible, so SyntaxError is logged) (no ledger yet, or torn write), log the rest; keep null fallback (handled via `ledger?.tickets ?? []`).\n- Line 43 `} catch { /* a project that cannot be read is skipped */ }`: SILENT-ENOENT (project root gone/unreadable), log the rest (e.g. a real bug in `collectInbox`/`phoneItems`); no fallback value, project is skipped from `items`.\n\n### tools/policy-run.mjs\nLogger prefix: console.error('[tools/policy-run.mjs] <short context>:', error?.message ?? error)\n- Line 345 `} catch { /* ignore secondary log failure */ }` (around `await journal(errEntry);`): lost audit write \u2014 LOG-ALWAYS, include the item id; no fallback value, `errors`/`left` are still updated below regardless.\n- Line 350 `} catch { /* ignore secondary log failure */ }` (around `await events(errEntry);`): lost event/notification write \u2014 LOG-ALWAYS, include the item id; no fallback value, `errors`/`left` are still updated below regardless.\n\n### tools/release-train-update.mjs\nLogger prefix: console.error('[tools/release-train-update.mjs] <short context>:', error?.message ?? error)\n- Line 123 `} catch { /* offline or no remote */ }`: SILENT-<nonzero git exit code> (`git ls-remote` with no network/remote), log the rest (e.g. git not found); no fallback value, `latestTagged` stays null.\n- Line 129 `} catch { /* tag-only remote need not have main */ }`: SILENT-<nonzero git exit code> (`git show origin/main:package.json` when main doesn't exist on the remote), log the rest; no fallback value, `originMainVersion` stays null.\n\n### tools/report-commands.mjs\nLogger prefix: console.error('[tools/report-commands.mjs] <short context>:', error?.message ?? error)\n- Line 14 `try { return await fs.readFile(path.join(root, file), 'utf8'); } catch { /* the next one */ }`: SILENT-ENOENT (one of the candidate scope files doesn't exist), log the rest; no fallback value, loop tries the next candidate file.\n- Line 42 `const ledger = await readLedger(root).catch(() => null);`: SILENT-ENOENT (a corrupt ledger must be visible, so SyntaxError is logged) (no ledger yet, or torn write), log the rest; keep null fallback (checked right after via `if (!ledger) return out(...)`).\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/managers/version/stale.mjs",
+        "tools/phone-commands.mjs",
+        "tools/policy-run.mjs",
+        "tools/release-train-update.mjs",
+        "tools/report-commands.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/autopilot-ledger-only.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/managers/r038-version-merge.test.mjs",
+        "tests/phone.test.mjs",
+        "tests/policy-change-order.test.mjs",
+        "tests/policy-commit-window.test.mjs",
+        "tests/policy-hardening-round2.test.mjs",
+        "tests/policy-hardening-round3.test.mjs",
+        "tests/policy-hardening-round4.test.mjs",
+        "tests/policy-run.test.mjs",
+        "tests/release-train.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/wire-125.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

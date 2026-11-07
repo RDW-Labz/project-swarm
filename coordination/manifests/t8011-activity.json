@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8011",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/board-live.mjs",
+        "tools/watch-cli.mjs",
+        "tests/board-accuracy-activity.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tools/project-spend.mjs",
+        "tools/server-version.mjs",
+        "tools/build-progress.mjs",
+        "tools/projects.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-live.test.mjs"
+      ],
+      "prompt": "Ticket T-8011 (owner-approved Swarm Watch accuracy pass). T-8010 is on this branch: one percent function and tests/helpers/board-accuracy-fixture.mjs (makeBoardFixture builds a git repo, linked worktrees, scratch roots, runs, a fake merged-PR list, spend files, a registry). Use that fixture for every test.\nCoordinator findings: project-swarm showed 'idle, last run 22 h ago' while building all day. (a) 'last run' = p.lastRunAt from readRunStates(project.root) at tools/board-data.mjs ~225/381/411: only this checkout's run folders, never linked worktrees or scratch dirs. (b) lastActivityAt (~382) includes live runs but not finished runs of other worktrees. (c) /api/live and /api/project in tools/watch-cli.mjs (~443, ~452) filter live runs with r.root === project.root, so the worktree family is excluded. (d) tools/board-live.mjs liveOverview lastMs (~117) uses own runs only. worktreeFamily(root, { all: true }) in tools/project-spend.mjs (~82-108) already lists the main folder, linked worktrees, and worktrees under .swarm/ and the scratch root.\nDO: (1) lastRunAt, lastActivityAt, live runs (building now) and a new lastTicketFinishedAt (the newest ticket marked done in any family ledger's tickets.log / ledger history; fall back to run job finishedAt for ticket ids) read runs and ledgers from worktreeFamily(root, { all: true }) for a main checkout; a linked-worktree row keeps its own. Apply the same family rule to /api/live, /api/project and board-live.mjs. Add checkouts: the number of family members (main + linked worktrees + scratch worktrees). (2) Version: the card's version must be the swarm INSTALLED on this machine, read at request time (read <install>/current/package.json version with no long cache; reuse installedVersion from tools/server-version.mjs if present, it has a 5 s cache: that is fine), not the running process's version; keep the running version available as runningVersion for the stale banner. (3) Hide projects that have no name and no runs at all (name empty or equal to the id hash, and zero runs in the family). (4) Finished: a project whose progress says finished (all counted tickets done) AND deployed (the existing deploy milestone, or merged with no deploy configured: use progress fields as they exist) gets finished: true; its live warnings (split quality red, under-filled waves) are moved to a history field and not shown as live warnings. Do not change any UI file (the board browser scripts folder belong to later tickets and another open PR).\nTESTS in tests/board-accuracy-activity.test.mjs, one test per field, each comparing the board value with its source in the fixture: lastRunAt == newest run startedAt across main + worktree + scratch; lastActivityAt; live/building count includes a running run in a linked worktree; lastTicketFinishedAt == newest done transition in the ledger log; checkouts == family size; version == the version in a temp install's current/package.json (point the install root at a temp dir via the env var the code uses); a nameless project with no runs is hidden and a nameless project WITH runs is shown; a finished+deployed project has finished true and no live warnings. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files, .github or the board browser scripts folder. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-activity.test.mjs tests/board-accuracy-percent.test.mjs tests/board-*.test.mjs tests/build-progress*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import board-data, board-live or watch-cli for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

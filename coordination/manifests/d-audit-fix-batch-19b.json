@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-integratedsnapshot-batch-19b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 19b (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/integrated-snapshot.mjs' section. Edit ONLY tools/integrated-snapshot.mjs. Visibility only: do NOT change control flow, return values, throws, or what gets pushed to `removed`/`included`/`skipped`.\n\nNo logger exists in this file. Use: console.error('[tools/integrated-snapshot.mjs] <short context>:', error?.message ?? error)\n\nAll four flagged lines are cleanup swallows. None of them can fail on a normal path (fs.rm uses force:true so ENOENT never throws; update-ref -d on a ref we just wrote should succeed), so any failure means a leaked snapshot ref or temp dir. Bind the error and log unconditionally, including the ref or path; keep resolving to undefined and continue exactly as today.\n1. Line 131, cleanup(): `await runGit(['update-ref', '-d', ref]).catch(() => {});` - log with the ref.\n2. Line 133, cleanup(): `await fs.rm(path.dirname(indexPath), {...}).catch(() => {});` - log with the dir.\n3. Line 186, worktreeFromSnapshot remove(): `await fs.rm(dir, {...}).catch(() => {});` - log with dir. Do NOT touch the worktree-remove .catch(err => ...) just above it.\n4. Line 218, snapshot GC: `await runGit(['update-ref', '-d', ref]).catch(() => {});` - log with the ref. Keep `removed.push(ref)` exactly as today.\n\nDo NOT touch any other catch (e.g. the fs.stat try/catch with `continue` near line 213). Do not refactor, reformat, rename, or change exports.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run: node --import ./tests/_isolate-config.mjs --test tests/integrated-snapshot.test.mjs and confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/integrated-snapshot.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/integrated-snapshot.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

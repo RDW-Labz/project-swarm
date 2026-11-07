@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "merge-hooks",
+      "agent": "auto",
+      "prompt": "Two fixes on this branch (it was just merged with origin/main, which brought the guard free-text rule ids and tokens). (1) tests/guard-change-preview.test.mjs test swarm change --yes is refused with handbuild-change-record rule id now fails after the merge: reconcile the refusal text of the new rule with main refusal format (rule id AND matched token named, see tools/self-approval.mjs and tools/shell-writes.mjs and tests/guard-free-text.test.mjs): the --yes recording from an agent session stays refused, a preview without --yes stays allowed; fix the test or the code so both hold and both guard-change-preview and guard-free-text tests pass. (2) Real bug found live: the board server record written by tools/watch-cli.mjs has version null (installedVersionFor depends on SWARM_INSTALL_DIR in the environment, which is normally unset), so swarm update reports board server record skipped: missing version in board server record and never restarts the board. Fix: the record version is the version of the RUNNING runner: use runnerVersion(import.meta.url) from tools/runner-version.mjs (already on main) and fall back to the install package.json; never null for a server started by a swarm runner. Same for the remote serve record (tools/remote.mjs or wherever it registers). Also make tools/server-restart.mjs treat a record with a missing version as restartable when its pid identity verifies (version unknown means older than any target), instead of skipping it. Tests in tests/server-record-version.test.mjs: a started board record has a string version equal to the runner version with no SWARM_INSTALL_DIR set; a record with a null version and a verified pid is restarted by restartRegisteredServers; a record whose pid identity does not verify is still not signalled. Keep tests/server-restart-round2.test.mjs, round3, round4, tests/update-when-idle.test.mjs and every test file with server-restart or watch-cli in the name passing. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tests/guard-change-preview.test.mjs",
+        "tools/self-approval.mjs",
+        "tools/shell-writes.mjs",
+        "tools/watch-cli.mjs",
+        "tools/server-restart.mjs",
+        "tools/remote.mjs",
+        "tests/guard-free-text.test.mjs",
+        "tools/runner-version.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/guard-change-preview.test.mjs",
+        "tools/self-approval.mjs",
+        "tools/shell-writes.mjs",
+        "tools/watch-cli.mjs",
+        "tools/server-restart.mjs",
+        "tools/remote.mjs",
+        "tests/server-record-version.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/guard-readonly-forms.test.mjs",
+        "tests/guard-word-false-positive.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard-verbs.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-reason-words.test.mjs",
+        "tests/installed-swarm.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart-round4.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}

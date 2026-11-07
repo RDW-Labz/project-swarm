@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8026",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tests/change-order-auto-split.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/split-repair.mjs",
+        "tools/change-orders.mjs",
+        "tests/scope-split-repair-loop.test.mjs",
+        "tests/scope-commands.test.mjs"
+      ],
+      "prompt": "Ticket T-8026: after `swarm change \"REASON\" [FILE] --yes` (cmdChange in tools/scope-commands.mjs ~2559) records a change order that leaves requirements with no tickets (pendingRequirements), it currently prints manual steps (swarm scope split, run it, then --ingest RUN --merge). Make it automatic: when --yes is given and pending requirements exist, build the split manifest for exactly those requirements (the same buildSplitManifest/changeContext path cmdSplit uses), run it through the injectable deps.runSplit (the same default T-8024 added: runManifestChecked + wait), then ingest it with --merge through the same repair loop (respect --max-repairs N, default 3; add --no-split to keep the old manual behavior), and print the repair rounds, ingested tickets and parked tickets with their retry command. A ticket that never validates is parked as a named journal blocker; good tickets are ingested; never refuse the whole change order for ticket-level errors. Refactor so cmdSplit's ingest and this path share one function (no duplicated ingest code). Tests in a NEW tests/change-order-auto-split.test.mjs (reuse the fakeRun/gitRepo helper pattern from tests/scope-split-repair-loop.test.mjs): a change order adding a new requirement with an injected runSplit fake worker ends with that requirement's tickets in the ledger (no manual command); a fake worker returning a bad ticket that never validates parks it as a blocker while the good ones are ingested; --no-split prints the manual steps and runs nothing; the existing change-order tests keep passing. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/change-order-auto-split.test.mjs tests/scope-split-repair-loop.test.mjs tests/split-repair.test.mjs tests/scope-commands.test.mjs tests/change-orders*.test.mjs tests/scope-ingest-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-recorder-lanes.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-approve-managers.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-ingest-acceptance.test.mjs",
+        "tests/scope-ingest-owns-tests.test.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-ingest-sensitive.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-root-files.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/scope-split-guards.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths-new-files.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import scope-commands for unrelated commands; the coordinator runs the full suite after integration."
+    }
+  ]
+}

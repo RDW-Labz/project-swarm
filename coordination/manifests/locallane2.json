@@ -1,0 +1,45 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "locallane2",
+   "agent": "auto",
+   "prompt": "feat/local-lane was merged with main; main's tools/router.mjs (API workers routing) replaced the local-lane router, so the test 'router skips unhealthy local endpoint' in tests/local-lane.test.mjs fails (route-exhausted) and tests/lanes.test.mjs 'defaults are complete, deeply frozen, and independently resolved' fails because LANE_AGENTS now ends with 'local'. (1) Port the local-lane routing logic from tools/router-local-ref.mjs (the pre-merge router, read-only reference; do not output or edit it) into tools/router.mjs without losing main's behaviour (Haiku first, Sonnet/Opus rules, codex paused, prefersLocalLane, typeRoute): endpointHealth(name) option, pick the first healthy configured local endpoint and set model 'local:<name>', honour per-endpoint slots (localSlotRoom), skip local when every endpoint is paused, a local-first order for jobs that prefer the local lane. (2) Update the LANE_AGENTS expectation in tests/lanes.test.mjs to include 'local' at the end and make the per-agent defaults assertions accept the local lane (look at LANE_DEFAULTS.local in tools/lanes.mjs). Keep tests/router.test.mjs, tests/api-workers.test.mjs, tests/local-lane.test.mjs, tests/lanes.test.mjs, tests/anthropic-lane.test.mjs, tests/s13-blockers.test.mjs and tests/escalation-routing.test.mjs passing.",
+   "context": [
+    "tools/router.mjs",
+    "tools/router-local-ref.mjs",
+    "tools/lanes.mjs",
+    "tools/local-lane.mjs",
+    "tools/job-types.mjs",
+    "tests/local-lane.test.mjs",
+    "tests/lanes.test.mjs",
+    "tests/router.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/escalation-routing.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/router.mjs",
+    "tests/lanes.test.mjs",
+    "tests/local-lane.test.mjs"
+   ],
+   "timeoutMs": 3000000,
+   "ignoreTests": [
+    "tests/anthropic-lane.test.mjs",
+    "tests/batch-c-eval.test.mjs",
+    "tests/cap-reroute.test.mjs",
+    "tests/gpu.test.mjs",
+    "tests/job-types.test.mjs",
+    "tests/lesson-37-eval.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/router-ready.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/split-repair.test.mjs"
+   ],
+   "ignoreTestsReason": "router and lanes tests listed in context; full suite before merge"
+  }
+ ]
+}

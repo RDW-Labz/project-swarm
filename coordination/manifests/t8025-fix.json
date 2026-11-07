@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8025-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/api-adapters.mjs",
+        "tools/acceptance.mjs",
+        "tests/review-structured-verdict.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/security-review.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/anthropic-lane.test.mjs"
+      ],
+      "prompt": "Fix T-8025 after its Opus review (which itself ran with the new structured output and produced a valid structured verdict, but the run was marked failed): (1) the anthropicSchema conversion drops maxLength/maxItems, so the model returned a finding 'issue' of 326 characters and validateReviewResult rejected the whole envelope, losing a valid verdict. Fix: for review results, structural problems still fail closed (missing reviews, empty reviews, bad ticket id, verdict not pass/fail, findings not an array, missing fields), but over-long strings are TRUNCATED to their limits (issue/fix 300, file 200, notes 4000) and a non-integer line becomes null, never failing the envelope; document why. (2) MEDIUM finding: isReadOnlyReviewJob must key ONLY on job.type === 'review' (drop the id-prefix and empty-outputs fallback) so non-review jobs are byte-for-byte unchanged; check that tools/security-review.mjs securityReviewManifest sets type 'review' (it does) and that acceptance review manifests built by tools/acceptance.mjs set type 'review' too if they go to API lanes (read tools/acceptance.mjs; if it builds API review jobs without type, add type: 'review' there and include tools/acceptance.mjs in your changes only if needed). (3) LOW finding: for review jobs, reject an envelope whose files or edits are non-empty (a review never writes). Tests in tests/review-structured-verdict.test.mjs: a review envelope with a 326-character issue and a long notes string is accepted with truncated text and the verdict kept; a job with id 'review-x' and type 'build' gets the normal schema and instructions (unchanged); a review envelope with a non-empty files array is rejected; the exact invalid envelope from the coordinator's run (evidence block) now validates. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/review-structured-verdict.test.mjs tests/review-retry.test.mjs tests/review-recorder-lanes.test.mjs tests/anthropic-lane.test.mjs tests/lesson-40-eval.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/acceptance-review-skip.test.mjs",
+        "tests/acceptance-review-worktree.test.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/acceptance.test.mjs",
+        "tests/adapters.test.mjs",
+        "tests/best-of-adapter.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-y-adapters.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gpu-lineup.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/multi-edit.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/practice-tooling.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-loop-review-stall.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/ticket-target-worktree.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import the adapters or acceptance for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

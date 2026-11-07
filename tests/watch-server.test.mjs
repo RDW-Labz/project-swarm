@@ -83,7 +83,7 @@ function parseBlock(block) {
   return { event, data: JSON.parse(data.join('\n')) };
 }
 
-function openStream(port, reqPath) {
+function openStream(port, reqPath, headers = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
@@ -91,7 +91,7 @@ function openStream(port, reqPath) {
         port,
         method: 'GET',
         path: reqPath,
-        headers: { Host: `127.0.0.1:${port}`, Accept: 'text/event-stream' },
+        headers: { Host: `127.0.0.1:${port}`, Accept: 'text/event-stream', ...headers },
       },
       (res) => {
         const stream = { req, res, events: [], buf: '' };
@@ -143,16 +143,17 @@ test('token is required for page, api, events and shot routes', async () => {
       const res = await request({ port: s.port, path: p });
       assert.equal(res.status, 403, `expected 403 for ${p}`);
     }
+    assert.equal((await request({ port: s.port, path: `/?t=${s.token}` })).status, 200);
   } finally {
     await s.dispose();
   }
 });
 
-test('token accepted in query or x-watch-token header', async () => {
+test('page tokens are exchanged once; non-page routes accept x-watch-token', async () => {
   const s = await start();
   try {
     const byQuery = await request({ port: s.port, path: `/api/snapshot?t=${s.token}` });
-    assert.equal(byQuery.status, 200);
+    assert.equal(byQuery.status, 403);
     const byHeader = await request({
       port: s.port,
       path: '/api/snapshot',
@@ -183,7 +184,8 @@ test('localhost Host header with the right port is accepted', async () => {
   try {
     const res = await request({
       port: s.port,
-      path: `/api/snapshot?t=${s.token}`,
+      path: '/api/snapshot',
+      headers: { 'x-watch-token': s.token },
       host: `localhost:${s.port}`,
     });
     assert.equal(res.status, 200);
@@ -196,7 +198,7 @@ test('POST, PUT, DELETE and PATCH give 405', async () => {
   const s = await start();
   try {
     for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
-      const res = await request({ port: s.port, method, path: `/api/snapshot?t=${s.token}` });
+      const res = await request({ port: s.port, method, path: '/api/snapshot', headers: { 'x-watch-token': s.token } });
       assert.equal(res.status, 405, `expected 405 for ${method}`);
     }
   } finally {
@@ -241,7 +243,7 @@ test('every response carries the security headers with the exact CSP', async () 
 test('/api/snapshot returns the five keys', async () => {
   const s = await start();
   try {
-    const res = await request({ port: s.port, path: `/api/snapshot?t=${s.token}` });
+    const res = await request({ port: s.port, path: '/api/snapshot', headers: { 'x-watch-token': s.token } });
     assert.equal(res.status, 200);
     const body = JSON.parse(res.body);
     assert.deepEqual(Object.keys(body).sort(), ['commands', 'contextCommands', 'gallery', 'plan', 'run']);
@@ -256,7 +258,7 @@ test('/events sends a snapshot event then a delta after the snapshot changes', a
   const s = await start();
   let stream = null;
   try {
-    stream = await openStream(s.port, `/events?t=${s.token}`);
+    stream = await openStream(s.port, '/events', { 'x-watch-token': s.token });
     assert.equal(stream.res.statusCode, 200);
     await waitFor(() => stream.events.some((e) => e.event === 'snapshot'), 3000);
     assert.equal(stream.events[0].event, 'snapshot');
@@ -277,7 +279,7 @@ test('close() ends open event streams', async () => {
   const s = await start();
   let stream = null;
   try {
-    stream = await openStream(s.port, `/events?t=${s.token}`);
+    stream = await openStream(s.port, '/events', { 'x-watch-token': s.token });
     await waitFor(() => stream.events.some((e) => e.event === 'snapshot'), 3000);
     const ended = new Promise((resolve) => {
       stream.res.on('end', resolve);

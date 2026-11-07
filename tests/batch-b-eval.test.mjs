@@ -84,6 +84,43 @@ test('eval 37.3 (lesson 26): a manifest command that kills processes by a loose 
   assert.match(shellMessage({ context: [], outputs: ['a'], prompt: '' }, { files: [] }), /Never stop a process by a loose pattern \(pkill -f, killall/);
 });
 
+test('eval 37.4: an ingest conflict names the exact tickets and file', async t => {
+  const root = await tmp(t, 'b37-conflict-');
+  await fs.mkdir(path.join(root, 'docs/scope'), { recursive: true });
+  await fs.writeFile(path.join(root, 'docs/scope/scope.md'), SCOPE);
+  const mount = (key, extra = {}) => ({
+    key,
+    title: key,
+    type: 'build',
+    integration: true,
+    scopeRefs: ['R-001'],
+    acceptance: ['ok'],
+    files: ['src/routes/r.mjs'],
+    tests: ['tests/routes.test.mjs'],
+    size: 'S',
+    risk: 'low',
+    ...extra,
+  });
+  const a = { key: 'a', title: 'Create list page', type: 'build', scopeRefs: ['R-001'], acceptance: ['ok'], files: ['src/pages/list.tsx'], size: 'S', risk: 'low' };
+  const b = { key: 'b', title: 'Add list filters', type: 'build', scopeRefs: ['R-001'], acceptance: ['ok'], files: ['src/pages/list.tsx'], size: 'S', risk: 'low' };
+  await fakeRun(root, 'r1', [a, b, mount('m1')]);
+  const ingested = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(ingested.exitCode, 0, ingested.stdout);
+  const { readLedger } = await import('../tools/tickets.mjs');
+  const ledger = await readLedger(root);
+  const ta = ledger.tickets.find(ticket => ticket.title === 'Create list page');
+  const tb = ledger.tickets.find(ticket => ticket.title === 'Add list filters');
+  assert.ok(ta && tb);
+  if (tb.dependsOn?.includes(ta.id)) {
+    assert.deepEqual(tb.dependsOn, [ta.id]);
+  } else {
+    const blockers = await (await import('../tools/journal.mjs')).readJournal(root, { kinds: ['blocker'] });
+    const text = blockers.map(event => event.text ?? '').join('\n');
+    assert.match(text, /T-0001.*Create list page.*T-0002.*Add list filters|Create list page.*Add list filters/);
+    assert.match(text, /src\/pages\/list\.tsx/);
+  }
+});
+
 test('eval 37.4 (lesson 26): the agent pointer files carry the rule', async () => {
   for (const f of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'cursor-rule.mdc']) assert.match(await fs.readFile(path.join(path.dirname(new URL(import.meta.url).pathname), '../templates/agent-pointers', f), 'utf8'), /Never stop a process by a loose pattern/, f);
 });

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0168-gaps",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/failure-regression.mjs",
+        "tools/lane-pass-routing.mjs",
+        "tests/failure-regression-stubs.test.mjs",
+        "tests/lane-pass-routing.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/errors.mjs",
+        "tools/journal.mjs",
+        "tools/router.mjs"
+      ],
+      "prompt": "Ticket T-0168 acceptance gap (Codex review): 'Each new failure cause becomes a regression test'. In tools/failure-regression.mjs: (1) FAIL_STATUSES must also count the run-state spellings 'timed-out' and 'timedout' (keep 'timeout'); check which status strings tools/lane-pass-routing.mjs treats as failures and use the same set (export it from failure-regression.mjs as FAILURE_STATUSES and import it in lane-pass-routing.mjs so the two cannot drift). (2) Add async materializeRegressionStubs(root, causes, { writeFile, mkdir, stat } = fs) that writes regressionStubFor(cause) for each cause to its tests/regressions/<key>.test.mjs path, refusing keys that are not /^[a-z0-9][a-z0-9-]{0,80}$/ (the key is already normalized; verify it), never overwriting an existing file, and returning { written: [paths], skipped: [paths] }. (3) Add async captureNewFailureCauses(root, runStates, deps) = failureCausesFromRuns -> newFailureCauses(known) -> materializeRegressionStubs -> recordCauses, returning { newCauses, written }; one call is the whole conversion, so the later CLI hook is a single line (wiring into tools/swarm.mjs is owned by the other seat; say so in a comment). Tests in tests/failure-regression-stubs.test.mjs (extend it): timed-out jobs count; every new cause from two runs gets exactly one stub file; a known cause gets none; an existing stub is never overwritten; a bad key is refused; a second capture over the same runs writes nothing. Also keep tests/lane-pass-routing.test.mjs passing. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test with a temp dir (fs.mkdtemp under os.tmpdir()) or injected fs. Run `node --import ./tests/_isolate-config.mjs --test tests/failure-regression-stubs.test.mjs tests/lane-pass-routing.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests only name these files for unrelated behavior; the coordinator runs the full suite.",
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ]
+}

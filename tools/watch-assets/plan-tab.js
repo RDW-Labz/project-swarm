@@ -17,11 +17,6 @@
     return Number(v).toLocaleString();
   }
 
-  function usd(v) {
-    if (v === null || v === undefined || isNaN(Number(v))) return '–';
-    return '$' + Number(v).toFixed(2);
-  }
-
   function pct(v) {
     if (v === null || v === undefined || isNaN(Number(v))) return '–';
     return Math.round(Number(v)) + '%';
@@ -98,14 +93,6 @@
     });
     st.appendChild(pills);
     grid.appendChild(st);
-
-    var sp = el('div', 'card pl-card');
-    sp.appendChild(el('span', 'label', 'Spend'));
-    sp.appendChild(el('div', 'pl-big num', usd(h.spendUsd) + ' / ' + usd(h.estimateUsd)));
-    var est = Number(h.estimateUsd);
-    var spent = Number(h.spendUsd) || 0;
-    sp.appendChild(bar(est > 0 ? (spent / est) * 100 : 0, spent > est && est > 0 ? 'var(--red)' : undefined));
-    grid.appendChild(sp);
 
     var co = el('div', 'card pl-card');
     co.appendChild(el('span', 'label', 'Change orders'));

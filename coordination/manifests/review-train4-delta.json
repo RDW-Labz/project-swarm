@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain4delta",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner rule: Opus delta review of the train 4 merge-gate blocker fix",
+      "prompt": "Delta review of release train 4 (merge gate). Round 1 failed with ONE blocker at tools/merge-guard.mjs:18: the gate read verdicts from free text, so lines like 'PASS for oldsha; head pending' or 'head fails review (lint passed)' counted as a pass. The fix is in coordination/review/train4-delta.diff (against the round-1 head 98dd46da); the current files are in context.\n\nNew contract: for a release PR (title starts with a semver), the ONLY verdict the gate accepts is a fenced ```json block inside the `## Reviews` section with exactly verdict \"pass\" and head equal to the FULL 40-character headRefOid. Non-release titles are exempt. Details: headRefOid must be exactly 40 hex; malformed JSON blocks in Reviews refuse (fail closed); blocks naming another SHA are ignored history and never pass; among blocks naming the current head the last decides (pass merges, fail/anything else refuses); free prose is never a verdict; the gate runs before any `gh pr merge` call.\n\nPass bar (owner): confirm the round-1 blocker is CLOSED for each exploit (prose PASS for an old sha with the head mentioned as pending; prose 'head fails review (lint passed)'; a JSON pass naming a different or truncated SHA; a JSON block outside Reviews; malformed JSON; a later fail for the head). Find NEW blockers introduced by this delta: a way a release PR can pass without a valid JSON pass block for the full current head; a normal (non-release) PR being refused; a crash on a malformed/absent body or head; or the gate running after the merge. Everything else is a follow-up.\n\nWrite ONLY coordination/review/train4-delta-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"round1\":[{\"blocker\":1,\"status\":\"closed\"|\"open\",\"evidence\":\"\"}],\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail if the round-1 blocker is open or blockers is non-empty.",
+      "context": [
+        "coordination/review/train4-delta.diff",
+        "tools/merge-guard.mjs",
+        "tests/merge-guard.test.mjs"
+      ],
+      "outputs": [
+        "coordination/review/train4-delta-review.json"
+      ],
+      "resultFile": "coordination/review/train4-delta-review.json",
+      "timeoutMs": 2400000
+    }
+  ]
+}

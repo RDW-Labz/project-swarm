@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8005-recorder",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "Ticket T-8005 (sensitive; owner decision while the Claude subscription is provider-limited until Oct 23): the review recorders in tools/scope-commands.mjs accept owner-approved reviewers. Today SEC_KIND.models is /^opus$/ and ACC_KIND.models is /^(sonnet|opus)$/, and loadReviewResponse and reAskReview also require job.agent === 'claude'. Change: (1) introduce per-kind allowed reviewer pairs: SEC_KIND accepts { agent: 'claude', model: /^opus$/ } and { agent: 'anthropic', model: /^claude-opus-[0-9][a-z0-9.-]*$/ }; ACC_KIND accepts { agent: 'claude', model: /^(sonnet|opus)$/ }, { agent: 'anthropic', model: /^claude-(sonnet|opus)-[0-9][a-z0-9.-]*$/ }, { agent: 'codex', model: any non-empty } and { agent: 'cursor', model: any non-empty }. A helper reviewerAllowed(kind, job) checks agent AND model together. (2) loadReviewResponse uses reviewerAllowed (error text lists the accepted reviewers); reAskReview's manifest check uses it too instead of only.agent === 'claude'. (3) Every record written (security records in writeReviewRecords data and acceptance records) gains reviewer: { agent, model } from the job; the security-review and acceptance-review log events also include reviewer. (4) Nothing else changes: any other agent/model is still refused; a non-complete job is still refused; review manifests that sync writes are unchanged (still claude/opus by default). Tests tests/review-recorder-lanes.test.mjs (node:test, temp project dirs, write fake run state.json + response.txt under .swarm/runs/<id>/<job>/ and the .swarm/security-reviews/<source>.hashes.json / acceptance request files in the shapes the code reads; no network, no wall-clock dependence): security verdict recorded from anthropic/claude-opus-5-5 with reviewer stored; recorded from claude/opus as before; refused from codex and from anthropic/claude-haiku-5-5; acceptance verdict recorded from codex and cursor with reviewer stored; acceptance refused from openrouter. Do NOT touch tools/swarm.mjs, the tools/swarm folder or tools/security-review.mjs (read it). Never write token-shaped literals. Run `node --import ./tests/_isolate-config.mjs --test tests/review-recorder-lanes.test.mjs tests/scope-commands.test.mjs tests/acceptance-sync.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use scope-commands for unrelated behavior; the coordinator runs the FULL suite.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/security-review.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/acceptance-sync.test.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tests/review-recorder-lanes.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-approve-managers.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-ingest-acceptance.test.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-ingest-sensitive.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    }
+  ]
+}

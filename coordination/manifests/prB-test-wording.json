@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "prB-test-wording",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "cheap",
+      "timeoutMs": 1800000,
+      "outputs": [
+        "tests/review-retry.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/watch-assets.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/scope-commands.mjs",
+        "tools/security-review.mjs"
+      ],
+      "prompt": "Test-only update after T-8005 (review recorders accept owner-approved reviewers) changed the refusal message from 'the security review job ran on <model>, not opus' to 'the security review job reviewer <agent>/<model> is not accepted; accepted reviewers: claude/opus; anthropic/claude-opus-<version>; ...' (an agent-less job is shown as 'unknown agent'). Update ONLY the assertions that match the old wording so they assert the new refusal (still proving a non-Opus reviewer is refused and the ticket ends review-blocked): tests/review-retry.test.mjs (tests 'a second ask that fails to run, or whose job is not opus, also ends review-blocked' and 'review findings: a tampered manifest is never paid for; a rerun reads the earlier second answer; an empty list is unusable') and tests/lesson-40-eval.test.mjs (eval 40.4, the /not opus/ match), plus the /not the single read-only Opus review job/ match (new wording: the review manifest is not the single read-only review job sync wrote; accepted reviewers: ...). Do not weaken any other assertion. Also in tests/watch-assets.test.mjs test 'tab scripts register under one of the four tab names', add 'board-owner-actions.js' to the exclusion list (it is a library module mounted by board.js later, like board-lib.js, not a tab). Do not edit any tools/ file. Run `node --import ./tests/_isolate-config.mjs --test tests/review-retry.test.mjs tests/lesson-40-eval.test.mjs tests/watch-assets.test.mjs`."
+    }
+  ]
+}

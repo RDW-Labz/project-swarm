@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain4",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner rule: one Opus review of the combined release diff",
+      "prompt": "Review release train 4 of Project Swarm: branch swarm/train4 against main at 3df9b8bd (1.167.27). The combined code diff is in your context at coordination/review/train4.diff (25 files); the full workspace is present, so open any file you need.\n\nWhat changed:\n(1) MERGE GATE, tools/merge-guard.mjs: `swarm merge` now refuses a release PR (title starts with a semver) unless its `## Reviews` section contains a passing verdict that names the current head commit. The section is parsed; a line counts for the head only if it contains a 7-40 char hex token that prefixes headRefOid; the last matching verdict wins; fail/blocked/pending refuses; non-release PRs are unchanged. Focus: can a release PR bypass the gate (title shape, heading casing, text outside the section, a PASS that names another commit, a later FAIL being ignored, an unparseable body, a null head)? Does it refuse before any `gh pr merge` call? Is a non-release PR correctly exempt?\n(2) GUARDED RUNNER, tools/concurrency-guard.mjs: the watcher now verifies the recorded child process start time AND command line before SIGTERM/SIGKILL; old markers without identity restore without signalling; the SIGTERM path re-reads the marker before writing termSentAt; a SIGTERM-ignoring orphan is escalated to SIGKILL once after 30 s when the watcher is gone; a self-orphan still exits 143; pre-boot and EPERM behavior from 1.167.27 is unchanged. Focus: any path that can signal a reused or innocent pid, wedge the marker forever, restore the value while the orphan still runs, crash/hang the every-command path, or exit 0 without running.\n(3) STRESS RUNNER, tools/stress-tests.mjs: each round runs in a detached process group and the timeout kills the whole group; fail-fast and tails preserved.\n(4) LANE HEALTH, tools/lane-health.mjs: the once-per-code persist log now includes the code.\n(5) BULK SUPERSEDE, tools/tickets.mjs and tools/scope-commands.mjs: new terminal status `superseded` (moves only from proposed/todo/ready/blocked), and an owner-only `swarm tickets supersede --before <date> [--dry-run] [--yes] [--stage S] [--json]`. Last touch = max tickets.log event timestamp per id, else ledger.createdAt; the dry-run (also the default with no --yes) lists id, status, stage, last touch, basis and title and writes nothing; --yes re-reads under the wave lock, writes once, appends ONE supersede-stale log event, then refreshes the plan. Focus: can an agent session run it without SWARM_OWNER (owner-only bypass)? Can it supersede running/review/done/cancelled tickets, or a ticket not older than the cutoff? Any lost update or partial write? Does the ledger stay approved and the plan consistent? Does adding the status break ready/deliverable/build-plan logic?\n(6) Version 1.167.28 and the CHANGELOG entry.\n\nPass bar (owner): blockers only. Look for: a merge-gate bypass (wrong head, failed review still merging); money/key/secret exposure; data loss (ticket ledger, locks); an innocent process killed or a real orphan left running; a crash/hang on a normal path; a regression; a test weakened, skipped, retried or quarantined to hide a failure; an owner-only bypass; a bulk command writing without --yes or changing non-stale/active tickets. Everything else is a follow-up.\n\nWrite ONLY coordination/review/train4-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+      "context": [
+        "coordination/review/train4.diff",
+        "tools/merge-guard.mjs",
+        "tests/merge-guard.test.mjs",
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tools/tickets.mjs",
+        "tests/tickets-supersede.test.mjs",
+        "tools/stress-tests.mjs",
+        "tools/lane-health.mjs",
+        "package.json",
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "coordination/review/train4-review.json"
+      ],
+      "resultFile": "coordination/review/train4-review.json",
+      "timeoutMs": 2700000
+    }
+  ]
+}

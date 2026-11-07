@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain8",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner rule: one Opus review of the train 8 combined diff",
+      "prompt": "Review release train 8 of Project Swarm: branch swarm/train8 against main at e18fcfb4 (1.167.31), after the 1.167.32 bump. The combined diff is in context at coordination/review/train8.diff. The workspace files are not readable in your sandbox; judge from the diff and the other context files. Pass bar (owner): blockers only. Do not write files other than your one result JSON.\n\nWhat changed:\n(1) LIVE FEED, tools/watch-server.mjs + tools/board-data.mjs + tools/command-center-snapshot.mjs + tools/watch-assets/command-center-boot.js: a ~1 s input detector stats each project's small board inputs (tickets, orchestrator events/state, run state.json metadata, inbox, lanes and history) and identifies affected project ids without a full build. A token/cookie-authenticated SSE endpoint /api/command-center/events (same security headers, no token in logs/URLs) sends {kind:'cc-change', projects, at}; the cached snapshot's changed project card and aggregate counters are patched in place and the model rebuilt incrementally; the client patches Hive cards, Cockpit and header counters through /api/command-center/project, keeps the 5 s poll as a fallback, pauses hidden and honors reduced motion.\n(2) BOUNDED LIVE DETECTION: selectLiveFamilyRoots keeps the project's own root plus only family/worktree roots with activity in the last 10 minutes (runs dir/newest run state/project/inbox/orchestrator events mtime). Full snapshots still read the complete family; the 1 s scan went from 441 roots to 6 on this Mac.\n(3) SNAPSHOT CPU: the 60 s cache is change-driven. A watched input change refreshes after the 60 s TTL; with no change the server serves the cached entry and does one deep full rebuild every snapshotMaxStaleMs (5 min) as the backstop for unwatched idle family roots/machine totals. changesSinceFullRebuild is reset after the rebuild's own scan. Cold loads and stale-while-revalidate are unchanged.\n(4) HARNESSES: tools/watch-soak.mjs (dashboard soak: server RSS, interval CPU from ps cumulative cputime, browser heap via CDP, EventSource and file-watcher counts, API count; flat/leak verdict exits 1) and tools/watch-live-latency.mjs (reversible inbox/tickets change to the DOM, per-run + median, desktop and phone-4G profiles, tokens redacted); tests for both. The owner gate ran the 1-hour soak and both latency profiles.\n(5) MERGE GATE: the local review record is now bound to its run manifest and named job: record.manifest must be .swarm/runs/<runId>/manifest.json, the manifest job must be a review job (type review or resultFile) with exactly the one result file as its only output and matching agent/model. No change to the metadata-only result commit, head, hash or verdict checks.\n(6) STRESS: invalid STRESS_TEST_COMMAND fails with a clear line and exit 2; SIGINT/SIGTERM kill the round process group, wait for the child to exit (2 s bounded) and then exit 130/143.\n(7) TABS: the Hive Command Center and Cockpit tab hrefs keep location.search; the routes test sends the rendered hrefs to the live server; no-window hrefs are asserted.\n(8) DOCS: corrected the stale 1.167.29 merge-gate text, documented the 1.167.28->1.167.29 ledger re-approval and with-concurrency's detached process group. Version 1.167.32.\n\nLook hard at: cross-project data reachability or cache poisoning through the shared snapshot/incremental patch; serving a response before token/cookie/privacy/security headers; a 304 that drops them; SSE auth, backpressure, unbounded queues/connections, event floods, token leakage in logs/URLs, a dropped stream that never falls back; incremental patch errors (missing project, id not in the cache, stale model vs payload, aggregate counters wrong); the bounded family selection missing a live run (lanes/history still mark it) or scanning an idle root as active forever; the change-driven refresh going stale indefinitely, a flag reset race, concurrent requests and single-flight, cold start; the soak/latency harnesses redacting tokens, reversible changes, and the CPU/RSS verdict being honest; the merge-gate identity binding (path traversal, job-map shapes, legacy records, any weakening); stress signal cleanup and tab token loss; test gaps. Report only real findings with file and line, a concrete failure, and a fix.\n\nWrite ONLY coordination/review/train8-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty. The runner stamps the reviewed head into your result; do NOT add or change a head field.",
+      "context": [
+        "coordination/review/train8.diff",
+        "tools/watch-server.mjs",
+        "tools/board-data.mjs",
+        "tools/command-center-snapshot.mjs",
+        "tools/watch-live-latency.mjs",
+        "tools/watch-soak.mjs",
+        "tools/merge-guard.mjs",
+        "tools/stress-tests.mjs",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tests/command-center-live.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/merge-guard.test.mjs",
+        "CHANGELOG.md",
+        "coordination/review/t8-soak-60m-final.json",
+        "coordination/review/t8-latency-desktop.json",
+        "coordination/review/t8-latency-phone.json"
+      ],
+      "outputs": [
+        "coordination/review/train8-review.json"
+      ],
+      "resultFile": "coordination/review/train8-review.json",
+      "timeoutMs": 2400000
+    }
+  ]
+}

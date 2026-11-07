@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0418",
+      "agent": "auto",
+      "prompt": "T-0418: `swarm burst run-cpu` (or whatever subcommand name fits tools/burst-commands.mjs's existing `gpu status|start` pattern - read it as context, follow the same `run<Name>Command` shape and USAGE-string conventions exactly) should run a registered cloud CPU runner job: a ticket's own test command plus the full e2e suite, via runCpuRunnerJob (tools/cpu-runner.mjs, read as context - it already runs both commands and returns `{ticketTests:{status,durationMs,exitCode}, e2eSuite:{status,durationMs,exitCode}, completedAt}`; do not reimplement it), and write the result to this project's event store. There is no single generic 'event store' module yet for this - read tools/burst-route.mjs as context for the existing convention this codebase already uses for recording completions (completionsPath/appendCompletion/readBurstCompletions, an append-only JSON array under `.swarm/project/`); follow that same append-only-JSON-file convention for CPU-runner completions (e.g. a sibling `cpu-runner-completions.json` path and a matching append/read pair), rather than inventing an unrelated storage mechanism. In tools/burst-commands.mjs, add a new subcommand reading `--ticket-test CMD --e2e CMD` (or a `--job FILE` JSON with `{ticketTestCommand, e2eSuiteCommand}` - pick whichever is more consistent with how `gpu status|start` already reads its `--metrics`/`--ticket` flags in this same file), runs runCpuRunnerJob, and appends the result (plus a ticket/runner id if supplied) to the completions store before printing a short pass/fail summary with durations. Do NOT edit tools/swarm.mjs - CLI-level `burst` dispatch already exists and needs no change since this is a new subcommand under the same `runBurstCommand` entry point. Write tests/cpu-runner-route.test.mjs covering: a passing ticket test command and e2e suite both record pass with real elapsed durations, and the completion is appended to the store and readable back; a failing ticket test command still runs and records the e2e suite (not skipped), and the completion reflects the ticket-test failure; two sequential runs both land in the store (append, not overwrite). Run the test file when done.",
+      "context": ["tools/burst-commands.mjs", "tools/cpu-runner.mjs", "tools/burst-route.mjs"],
+      "outputs": ["tools/burst-commands.mjs", "tests/cpu-runner-route.test.mjs"],
+      "timeoutMs": 1800000,
+      "ignoreTests": ["tests/claude-shell.test.mjs", "tests/config-private-names.test.mjs", "tests/field-lessons-batch-ah-runtime.test.mjs", "tests/lanes.test.mjs", "tests/scout.test.mjs", "tests/shell-writes-hardening.test.mjs", "tests/split-module.test.mjs", "tests/swarm.test.mjs", "tests/watch-token-urls.test.mjs", "tests/watch-ui.test.mjs", "tests/burst-gpu-route.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory enumeration, plus burst-gpu-route.test.mjs which already covers this file's existing gpu subcommands and should stay untouched"
+    }
+  ]
+}

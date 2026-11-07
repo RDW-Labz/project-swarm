@@ -175,14 +175,14 @@ test('/api/live is read-only and token-protected, 404 for an unknown project, an
   const { url } = await server.listen();
   t.after(async () => { await server.close(); await api.close(); });
   const u = new URL(url); const id = projectId(root);
-  const get = async p => fetch(`${u.origin}${p}`, { redirect: 'manual' });
+  const get = async (p, init = {}) => fetch(`${u.origin}${p}`, { redirect: 'manual', ...init });
   assert.equal((await get(`/api/live?id=${id}`)).status, 403);
-  const ok = await get(`/api/live?id=${id}&t=${u.searchParams.get('t')}`);
+  const ok = await get(`/api/live?id=${id}`, { headers: { 'x-watch-token': u.searchParams.get('t') } });
   assert.equal(ok.status, 200);
   const body = await ok.json();
   assert.equal(body.header.runsLive, 1); assert.equal(body.lanes[0].agents[0].job, 'T-1');
-  assert.equal((await get(`/api/live?id=nope&t=${u.searchParams.get('t')}`)).status, 404);
-  assert.equal((await fetch(`${u.origin}/api/live?id=${id}&t=${u.searchParams.get('t')}`, { method: 'POST' })).status, 405);
+  assert.equal((await get('/api/live?id=nope', { headers: { 'x-watch-token': u.searchParams.get('t') } })).status, 404);
+  assert.equal((await fetch(`${u.origin}/api/live?id=${id}`, { method: 'POST', headers: { 'x-watch-token': u.searchParams.get('t') } })).status, 405);
   const page = await get(`/project?id=${id}&t=${u.searchParams.get('t')}`);
   assert.match(await page.text(), /id="pane-live"/);
   assert.equal((await get('/assets/project-live.js')).status, 200);

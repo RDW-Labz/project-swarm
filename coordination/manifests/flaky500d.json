@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "flaky500d",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "The 500-job integration test in tests/lanes-run.test.mjs still fails in about 1 of 3 runs under load, always on the assertion that other providers were served during the gemini pause (servedDuringPause > 0); this is inherently timing dependent in a real-time run. Decision: remove that single assertion and the servedDuringPause bookkeeping from the 500-job test (keep every other assertion: caps, 499 complete, job 2 failed, retries, peaks, lazy preparation), and cover the isolation property deterministically instead: add a unit test in tests/lanes.test.mjs (or tests/lane-pause-isolation.test.mjs if lanes.test.mjs is crowded) that uses the lane store and an injected clock (look at how tests/lanes.test.mjs and tools/lanes.mjs inject now()) to show that when one lane is paused (writeLanePause or a 402 recorded through the lane health logic) the claim logic still grants slots to the other lanes during the pause window and grants gemini slots again only after the pause expires, with explicit fake time and no sleeps. Run the changed files 12 times each, also with 6 busy node loops in the background, zero failures required. Test-only changes.",
+   "context": [
+    "tests/lanes-run.test.mjs",
+    "tests/spend.test.mjs",
+    "tools/lanes.mjs",
+    "tests/_isolate-config.mjs",
+    "tests/lanes.test.mjs"
+   ],
+   "outputs": [
+    "tests/lanes-run.test.mjs",
+    "tests/spend.test.mjs",
+    "tests/lanes.test.mjs",
+    "tests/lane-pause-isolation.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "test-only change; full suite before merge"
+  }
+ ]
+}

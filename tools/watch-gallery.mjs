@@ -157,7 +157,11 @@ async function writeGallery(root, stored) {
     await writeFile(tmp, data, 'utf8');
     await rename(tmp, file);
   } catch (err) {
-    await unlink(tmp).catch(() => {});
+    await unlink(tmp).catch((error) => {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/watch-gallery.mjs] unlink tmp before rethrow:', error?.message ?? error);
+      }
+    });
     throw err;
   }
 }

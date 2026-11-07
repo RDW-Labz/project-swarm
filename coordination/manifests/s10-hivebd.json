@@ -1,0 +1,37 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "hivebd",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "timeoutMs": 1800000,
+   "context": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css"
+   ],
+   "prompt": "In docs/design/command-center-mockup/hive.html the card builder (inside NODES.forEach, around the lines that create const bd = el('div', 'hive-node-bd')) builds the card body bd with the key/value list and the p() meter but never appends bd to the card, so every card renders with an empty body. Add the missing card.appendChild(bd); right after the meter block and before card.style.setProperty('--card-glow', ...). Then check that the card body is laid out correctly: .hive-node must be a flex column so the header, the body (flex:1, padding 8px 10px, no overflow hidden) and the meter fit inside the 18.8 percent stage-height cards at 1440x900 and in the single-column phone layout at 390px; adjust the .hive-kv, .hive-node-bd and .hive-meter CSS only as far as needed so three rows of 12.5px mono and the meter are fully visible (never clipped). Change nothing else.",
+   "ignoreTests": [
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/board.test.mjs",
+    "tests/field-lessons-batch-ai-runtime.test.mjs",
+    "tests/field-lessons-batch-f.test.mjs",
+    "tests/lesson-39-eval.test.mjs",
+    "tests/lesson-40-eval.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/scheduling.test.mjs",
+    "tests/scope-gate-list.test.mjs",
+    "tests/scope-integrity.test.mjs",
+    "tests/scope-ownership.test.mjs",
+    "tests/scope-split-repair-loop.test.mjs",
+    "tests/split-repair.test.mjs"
+   ]
+  }
+ ]
+}

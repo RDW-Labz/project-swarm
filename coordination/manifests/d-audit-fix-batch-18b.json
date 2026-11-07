@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-claudeshell-batch-18b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "Goal g-33a7a4ae, D-fix batch 18b (logging-only visibility round). Edit ONLY tools/claude-shell.mjs. This file builds the macOS seatbelt SANDBOX boundary and a network allow-list proxy for claude shell workers: it is security-sensitive. Visibility only: do NOT change control flow, return values, throws, sandbox profile contents, the proxy allow/deny decision, or anything a worker sees.\n\nNOTE: docs/state/silent-failures.md lists lines 148/363/397/423 for this file, but the file has changed since; those four findings are now at the CURRENT lines below. Only these four catches:\n\nNo logger exists in this file. Use: console.error('[tools/claude-shell.mjs] <short context>:', ...)\n\n1. Line ~170 `try { rootCommonDir = path.resolve(gitDir, (await readFile(path.join(gitDir, 'commondir'))).trim()); } catch { /* gitDir is itself the common dir */ }`: ENOENT is expected (not a linked worktree): silent. Log anything else (`error?.code ?? error?.message`). Keep the comment.\n2. Line ~385 `try { host = new URL(request.url).hostname || host; } catch { /* origin-form request */ }` inside the proxy request handler: this runs PER REQUEST, and an origin-form URL throws a TypeError (code ERR_INVALID_URL) as the normal case: stay silent for `error?.code === 'ERR_INVALID_URL' || error instanceof TypeError`. Log anything else with `error?.name` and `error?.code` ONLY (never request.url or the message \u2014 it may carry worker-controlled text). Keep the comment.\n3. Line ~419 `try { await fs.access(candidate, fs.constants.X_OK); return await fs.realpath(candidate); } catch { /* keep looking */ }` scanning PATH for the claude CLI: ENOENT, ENOTDIR, EACCES are expected (not in this dir / not executable): silent. Log anything else with the candidate path, then keep looking. Keep the comment.\n4. Line ~445 `try { dirs.add(path.dirname(await realpath(home))); } catch { /* checked through the python link below */ }`: ENOENT/ENOTDIR expected: silent. Log anything else. Keep the comment.\n\nDo NOT touch any other catch in this file (there are ~10 others; leave them exactly as they are, including line 393's client.on('error', () => {})). Do not refactor, reformat, rename, or change exports.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run covering tests (grep tests/ for claude-shell) with: node --import ./tests/_isolate-config.mjs --test <files>, confirm green. Final summary: one line per changed line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/claude-shell.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/claude-shell-paused-lanes.test.mjs",
+        "tests/claude-shell-paused-validate.test.mjs",
+        "tests/claude-shell-paused.test.mjs",
+        "tests/claude-shell.test.mjs",
+        "tests/field-lesson-t81-adapters.test.mjs",
+        "tests/field-lessons-batch-e.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-g.test.mjs",
+        "tests/field-lessons-batch-m3.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-q.test.mjs",
+        "tests/field-lessons-batch-t2.test.mjs",
+        "tests/field-lessons-batch-v.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/shell-loopback.test.mjs",
+        "tests/shell-scratch.test.mjs",
+        "tests/shell-setup.test.mjs",
+        "tests/state-guard.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

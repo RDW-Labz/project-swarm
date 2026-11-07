@@ -73,7 +73,7 @@ test('isSelfApprovalCommand: script path, quoting, and nested shells', () => {
   const trueCases = [
     'node tools/swarm.mjs handbuild off',
     "swarm handbuild o''ff",
-    'node tools/swarm.mjs decide 42 approve',
+    'node tools/swarm.mjs decide handbuild-42 approve',
     'swarm decide handbuild-abc approve',
     'node .\\/tools\\/swarm.mjs handbuild approve x',
     'bash -c "swarm handbuild deny hb-1"',

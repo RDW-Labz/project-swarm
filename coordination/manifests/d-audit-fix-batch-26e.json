@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-26e",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 26e (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/autotune.mjs, tools/budgets-commands.mjs, tools/inbox-commands.mjs, tools/managers/lessons/close.mjs, tools/plan-commands.mjs, tools/remote.mjs, tools/swarm/core-32.mjs, tools/tool-config.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/swarm/train3). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/autotune.mjs\nLogger prefix: console.error('[tools/autotune.mjs] <short context>:', error?.message ?? error)\n- Line 157 `} catch { /* fall through */ }`: SILENT-ENOENT/EACCES \u2014 reading /proc/meminfo is a best-effort Linux-only probe that already falls back to os.freemem() on failure.\n\n### tools/budgets-commands.mjs\nLogger prefix: console.error('[tools/budgets-commands.mjs] <short context>:', error?.message ?? error)\n- Line 40 `readLedger(root).catch(() => null)`: SILENT-ENOENT \u2014 no ledger yet is fine for a status display, but readLedger rethrows raw SyntaxError on corruption so that case must be logged as fixed text 'corrupt ledger (SyntaxError)', not the raw message.\n\n### tools/inbox-commands.mjs\nLogger prefix: console.error('[tools/inbox-commands.mjs] <short context>:', error?.message ?? error)\n- Line 64 `fs.access(entry/.swarm) catch { /* not a swarm project */ }`: SILENT-ENOENT/ENOTDIR \u2014 probes a registered project path for a .swarm directory when listing `--all` roots; a registered folder simply not being (or no longer being) a swarm project is expected.\n\n### tools/managers/lessons/close.mjs\nLogger prefix: console.error('[tools/managers/lessons/close.mjs] <short context>:', error?.message ?? error)\n- Line 218 `const text = await readCappedRepoFile(root, rel)`: SILENT-ENOENT \u2014 probing multiple landed-path candidates where most are expected not to exist; log any other code (e.g. lesson-close-path, lesson-close-too-large) since those mean a real bug or oversize artifact.\n\n### tools/plan-commands.mjs\nLogger prefix: console.error('[tools/plan-commands.mjs] <short context>:', error?.message ?? error)\n- Line 74 `await writeCalibration(root, recordActual(calibration, ...))`: LOG-ALWAYS \u2014 readCalibration/writeCalibration already swallow their own ENOENT/corrupt-JSON cases internally, so anything reaching this outer catch is unexpected and should be logged even though calibration itself stays best-effort.\n\n### tools/remote.mjs\nLogger prefix: console.error('[tools/remote.mjs] <short context>:', error?.message ?? error)\n- Line 91 `try { await fs.access(p, 1); return p } catch { /* next */ }`: SILENT-ENOENT/EACCES/ENOTDIR \u2014 PATH probe for the tailscale binary; log anything else.\n\n### tools/swarm/core-32.mjs\nLogger prefix: console.error('[tools/swarm/core-32.mjs] <short context>:', error?.message ?? error)\n- Line 55 `const info = await fs.stat(await safePath(root, file))`: SILENT-ENOENT \u2014 sizing a job's declared outputs against the output cap; an output not yet written has no size, which is expected, log anything else (e.g. a safePath/security error).\n\n### tools/tool-config.mjs\nLogger prefix: console.error('[tools/tool-config.mjs] <short context>:', error?.message ?? error)\n- Line 44 `for (const entry of readdirSync(root, {withFileTypes:true}))`: SILENT-ENOENT/EACCES/ENOTDIR \u2014 shallow disk probe for config files, used only when the project isn't a clean git repo; treating an unreadable root as 'missing' matches the function's own doc comment, log anything else.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/autotune.mjs",
+        "tools/budgets-commands.mjs",
+        "tools/inbox-commands.mjs",
+        "tools/managers/lessons/close.mjs",
+        "tools/plan-commands.mjs",
+        "tools/remote.mjs",
+        "tools/swarm/core-32.mjs",
+        "tools/tool-config.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/autopilot-blocker-resolved.test.mjs",
+        "tests/autopilot-readonly-runs.test.mjs",
+        "tests/autopilot-retry-duplicates.test.mjs",
+        "tests/autotune.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/claude-shell-paused-lanes.test.mjs",
+        "tests/decision-board-safe.test.mjs",
+        "tests/fix-1167-13.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/goal-guard.test.mjs",
+        "tests/guard-backup-fixes2.test.mjs",
+        "tests/guard-backup-fixes5.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/installed-swarm.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/managers/r039-visual-lessons.test.mjs",
+        "tests/memory-aware-limits.test.mjs",
+        "tests/memory-fixes.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phase11-cli.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-park-supersede.test.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/watch-token-urls.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

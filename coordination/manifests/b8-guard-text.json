@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-text",
+      "agent": "auto",
+      "prompt": "BUG 6 from parts-request-app: the hand-build guard answered approving or denying a hand-build is the owner alone to ordinary swarm note, swarm tickets --note and swarm ask commands whose free text contained certain words. 1.165.0 fixed the --reason case, but verify every free-text channel: the arguments of swarm note, swarm tickets ID --note TEXT, swarm ask QUESTION, swarm decision TEXT, swarm lesson add (--evidence, --rule, --fix), swarm handoff, swarm backlog add GOAL, swarm change REASON, swarm time log NOTE, git commit -m and gh pr create --body text in the same Bash command, heredocs and here-strings feeding any of them. The guard (tools/handbuild.mjs guardDecision, tools/self-approval.mjs, tools/shell-writes.mjs, tools/handbuild-guard.mjs) must match ONLY the structural command: the swarm binary or node runner, optional --root VALUE, the subcommand handbuild with approve, deny, on, off, install or uninstall, or swarm decide handbuild-ID approve or deny, or editing the guard settings; never words inside quoted arguments, heredoc bodies, or other flag values, with and without line continuations and with the text containing newlines, semicolons, ampersands and the words approve, approved, deny, handbuild approve, guard off. Also make every refusal name the matched structural rule id AND the exact token that matched (the verb and the position), so a false positive is diagnosable from the message alone. Tests in tests/guard-free-text.test.mjs: a matrix of the free-text commands above each carrying risky words with the verdict allow, through guardDecision and the hook script on stdin; real approve and deny forms in the same shells (after && and in a subshell, with env prefixes and a leading cd) still block with the rule id and token in the message. Keep every existing test passing (change a test only where intended behavior changes, with a comment). Never import install.mjs statically from new modules. Hermetic tests (no ambient environment, no TTY, no network, injected clock). No token-shaped literals and no URL with credentials. ignoreTests reason: only the named files and their tests change; the fixture ledger is a frozen data copy.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/self-approval.mjs",
+        "tools/shell-writes.mjs",
+        "tools/handbuild-guard.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tools/self-approval.mjs",
+        "tools/shell-writes.mjs",
+        "tools/handbuild-guard.mjs",
+        "tests/guard-free-text.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/git-hooks.test.mjs",
+        "tests/guard-readonly-forms.test.mjs",
+        "tests/guard-word-false-positive.test.mjs",
+        "tests/handbuild-accidents.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard-verbs.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-reason-words.test.mjs",
+        "tests/handbuild-switch.test.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/policy-commit-window.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm-produced-hash.test.mjs"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}

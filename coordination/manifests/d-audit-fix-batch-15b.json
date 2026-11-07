@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-triage-batch-15b-fixup",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "Small fixup on tools/needs-you-triage.mjs. Logging-only; change nothing else.\n\n1. In refreshTriageLock's catch and releaseTriageLock's catch: a SyntaxError is an EXPECTED race (writeLockExclusive opens with 'wx' then writes, and refresh rewrites non-atomically, so another process can read '' or partial JSON). Make SyntaxError silent just like ENOENT: remove the 'corrupt lock file' branches so these catches log only when `error?.code !== 'ENOENT' && !(error instanceof SyntaxError)`.\n\n2. refreshTriageLock is called once per item inside runNeedsYouTriagePass, so a persistent error (EACCES/EISDIR) would print once per item. Add a module-level `const loggedRefreshCodes = new Set();` and in refreshTriageLock's catch only console.error when the error's code (use `error?.code ?? error?.name ?? 'unknown'`) is not already in the set, then add it.\n\n3. In readLockPayload, rename the inner unlink catch binding from `error` to `unlinkError` (it shadows the outer `error`), updating its uses inside that inner catch only.\n\nKeep all existing comments and the log prefixes. Do not touch any other catch. No unused bindings, no `void error`. Then run: node --import ./tests/_isolate-config.mjs --test tests/needs-you-triage.test.mjs and confirm green.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/needs-you-triage.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/needs-you-triage.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

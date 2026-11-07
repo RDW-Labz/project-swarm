@@ -1,0 +1,118 @@
+{
+  "release": "1.167.33",
+  "full_suite": {
+    "tests": 7643,
+    "pass": 7612,
+    "fail": 0,
+    "skipped": 22,
+    "todo": 9,
+    "duration_ms": 259232
+  },
+  "browser": {
+    "file": "tests/browser/command-center.smoke.mjs",
+    "tests": 2,
+    "pass": 2,
+    "fail": 0,
+    "scroll_test_ms": 57268
+  },
+  "scroll_verification": [
+    {
+      "page": "Hive",
+      "viewport": "1600x900",
+      "scrollWidth": 1600,
+      "clientWidth": 1600,
+      "wheel": true,
+      "touch": true,
+      "keyboard": {
+        "pagedown": 477,
+        "space": 748
+      },
+      "back": 0
+    },
+    {
+      "page": "Hive",
+      "viewport": "1280x800",
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "wheel": true,
+      "touch": true,
+      "keyboard": {
+        "pagedown": 483,
+        "space": 1202
+      },
+      "back": 0
+    },
+    {
+      "page": "Hive",
+      "viewport": "800x900",
+      "scrollWidth": 800,
+      "clientWidth": 800,
+      "wheel": true,
+      "touch": true,
+      "keyboard": {
+        "pagedown": 549,
+        "space": 1330
+      },
+      "back": 0
+    },
+    {
+      "page": "Hive",
+      "viewport": "390x844",
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "wheel": true,
+      "touch": true,
+      "keyboard": null,
+      "back": 0
+    },
+    {
+      "page": "Cockpit",
+      "viewport": "1600x900",
+      "scrollWidth": 1600,
+      "clientWidth": 1600,
+      "wheel": true,
+      "touch": true,
+      "keyboard": {
+        "pagedown": 379,
+        "space": 623
+      },
+      "back": 0
+    },
+    {
+      "page": "Cockpit",
+      "viewport": "1280x800",
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "wheel": true,
+      "touch": true,
+      "keyboard": {
+        "pagedown": 497,
+        "space": 720
+      },
+      "back": 0
+    },
+    {
+      "page": "Cockpit",
+      "viewport": "800x900",
+      "scrollWidth": 800,
+      "clientWidth": 800,
+      "wheel": true,
+      "touch": true,
+      "keyboard": {
+        "pagedown": 585,
+        "space": 1499
+      },
+      "back": 0
+    },
+    {
+      "page": "Cockpit",
+      "viewport": "390x844",
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "wheel": true,
+      "touch": true,
+      "keyboard": null,
+      "back": 0
+    }
+  ]
+}

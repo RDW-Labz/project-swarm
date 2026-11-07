@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ideas1",
+   "agent": "auto",
+   "tier": "cheap",
+   "prompt": "Append a new section at the end of docs/plans/ideas.md (keep every existing line unchanged): '## Owner order 2026-10-23: the swarm defines undefined ui screens itself' with these bullets. (1) When swarm scope approve (or scope check) finds tickets that name a ui screen the profile ui block does not define, the orchestrator defines it automatically under policy instead of raising a card: match the screen id against the repo's design references (docs/design/reference and the files named in the scope), pick the mockup by an unambiguous name or id match, derive the route from the watch/app route table, write the screens entry to the profile ui block, and log the definition in the project journal with the evidence (screen id, mockup path, route, why it matched). (2) When the match is ambiguous or no reference exists, raise ONE board card with the candidate mappings and a one-line question, never a blocker for the whole approve. (3) Policy rule name ui-screen-define in the approval policy, default on for design references inside the repo, off for references outside it; every use is listed in swarm brief. (4) Acceptance: a ledger with tickets naming two undefined screens and two reference images approves without the owner touching the profile; the journal shows both definitions; a test covers the ambiguous case raising exactly one card. Only edit docs/plans/ideas.md.",
+   "context": [
+    "docs/plans/ideas.md"
+   ],
+   "outputs": [
+    "docs/plans/ideas.md"
+   ],
+   "timeoutMs": 600000,
+   "ignoreTests": [
+    "tests/generated-state.test.mjs"
+   ],
+   "ignoreTestsReason": "docs-only edit"
+  }
+ ]
+}

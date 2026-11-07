@@ -1,0 +1,70 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omode5",
+   "agent": "auto",
+   "prompt": "Guard hardening, two things, in tools/handbuild-guard.mjs, tools/orchestrator-hook.mjs, tools/shell-writes.mjs, tools/handbuild.mjs. (A) THE TIMEOUT NEVER FIRES. Measured on the installed guard: the 4 s fail-safe is `setTimeout(() => process.exit(0), 4000).unref()`, which cannot fire while the main thread is busy in a synchronous loop, and the shell tokenizer/analyzer is QUADRATIC in the number of command segments: a command made of 2500 ';'-separated 'ls' takes 1.5 s, 5000 takes 6.4 s, 10000 takes 27 s (also ~1.5 s for 2000 pipes or 2000 '&&'). A long command therefore holds the PreToolUse hook for minutes with no timeout. Fix both: (1) run the decision in a way a hard timeout CAN stop: spawn the real decision as a child process (node, same script with an internal flag, reading the same stdin payload) from a thin parent that does nothing but read stdin, spawn, wait with a timer and, at GUARD_TIMEOUT_MS (default 15 s, env override only in test mode), kill the child (SIGKILL) and print the fail-closed deny 'guard error: retry or make a ticket (swarm diagnose \"<question>\" or swarm ticket ...)' (same message, same logging to .swarm/handbuild/guard-errors.ndjson with kind timeout); a child crash or non-zero exit or empty output also fails closed with kind crash. The kill-switch checks (off files, worker cwd, scratch roots, no project root) run in the parent BEFORE spawning so they stay instant. Do the same for tools/orchestrator-hook.mjs (the event recorder): it must never block a tool call for more than 2 s: run its work in a child with a hard kill and exit 0 silently on timeout (it only records events; it must never deny). Keep a single decision ever printed. (2) Make the tokenizer/analyzer LINEAR: find the quadratic code (repeated string slicing/concat, re-scanning from the start per segment, array shift in a loop, regex on the remaining string per token) and rewrite with index-based scanning; add a hard input cap: a Bash command longer than 100 KB or with more than 2000 segments is denied immediately with 'command too long for the guard: split it or make a ticket' (orchestrator mode only; workers exempt). Assert linearity in a test: time for 2000 vs 8000 segments grows less than 6x and 8000 segments finishes under 1.5 s on the test machine (use ratios and a generous absolute bound, no flaky timing: compare counts of operations through an injected counter if possible). (3) Tests (tests/orchestrator-mode-timeout.test.mjs): drive the real hook script as a subprocess with a command that makes the decision CPU-bound (use the test-only fault env SWARM_GUARD_TEST_FAULT=spin honoured only in test mode, an infinite synchronous loop in the child) and assert deny with the exact message within GUARD_TIMEOUT_MS plus 3 s, a crash fault and a hang fault likewise, the oversized command rule, the recorder hook returns exit 0 within 3 s when its child spins, and that the off file still lets calls through instantly. (B) CI fails on this branch with two tests: tests/handbuild-reason-words.test.mjs and the test named 'free-text channels with guard words: guardDecision allow and hook pass' (find its file by grep): run them on a clean checkout; free text in notes, asks, tickets and commit messages that contains guard words must still pass the hand-build guard AND orchestrator mode must not refuse `swarm tickets ... --note \"<free text>\"`, `swarm ask`, `swarm msg send` or `git commit -m \"<text>\"` merely because the text contains words like node or python or `$(`: fix the code so free text arguments of swarm commands and git commit messages are not tokenized as commands (the existing channel rules), without weakening real command checks. Keep all handbuild, self-approval, shell-writes, orchestrator-mode and auto-approve tests passing.",
+   "context": [
+    "tools/handbuild-guard.mjs",
+    "tools/orchestrator-hook.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/orchestrator-events.mjs",
+    "tests/orchestrator-mode-fail-closed.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/handbuild-guard.mjs",
+    "tools/orchestrator-hook.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/orchestrator-mode-fail-closed.test.mjs",
+    "tests/handbuild-reason-words.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/git-hooks.test.mjs",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-allowlist.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-hardening.test.mjs",
+    "tests/handbuild-hardening2.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/handbuild-switch.test.mjs",
+    "tests/handbuild-vercel-merge.test.mjs",
+    "tests/hook-path-stable.test.mjs",
+    "tests/hooks-repoint-all.test.mjs",
+    "tests/orchestrator-lane.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/phase10b-init.test.mjs",
+    "tests/policy-commit-window.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/registry-round3.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/scratch-strict-broad.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-produced-hash.test.mjs"
+   ],
+   "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+  }
+ ]
+}

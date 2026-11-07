@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "rev8-flow",
+      "agent": "claude",
+      "model": "sonnet",
+      "tier": "mid",
+      "tierReason": "integrate state, dependency gate, autopilot",
+      "type": "review",
+      "prompt": "ROUND 2 review after fixes. The first review found: dependency-diff skipped the audit when install-time inputs outside the snapshot changed (scripts referenced by lifecycle scripts, missing keys such as bundleDependencies, peerDependenciesMeta, pnpm, yarn, packageManager, config, bin; preprepare and postprepare; a new or deleted package.json); run-kind and autopilot marked a run integrated after the first partial pass (integrationStatus partial or queued must not count), a job without an outputs array counted as read-only, the handled flag only honored in the failed branch, a retry that threw counted as retried, and resolveIntegrateBlockersForRun resolved the blocker of a partial run; core-71 did not merge integratedHashes, could overwrite an integrated job with blocked, and ignored a failed final full check. All were meant to be fixed in tools/dependency-diff.mjs, tools/run-kind.mjs, tools/autopilot.mjs, tools/swarm/core-71.mjs and tools/security-gate.mjs. For each, say whether it is fixed (cite file and line) and flag only NEW high or medium problems. Also confirm that no file references the removed tools/manifest-review.mjs. Answer with a list of findings, each with file, line, concrete scenario and severity (high, medium, low), then one line PASS or FAIL. Threat model: an honest but fallible orchestrator and normal bugs; list adversarial-only issues separately as low. Do not write files. Be brief.",
+      "context": [
+        "tools/dependency-diff.mjs",
+        "tools/security-gate.mjs",
+        "tools/run-kind.mjs",
+        "tools/autopilot.mjs",
+        "tools/swarm/core-71.mjs",
+        "tests/b7-review-fixes.test.mjs",
+        "tests/dependency-diff.test.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 1500000
+    }
+  ]
+}

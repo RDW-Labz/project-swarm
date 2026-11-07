@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "fixtestenv",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "Two test fixes after the orchestrator manifest gate landed (tools/om-manifest-guard.mjs orchestratorManifestGate runs in the runner when env.CLAUDECODE === '1', orchestrator mode is on and the orchestrator hook is installed).\n1. tests/_isolate-config.mjs: the suite inherits CLAUDECODE=1 when a developer runs it from a Claude Code session, which switches the runner gate on inside temp projects whose fixtures install the hook, so 6 tests in tests/phase12-cli.test.mjs, tests/scope-loop.test.mjs and tests/sensitive-providers.test.mjs fail only on a developer machine. Add `delete process.env.CLAUDECODE;` near the top (with a one-line comment why), so every test starts without it; tests that need it (tests/om-manifest-guard.test.mjs) already pass env explicitly. Change nothing else in that file.\n2. tests/orchestrator-parts-flow.test.mjs 'orchestrator parts flow commands stay allowed': the hook now refuses a run/go/ticket positional that looks like a manifest path but does not exist (part of the race fix, intended). The test's temp project does not create coordination/manifests/wave.json or .swarm/manifests/job.json. Create those two files in the test's fixture as benign manifests ({\"version\":1,\"jobs\":[{\"id\":\"j1\",\"agent\":\"cursor\",\"model\":\"composer-2.5\",\"prompt\":\"x\",\"context\":[],\"outputs\":[]}]}) before the assertions, so the allowed flows stay allowed. Add one assertion that 'swarm run coordination/manifests/missing.json' is refused.",
+   "context": [
+    "tools/om-manifest-guard.mjs",
+    "tests/om-manifest-guard.test.mjs"
+   ],
+   "outputs": [
+    "tests/_isolate-config.mjs",
+    "tests/orchestrator-parts-flow.test.mjs"
+   ],
+   "timeoutMs": 1200000
+  }
+ ],
+ "checks": [
+  { "name": "env", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/orchestrator-parts-flow.test.mjs", "tests/phase12-cli.test.mjs", "tests/scope-loop.test.mjs", "tests/sensitive-providers.test.mjs", "tests/om-manifest-guard.test.mjs"] }
+ ]
+}

@@ -1,0 +1,57 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "contract": "coordination/review/cc-design-contract.md",
+ "jobs": [
+  {
+   "id": "ccportfix",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "The Command Center port of the owner-approved artifact is integrated, with 6 failing tests (details in coordination/review/cc-port-failures.txt). Fix them without undoing the port look.\n1. tests/command-center-boot.test.mjs (read-only) \"project path renders the cockpit shell\" (assert rt.root.querySelector(\".cc-cockpit-shell\")) and \"back from cockpit returns to the hive view\" (a back control): the contract requires .cc-cockpit-shell and a working back-to-Hive control on the Cockpit page. Read the test to see exactly how it finds the shell and the back control (selectors, fake DOM without a real canvas), and make tools/watch-assets/cc-cockpit-mount.js render .cc-cockpit-shell even when canvas getContext returns null or robot heads cannot mount (catch and continue), and add the back control the test looks for, styled as in the artifact top bar (a small pill \"The Hive\" breadcrumb at the left of the cockpit bar, as the artifact shows).\n2. tests/command-center-nav.test.mjs (read-only) \"hive node click opens cockpit for that card project id\" (expects a visible cockpit breadcrumb) and \"cockpit breadcrumb click returns to hive with node cards visible\" (expects a breadcrumb nav-block): read the test, provide that breadcrumb element and behaviour in the Cockpit, matching the artifact crumb style (The Hive > PROJECT-NAME).\n3. tests/command-center-hive.test.mjs (you own it) two deriveHiveView tests fail with arrays that print equal: likely arrays created in another realm (vm sandbox) failing assert.deepStrictEqual prototype checks. Fix the test comparison (compare [...actual] or Array.from(actual), or JSON) without weakening what is asserted; if instead the product returns array-like objects, return plain arrays.\nRun nothing; reason from the test code. Keep every other test in context passing.",
+   "context": [
+    "coordination/review/cc-port-failures.txt",
+    "coordination/review/cc-design-contract.md",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-nav.test.mjs",
+    "tools/watch-assets/command-center-boot.js",
+    "tools/watch-assets/hive-panels.js",
+    "docs/design/reference/command-center-artifact/cockpit-desktop.png",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/cc-hive-mount.test.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tools/watch-assets/cc-cockpit.css",
+    "tests/command-center-hive.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ],
+ "checks": [
+  {
+   "name": "cc-units",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-routes-flag.test.mjs",
+    "tests/watch-assets-browser-safe.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/command-center-nav.test.mjs",
+    "tests/command-center-snapshot.test.mjs",
+    "tests/command-center-tour.test.mjs",
+    "tests/watch-vendor.test.mjs"
+   ]
+  }
+ ]
+}

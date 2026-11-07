@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-26b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 26b (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/ci-hooks.mjs, tools/contracts-verify.mjs, tools/safety-commands.mjs, tools/verify-local-runner.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/swarm/train3). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/ci-hooks.mjs\nLogger prefix: console.error('[tools/ci-hooks.mjs] <short context>:', error?.message ?? error)\n- Line 174 `try { child.kill(sig); } catch { /* already gone */ }`: SILENT-ESRCH \u2014 killGroup's fallback single-process kill after the process-group kill failed; the target having already exited is expected.\n\n### tools/contracts-verify.mjs\nLogger prefix: console.error('[tools/contracts-verify.mjs] <short context>:', error?.message ?? error)\n- Line 18 `try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }`: SILENT-ESRCH \u2014 killAll cleans up the mock-server/test child process groups after contract verification; the group having already exited is expected.\n\n### tools/safety-commands.mjs\nLogger prefix: console.error('[tools/safety-commands.mjs] <short context>:', error?.message ?? error)\n- Line 58 `runs.push({ id, status: (await readState(root, id)).status })`: LOG-ALWAYS \u2014 feeds the panic-button's listRuns/stop path; a non-run directory is plausible, but any other failure (corrupt state.json, permission) must be logged since silently dropping a run here means the stop command can't cancel it.\n\n### tools/verify-local-runner.mjs\nLogger prefix: console.error('[tools/verify-local-runner.mjs] <short context>:', error?.message ?? error)\n- Line 44 `child.kill('SIGKILL')`: SILENT-ESRCH \u2014 the verify timeout kills a child that may already have exited on its own between timeout and kill call; ESRCH ('process may already be gone') is expected, log any other kill failure (e.g. EPERM).\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/ci-hooks.mjs",
+        "tools/contracts-verify.mjs",
+        "tools/safety-commands.mjs",
+        "tools/verify-local-runner.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/ci-hooks.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/ledger-backup.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

@@ -55,8 +55,10 @@ export function findExecutableOnPath(name, envPath = process.env.PATH ?? '') {
     try {
       fs.accessSync(p, fs.constants.X_OK);
       return p;
-    } catch {
-      /* next */
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'EACCES' && error?.code !== 'ENOTDIR') {
+        console.error('[tools/orchestrator-up.mjs] PATH executable probe:', error?.message ?? error);
+      }
     }
   }
   return null;

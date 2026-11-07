@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-gpucmd-batch-14b-fixup",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "Tiny wording fixup on tools/gpu-commands.mjs, ONE line only. In bakeoff()'s `start` handler, the catch around `await gpuDown(real)` (the one whose comment is /* ignore: the original error matters */, bound as downError) logs '[tools/gpu-commands.mjs] gpu down on interrupt FAILED, ...'. That path is cleanup after gpuUp failed during a bake-off start, not an interrupt. Change only the words 'gpu down on interrupt FAILED' to 'gpu down after failed bakeoff start FAILED' in THAT line. Do not touch the signal-handler log line (which correctly says 'on interrupt') or anything else. Then run: node --test tests/gpu-cli.test.mjs tests/gpu.test.mjs and confirm green.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

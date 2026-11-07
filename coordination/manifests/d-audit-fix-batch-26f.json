@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-26f",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 26f (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/board-commands.mjs, tools/checks-from-ci.mjs, tools/lesson-store.mjs, tools/migration-gate.mjs, tools/preflight.mjs, tools/self-manage/lane-monitor.mjs, tools/swarm/warnings.mjs, tools/tunnel.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/swarm/train3). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/board-commands.mjs\nLogger prefix: console.error('[tools/board-commands.mjs] <short context>:', error?.message ?? error)\n- Line 33 `fs.realpath(rest[0]).catch(() => null)`: SILENT-ENOENT/ENOTDIR/EACCES \u2014 resolving a user-given folder path for `board projects add`; any failure already surfaces to the user as 'no such folder'.\n\n### tools/checks-from-ci.mjs\nLogger prefix: console.error('[tools/checks-from-ci.mjs] <short context>:', error?.message ?? error)\n- Line 236 `catch { /* no runtime scratch tree */ }`: SILENT-ENOENT \u2014 fs.stat on .swarm is just a best-effort probe for whether to add the swarm-ignore glob.\n\n### tools/lesson-store.mjs\nLogger prefix: console.error('[tools/lesson-store.mjs] <short context>:', error?.message ?? error)\n- Line 171 `await handle.close().catch(() => {})`: LOG-ALWAYS \u2014 closing the handle shouldn't fail; swallowing it hides handle/fs problems while the real error above is still rethrown.\n\n### tools/migration-gate.mjs\nLogger prefix: console.error('[tools/migration-gate.mjs] <short context>:', error?.message ?? error)\n- Line 328 `if ((await stat(join(root, dir))).isDirectory()) return dir`: SILENT-ENOENT \u2014 probing the known migration-tool directory names; most projects won't have a given one, log anything else.\n\n### tools/preflight.mjs\nLogger prefix: console.error('[tools/preflight.mjs] <short context>:', error?.message ?? error)\n- Line 79 `const info = await fs.stat(candidate); if (info.isFile())`: SILENT-ENOENT/EACCES/ENOTDIR \u2014 probing each PATH dir for the probe program; most won't have it, log anything else.\n\n### tools/self-manage/lane-monitor.mjs\nLogger prefix: console.error('[tools/self-manage/lane-monitor.mjs] <short context>:', error?.message ?? error)\n- Line 263 `timer = setIntervalFn(() => { tick().catch(() => {}); }, period)`: LOG-ALWAYS \u2014 tick() handles its own errors, so a rejection reaching this outer catch is unexpected; console.error it. Keep the interval running.\n\n### tools/swarm/warnings.mjs\nLogger prefix: console.error('[tools/swarm/warnings.mjs] <short context>:', error?.message ?? error)\n- Line 267 `binary = (await fs.readFile(...)).subarray(0,8000).includes(0)`: SILENT-ENOENT \u2014 a listed sibling file may vanish before it's read (race), so it's reported as plain text; log anything else since this only affects advisory warning text.\n\n### tools/tunnel.mjs\nLogger prefix: console.error('[tools/tunnel.mjs] <short context>:', error?.message ?? error)\n- Line 332 `try { deps.unlinkSync(plistPath) } catch { /* partial install */ }`: SILENT-ENOENT \u2014 best-effort cleanup of a just-written plist after launchctl bootstrap failed; the file may not have been created, log any other unlink failure before fail() reports only the launchctl error.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/board-commands.mjs",
+        "tools/checks-from-ci.mjs",
+        "tools/lesson-store.mjs",
+        "tools/migration-gate.mjs",
+        "tools/preflight.mjs",
+        "tools/self-manage/lane-monitor.mjs",
+        "tools/swarm/warnings.mjs",
+        "tools/tunnel.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-page.test.mjs",
+        "tests/checks-from-ci.test.mjs",
+        "tests/codex-adapter.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ah-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-ship.test.mjs",
+        "tests/field-lessons-batch-l.test.mjs",
+        "tests/field-lessons-batch-p.test.mjs",
+        "tests/field-lessons-batch-s.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lesson-backfill.test.mjs",
+        "tests/lesson-import.test.mjs",
+        "tests/lesson-mine.test.mjs",
+        "tests/lesson-store.test.mjs",
+        "tests/lessons120-context.test.mjs",
+        "tests/managers/r039-visual-lessons.test.mjs",
+        "tests/migration-down-dir.test.mjs",
+        "tests/migration-gate.test.mjs",
+        "tests/preflight.test.mjs",
+        "tests/self-manage-lane-monitor.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/tier.test.mjs",
+        "tests/tunnel.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

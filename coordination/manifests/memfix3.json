@@ -1,0 +1,47 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "memfix3",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "context": [
+    "tools/autotune.mjs",
+    "tools/machine-limit.mjs",
+    "tools/board-keepalive.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tests/memory-fixes.test.mjs"
+   ],
+   "outputs": [
+    "tools/autotune.mjs",
+    "tools/machine-limit.mjs",
+    "tools/board-keepalive.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tools/swarm/core-31.mjs",
+    "tests/memory-fixes.test.mjs"
+   ],
+   "prompt": "Fix three third-review findings, with tests in tests/memory-fixes.test.mjs (injected fakes only). 1 MEDIUM unknown pressure must mean no memory limit everywhere, not hard: when a darwin probe fails readMachine returns availRamGb: null (not 0) with pressureUnknown true. tickAutotune must pass pressureUnknown to the tuner; createTuner tune() must treat a null freeRamGb or pressureUnknown as not stressed by RAM (no ram backoff, and the freeRamGb<=4 check is skipped); projectedMemoryJobCap in tools/autotune.mjs and effectiveMachineLimit in tools/machine-limit.mjs must skip the memory cap when availRamGb is null or pressureUnknown is set; jobStartsForBatch and testConcurrencyFor must behave as at ok pressure. Keep every other caller null-safe (no NaN, no comparison of null to a number that reads as 0). Add tests through tickAutotune, effectiveMachineLimit, testConcurrencyFor and the autopilot startScope path for an unknown reading: nothing is held and the limit is not pinned. 2 MEDIUM the warning stored in machine.warning must reach the user: log it once per process (module-level flag) as one stderr line from the place readMachine is called in tools/autopilot-ready-deps.mjs and from the core-31 runChecks code, and attach it to the check result warnings like the pressure warning there. 3 LOW tools/board-keepalive.mjs: use lstat on the config directory and refuse a symlink. Keep every existing test passing.",
+   "ignoreTests": [
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autotune.test.mjs",
+    "tests/board-keepalive.test.mjs",
+    "tests/cache-context-normalize.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/helpers/swarm-source.mjs",
+    "tests/ignore-tests-reason.test.mjs",
+    "tests/machine-limit.test.mjs",
+    "tests/memory-aware-limits.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/run-cleanup.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ]
+  }
+ ]
+}

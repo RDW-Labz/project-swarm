@@ -325,8 +325,8 @@ export async function detectMigrationsDir(root) {
   for (const dir of MIGRATION_DIRS) {
     try {
       if ((await stat(join(root, dir))).isDirectory()) return dir;
-    } catch {
-      // not there
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/migration-gate.mjs] stat migration dir:', dir, error?.message ?? error);
     }
   }
   return null;

@@ -5,13 +5,11 @@ import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } fr
 import { renderOrchestrator, buildMixText } from './orchestrator-view.js';
 
 var L = self.BoardLib;
+var TOKEN = L.watchToken();
 var params = new URLSearchParams(location.search);
-var TOKEN = params.get('t') || '';
 var ID = params.get('id') || '';
-var T = encodeURIComponent(TOKEN);
 var $ = function (id) { return document.getElementById(id); };
 function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
-function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
 function pct(v) { return typeof v === 'number' && isFinite(v) ? Math.round(v * 100) + '%' : '-'; }
 function ago(iso) { var t = Date.parse(iso || ''); if (!isFinite(t)) { return 'never'; } var s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 90 ? s + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 129600 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
 var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage may be off */ } } };
@@ -75,10 +73,6 @@ function renderKpis(d) {
   var h = d.header;
   box.appendChild(tile('Jobs', h.jobs.running + ' running', h.jobs.queued + ' queued, ' + h.jobs.blocked + ' blocked'));
   box.appendChild(tile('Runs live now', String(h.runsLive), h.runsLive ? 'ETA ' + (h.etaMs === null ? 'unknown yet' : h.etaMs === 0 ? 'nothing left' : L.duration(h.etaMs)) + ' (the slowest run)' : 'nothing running'));
-  box.appendChild(tile('Spend today', usd(h.spendTodayUsd), 'billed lanes; flat-rate lanes are not billed'));
-  var hasCap = typeof h.capUsd === 'number' && h.capUsd > 0;
-  var capText = hasCap ? 'of ' + usd(h.capUsd) + ' cap' : h.capInvalid ? 'CAP INVALID' : 'NO CAP';
-  box.appendChild(tile('Project spend', usd(h.spendUsd), capText, hasCap ? meter(100 * h.spendUsd / h.capUsd, h.spendUsd / h.capUsd > 0.75) : null));
 }
 
 function headKey(a) { return a.run + '|' + a.job; }
@@ -166,14 +160,14 @@ function renderRuns(d) {
     var name = r.tickets.length ? r.tickets.join(', ') + (r.ticketCount > r.tickets.length ? ' +' + (r.ticketCount - r.tickets.length) : '') : (r.goal || 'Run ' + r.short);
     who.appendChild(el('b', '', name));
     var meta = el('div', 'meta');
-    [r.tickets.length || r.goal ? r.short : null, r.status === 'paused' ? 'paused' : null, r.done + '/' + r.total + ' jobs', usd(r.spendUsd), 'ELAPSED', r.failed ? r.failed + ' failed' : null].forEach(function (t) {
+    [r.tickets.length || r.goal ? r.short : null, r.status === 'paused' ? 'paused' : null, r.done + '/' + r.total + ' jobs', 'ELAPSED', r.failed ? r.failed + ' failed' : null].forEach(function (t) {
       if (t === 'ELAPSED') { var e = el('span', 'mono elapsed', elapsedText(r.startedAt)); e.setAttribute('data-started', r.startedAt || ''); meta.appendChild(e); }
       else if (t) { meta.appendChild(el('span', 'mono', t)); }
     });
     who.appendChild(meta);
     var acts = el('div', 'acts');
-    acts.appendChild(linkTo('/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'btn primary', 'Open run page', 'The run\'s own live page'));
-    acts.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'btn', 'Inspector', 'Graph, journal, compare'));
+    acts.appendChild(linkTo('/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId), 'btn primary', 'Open run page', 'The run\'s own live page'));
+    acts.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId), 'btn', 'Inspector', 'Graph, journal, compare'));
     who.appendChild(acts); row.appendChild(who); box.appendChild(row);
   });
   var rec = $('liveRecent'); rec.textContent = '';
@@ -181,9 +175,9 @@ function renderRuns(d) {
   d.recent.forEach(function (r) {
     var row = el('div', 'runrow recent'); var who = el('div', 'who');
     var top = el('div', 'meta'); top.appendChild(el('span', 'pill ' + (r.status === 'complete' ? 'good' : 'bad'), r.status === 'complete' ? 'complete' : (r.result || r.status)));
-    [r.short, r.done + '/' + r.total + ' jobs', r.failed ? r.failed + ' failed' : null, usd(r.costUsd), ago(r.finishedAt)].forEach(function (t) { if (t) { top.appendChild(el('span', 'mono', t)); } });
+    [r.short, r.done + '/' + r.total + ' jobs', r.failed ? r.failed + ' failed' : null, ago(r.finishedAt)].forEach(function (t) { if (t) { top.appendChild(el('span', 'mono', t)); } });
     who.appendChild(top);
-    who.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'board-link sub', 'Open in the inspector'));
+    who.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId), 'board-link sub', 'Open in the inspector'));
     row.appendChild(who); rec.appendChild(row);
   });
 }
@@ -194,10 +188,10 @@ function renderEmpty(d) {
   box.appendChild(el('div', 'sub', 'Last activity in this project: ' + (d.empty.lastActivityAt ? ago(d.empty.lastActivityAt) : 'none yet') + '.'));
   var links = el('div', 'links');
   var ov = el('button', 'btn primary', 'Overview'); ov.type = 'button'; ov.addEventListener('click', function () { go('overview'); }); links.appendChild(ov);
-  if (d.recent[0]) { links.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(d.recent[0].runId) + '&t=' + T, 'btn', 'Last run: ' + d.recent[0].short)); }
-  links.appendChild(linkTo('/?t=' + T, 'btn', 'All projects'));
+  if (d.recent[0]) { links.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(d.recent[0].runId), 'btn', 'Last run: ' + d.recent[0].short)); }
+  links.appendChild(linkTo('/', 'btn', 'All projects'));
   box.appendChild(links);
-  if (d.finishedCount) { box.appendChild(el('div', 'sub', 'Finished today: ' + d.finishedCount + (d.finishedCount === 1 ? ' run' : ' runs') + (d.finishedCount === d.recent.length ? ', ' + usd(d.recent.reduce(function (n, r) { return n + (r.costUsd || 0); }, 0)) : ' (the latest ' + d.recent.length + ' are listed)') + '.')); }
+  if (d.finishedCount) { box.appendChild(el('div', 'sub', 'Finished today: ' + d.finishedCount + (d.finishedCount === 1 ? ' run' : ' runs') + '.')); }
 }
 
 function renderOrch(d) {
@@ -222,9 +216,6 @@ var inflight = false, lastOkAt = 0, lastSig = '', lastAnnounce = '', rendered = 
 // What changes just because time passes (elapsed time, estimates, when an agent started) does not redraw the tab: elapsed time is kept current in the page.
 var VOLATILE = { now: 1, elapsedMs: 1, etaMs: 1, since: 1 };
 function chip() {
-  var l = L.liveness(lastOkAt, Date.now());
-  $('liveText').textContent = l.state === 'live' ? 'Live' : lastOkAt ? 'Stale (' + l.ageS + ' s)' : 'connecting';
-  $('liveDot').className = 'dot ' + (l.state === 'live' ? '' : 'off');
   document.querySelectorAll('.elapsed[data-started]').forEach(function (n) { n.textContent = elapsedText(n.getAttribute('data-started')); });
 }
 function problem(text) {
@@ -236,7 +227,7 @@ function load() {
   if (inflight || document.hidden || $('pane-live').hidden) { return; }
   inflight = true;
   var ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 10000);
-  fetch('/api/live?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN }, signal: ctl.signal })
+  fetch('/api/live?id=' + encodeURIComponent(ID), { headers: { 'x-watch-token': TOKEN }, signal: ctl.signal })
     .then(function (res) {
       if (res.ok) { return res.json(); }
       problem(res.status === 404 ? 'Project not found' : res.status === 403 ? 'This page\'s link has expired' : 'Could not load (' + res.status + ')');

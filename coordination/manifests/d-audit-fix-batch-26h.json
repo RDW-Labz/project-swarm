@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-26h",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 26h (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/board-run.mjs, tools/deploy-status.mjs, tools/machine-limit.mjs, tools/orchestrator-up.mjs, tools/release-train-bump.mjs, tools/split-scan.mjs, tools/time-auto.mjs, tools/watch-gallery.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/swarm/train3). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/board-run.mjs\nLogger prefix: console.error('[tools/board-run.mjs] <short context>:', error?.message ?? error)\n- Line 65 `catch { /* an old run may have no manifest */ }`: SILENT-ENOENT \u2014 old runs lack manifest.json as the comment says, but a corrupt one must log fixed text 'corrupt manifest.json (SyntaxError)', never the raw JSON.parse message.\n\n### tools/deploy-status.mjs\nLogger prefix: console.error('[tools/deploy-status.mjs] <short context>:', error?.message ?? error)\n- Line 55 `catch { /* missing or unreadable git config */ }`: SILENT-ENOENT/EACCES \u2014 githubRepo() is a best-effort probe of .git/config for a status display; not every root is a git repo with a readable config.\n\n### tools/machine-limit.mjs\nLogger prefix: console.error('[tools/machine-limit.mjs] <short context>:', error?.message ?? error)\n- Line 242 `try { return createLaneCaps.fromJSON(state.laneCaps, ...) }`: LOG-ALWAYS \u2014 no error is expected from reparsing already-validated persisted laneCaps; silently falling through hides corrupt autotune state.\n\n### tools/orchestrator-up.mjs\nLogger prefix: console.error('[tools/orchestrator-up.mjs] <short context>:', error?.message ?? error)\n- Line 58 `fs.accessSync(p, fs.constants.X_OK); return p`: SILENT-ENOENT/EACCES/ENOTDIR \u2014 PATH probe for an executable; most PATH dirs won't have it, log anything else.\n\n### tools/release-train-bump.mjs\nLogger prefix: console.error('[tools/release-train-bump.mjs] <short context>:', error?.message ?? error)\n- Line 104 `await fs.unlink(tmp).catch(() => {})`: SILENT-ENOENT \u2014 tmp cleanup after a failed wx write/rename; the tmp file often never got created, so ENOENT is expected, log any other unlink failure since it'd leave a stray tmp file.\n\n### tools/split-scan.mjs\nLogger prefix: console.error('[tools/split-scan.mjs] <short context>:', error?.message ?? error)\n- Line 776 `const { ast, comments } = parseSource(text)`: LOG-ALWAYS \u2014 scans tools/swarm.mjs's own (valid) source for split points; a parse failure here isn't expected, so silently caching empty opaque-ranges can quietly make the splitter treat string/comment contents as split-eligible; log the parse error instead.\n\n### tools/time-auto.mjs\nLogger prefix: console.error('[tools/time-auto.mjs] <short context>:', error?.message ?? error)\n- Line 48 `for await (const line of rl) { ... }`: SILENT-ENOENT \u2014 the file was just listed by readdir so a race-deleted transcript is the plausible benign cause; log anything else since it would silently drop real owner-activity signal.\n\n### tools/watch-gallery.mjs\nLogger prefix: console.error('[tools/watch-gallery.mjs] <short context>:', error?.message ?? error)\n- Line 160 `await unlink(tmp).catch(() => {})`: SILENT-ENOENT \u2014 same tmp-cleanup-before-rethrow pattern as lesson-store/release-train; tmp may never have been created, log any other unlink failure.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/board-run.mjs",
+        "tools/deploy-status.mjs",
+        "tools/machine-limit.mjs",
+        "tools/orchestrator-up.mjs",
+        "tools/release-train-bump.mjs",
+        "tools/split-scan.mjs",
+        "tools/time-auto.mjs",
+        "tools/watch-gallery.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/deploy-status.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-limit.test.mjs",
+        "tests/memory-aware-limits.test.mjs",
+        "tests/memory-fixes.test.mjs",
+        "tests/orchestrator-up.test.mjs",
+        "tests/release-train.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/swarm-release-train-cli.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/watch-gallery.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

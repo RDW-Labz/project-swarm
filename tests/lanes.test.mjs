@@ -37,7 +37,7 @@ function fixture(overrides = {}, globalConcurrency = 4, random = () => 1) {
 const outcome = (kind, extra = {}) => ({ kind, retryAfterMs: null, resetsAt: null, ...extra });
 
 test('defaults are complete, deeply frozen, and independently resolved', () => {
-  assert.deepEqual(LANE_AGENTS, ['hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented']);
+  assert.deepEqual(LANE_AGENTS, ['hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented', 'local']);
   assert.ok(Object.isFrozen(LANE_AGENTS));
   assert.ok(Object.isFrozen(LANE_DEFAULTS));
   const lanes = resolveLanes();
@@ -48,7 +48,9 @@ test('defaults are complete, deeply frozen, and independently resolved', () => {
     assert.deepEqual(lanes[agent], {
       concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 64 })[agent] ?? 32,
       requestsPerMinute: null, backoff: { baseMs: 2000, maxMs: 300000, maxRetries: 5 },
-      pauseMs: 900000, maxPauseMs: 900000, model: null, adaptive: agent === 'rented' ? { min: 1, start: 4 } : null,
+      pauseMs: 900000, maxPauseMs: 900000, model: null,
+      paused: agent === 'codex', // owner decision 2026-10-22
+      adaptive: agent === 'rented' ? { min: 1, start: 4 } : null,
     });
   }
   lanes.hermes.backoff.baseMs = 7;
@@ -56,12 +58,26 @@ test('defaults are complete, deeply frozen, and independently resolved', () => {
   assert.equal(lanes.cursor.backoff.baseMs, 2000);
 });
 
+test('resolveLanes accepts openrouter.allowCodeOutputs true and false, default unset, and refuses it elsewhere', () => {
+  assert.equal(resolveLanes({ config: { lanes: { openrouter: { allowCodeOutputs: true } } } }).openrouter.allowCodeOutputs, true);
+  assert.equal(resolveLanes({ config: { lanes: { openrouter: { allowCodeOutputs: false } } } }).openrouter.allowCodeOutputs, false);
+  assert.equal(Object.hasOwn(resolveLanes().openrouter, 'allowCodeOutputs'), false);
+  for (const allowCodeOutputs of ['yes', 1, null, {}]) {
+    assert.throws(() => resolveLanes({ config: { lanes: { openrouter: { allowCodeOutputs } } } }), { code: 'lanes-invalid' });
+  }
+  assert.throws(() => resolveLanes({ config: { lanes: { cursor: { allowCodeOutputs: true } } } }), { code: 'lanes-invalid' });
+  assert.equal(resolveLanes({
+    config: { lanes: { openrouter: { allowCodeOutputs: true } } },
+    manifest: { lanes: { openrouter: { allowCodeOutputs: false } } },
+  }).openrouter.allowCodeOutputs, false);
+});
+
 test('config precedes manifest; lane and backoff fields merge independently', () => {
   const config = { lanes: { codex: { concurrency: 9, requestsPerMinute: 8, model: 'gpt-5', backoff: { baseMs: 10, maxRetries: 2 } } } };
   const manifest = { lanes: { codex: { concurrency: 5, backoff: { maxMs: 400 } }, cursor: { model: 'vendor/model:v1.2_3' } } };
   assert.deepEqual(resolveLanes({ config, manifest }).codex, {
     concurrency: 5, requestsPerMinute: 8, model: 'gpt-5', backoff: { baseMs: 10, maxMs: 400, maxRetries: 2 },
-    pauseMs: 900000, maxPauseMs: 900000, adaptive: null,
+    pauseMs: 900000, maxPauseMs: 900000, paused: true, adaptive: null, // owner decision 2026-10-22: codex paused by default
   });
   assert.equal(config.lanes.codex.concurrency, 9);
   assert.equal(manifest.lanes.codex.backoff.baseMs, undefined);

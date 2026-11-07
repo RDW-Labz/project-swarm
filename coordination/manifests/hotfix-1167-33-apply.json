@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "hotfix-cc-scroll-apply",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. This is the hotfix for the owner's Command Center scroll bug on 1.167.32. The orchestrator has already reproduced the bug and verified the asset fix in a real Chromium board at 1600x900, 1280x800, 800x900 and 390x844. The worker does NOT need a browser and must NOT run Playwright.\n\n1. Apply the verified asset patch below exactly to tools/watch-assets/command-center.css, tools/watch-assets/cc-hive.css and tools/watch-assets/cc-hive-mount.js. It removes the body viewport lock, makes .hive-shell width:100%/min-width:0, moves the card-grid breakpoint from 900 to 1340, and sets PHONE_MAX to 1340. Do not redesign anything; the patch is the fix.\n\n2. Rewrite the browser scroll test in tests/browser/command-center.smoke.mjs (add a second test; keep the existing smoke test green). Requirements:\n- Viewports: 1600x900, 1280x800, 800x900, 390x844; Hive at /command-center?t=... and Cockpit at /command-center/project/alpha?t=...\n- Use waitUntil:'domcontentloaded' plus selector waits. NEVER use waitUntil:'networkidle': the Command Center opens a long-lived SSE connection, so networkidle can hang.\n- For every viewport and both pages: assert document.documentElement.scrollWidth === document.documentElement.clientWidth (no horizontal overflow).\n- Wheel at every viewport: page.mouse.wheel down until the last card (Hive .hive-card, Cockpit .tk) is inside the viewport; then wheel to the bottom; then wheel back up until scrollY is 0. Fail if wheel stops changing scrollY before the last card.\n- Touch at EVERY viewport (create the context with hasTouch:true; also isMobile:true at 390): use one CDP session per page and dispatch touchStart/touchMove/touchEnd swipes until the last card is visible, then swipe back until scrollY is 0. Do not create a CDP session per swipe.\n- Keyboard at 1600, 1280 and 800: PageDown increases scrollY, Space increases it further, then Home/scrollTo returns to 0.\n- Keep timeouts generous (the whole test can be 180s) and clean up browser/server/contexts.\n\n3. Run ONLY the fast checks: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-live.test.mjs. Report that the browser test is deliberately left for the orchestrator/CI (Chromium is installed there). Do not install packages and do not run the browser test.\n\n```diff\ndiff --git a/tools/watch-assets/cc-hive-mount.js b/tools/watch-assets/cc-hive-mount.js\nindex da55d329..ed394a37 100644\n--- a/tools/watch-assets/cc-hive-mount.js\n+++ b/tools/watch-assets/cc-hive-mount.js\n@@ -473,7 +473,7 @@ function resolveHivePanels() {\n \n const ICON_BASE = '/assets/vendor/fluent-emoji/';\n const TOAST_ICON = { volt: 'high_voltage_56.webp', done: 'party_popper_56.webp', think: 'thinking_face_56.webp' };\n-const PHONE_MAX = 900;\n+const PHONE_MAX = 1340;\n const RAW_URL = '/api/command-center';\n \n function h(doc, tag, cls, text) {\ndiff --git a/tools/watch-assets/cc-hive.css b/tools/watch-assets/cc-hive.css\nindex 8aad4d0e..8d11bb79 100644\n--- a/tools/watch-assets/cc-hive.css\n+++ b/tools/watch-assets/cc-hive.css\n@@ -47,7 +47,7 @@\n .hive-body:has(.hive-shell) .cc-tour-fab{display:none}\n .hive-body .cc-shell-message{max-width:720px;margin:40px auto;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--muted);font-family:var(--font-mono);font-size:13px}\n \n-.hive-shell{max-width:1320px;margin:0 auto}\n+.hive-shell{width:100%;min-width:0;max-width:1320px;margin:0 auto}\n .hive-shell .hive-mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}\n .hive-shell button{font:inherit;font-size:13px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}\n .hive-shell button:hover{border-color:var(--blue)}\n@@ -58,7 +58,7 @@\n .hive-shell .hive-top{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding:18px 0 20px;border-bottom:1px solid var(--line)}\n .hive-shell .hive-logo{font-family:var(--font-display);font-style:italic;font-weight:900;font-size:44px;letter-spacing:-.01em;filter:drop-shadow(0 0 14px rgba(255,77,126,.35));line-height:1;background:linear-gradient(90deg,#ff4d7e,#a98bff);-webkit-background-clip:text;background-clip:text;color:transparent}\n .hive-shell .hive-tag{font-family:var(--font-mono);font-size:12.5px;color:#c9d1e3;line-height:1.75;white-space:nowrap}\n-.hive-shell .hive-cnt{display:flex;gap:26px;margin-left:auto}\n+.hive-shell .hive-cnt{display:flex;flex-wrap:wrap;gap:26px;margin-left:auto;min-width:0}\n .hive-shell .hive-cnt>div{text-align:center}\n .hive-shell .hive-cnt .l{font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase}\n .hive-shell .hive-cnt .v{font-family:var(--font-mono);font-size:24px;font-weight:500}\n@@ -127,7 +127,7 @@\n .hive-shell .hive-core .x{font-family:var(--font-mono);font-size:max(8px,calc(var(--cr) * .12px));line-height:1.35;color:var(--dim);margin-top:2px;text-wrap:balance}\n \n /* lane legend + tagline row */\n-.hive-shell .hive-legend{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:8px 4px 6px;align-items:center}\n+.hive-shell .hive-legend{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:8px 4px 6px;align-items:center;min-width:0}\n .hive-shell .hive-legend span i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;box-shadow:0 0 8px currentColor}\n .hive-shell .hive-legend .tl{margin-left:auto;font-family:var(--font-display);font-style:italic;font-weight:700;font-size:23px;line-height:1.1;text-transform:none;letter-spacing:-.01em;color:var(--fg)}\n .hive-shell .hive-legend .tl u{text-decoration:none;color:var(--fg)}\n@@ -230,7 +230,7 @@\n .hive-body .cc-tour-highlight{outline:2px solid var(--cyan);outline-offset:3px}\n \n /* narrow screens: the ring on top (square canvas, sprays come in from its edges), then the cards in a column */\n-@media (max-width:900px){\n+@media (max-width:1340px){\n   .hive-shell .hive-tag{white-space:normal}\n   .hive-shell .hive-cnt{margin-left:0}\n   .hive-shell .hive-top{padding-bottom:14px}\ndiff --git a/tools/watch-assets/command-center.css b/tools/watch-assets/command-center.css\nindex 6426e49d..aeda891a 100644\n--- a/tools/watch-assets/command-center.css\n+++ b/tools/watch-assets/command-center.css\n@@ -18,8 +18,10 @@ body {\n \n body.cc-body.hive-body {\n   min-height: 100vh;\n-  max-height: 100vh;\n-  overflow: hidden;\n+  height: auto;\n+  max-height: none;\n+  overflow-x: hidden;\n+  overflow-y: auto;\n   background:\n     radial-gradient(900px 420px at 12% -5%, var(--bg-glow), transparent 58%),\n     radial-gradient(600px 300px at 88% 8%, rgba(30, 58, 138, .18), transparent 55%),\n\n```",
+      "context": [
+        "tools/watch-assets/command-center.css",
+        "tools/watch-assets/cc-hive.css",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-phone.css",
+        "tools/watch-assets/cc-cockpit.css",
+        "tests/browser/command-center.smoke.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-live.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-assets/command-center.css",
+        "tools/watch-assets/cc-hive.css",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tests/browser/command-center.smoke.mjs"
+      ],
+      "ignoreTests": [
+        "tests/board-page.test.mjs",
+        "tests/board-snapshot-perf.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-nav.test.mjs",
+        "tests/command-center-phone.spec.mjs",
+        "tests/command-center-routes.spec.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "hotfix scoped to the scroll shell; fast boot/live checks here, browser test and full suite before merge",
+      "timeoutMs": 1800000
+    }
+  ],
+  "checks": [
+    {
+      "name": "hotfix-cc-scroll-apply",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-live.test.mjs"
+      ]
+    }
+  ]
+}

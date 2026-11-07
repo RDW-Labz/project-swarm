@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-evals-2",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "timeoutMs": 1800000,
+      "outputs": [
+        "tests/batch-c-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tools/split-repair.mjs"
+      ],
+      "prompt": "Two duplicate eval tests still encode the OLD whole-stage refusal and fail now that split ingest is self-correcting: tests/batch-c-eval.test.mjs 'eval 38.1: the route-level test of an integration ticket must be a real test file' and tests/lesson-37-eval.test.mjs 'eval 37.4: an ingest conflict names the exact tickets and file' (both fail with 'Expected values to be strictly equal: 0 !== 1', i.e. they expect exit code 1). Their twins were already updated and pass: tests/lesson-38-eval.test.mjs (eval 38.1) and tests/batch-b-eval.test.mjs (eval 37.4); read them and update these two the same way, keeping each lesson's intent: 38.1 -> the bad integration ticket is never ingested; it is repaired or parked as a named blocker whose text says the route-level test must be a real test file; 37.4 -> a same-wave conflict is auto-chained (assert the dependsOn edge between the exact two tickets) or, if it cannot be chained, the parked blocker names the exact tickets and file. Change only these two test files. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/batch-c-eval.test.mjs tests/lesson-37-eval.test.mjs tests/lesson-38-eval.test.mjs tests/batch-b-eval.test.mjs` and report pass counts."
+    }
+  ]
+}

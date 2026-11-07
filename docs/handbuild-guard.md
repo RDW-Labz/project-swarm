@@ -83,7 +83,7 @@ Every request, approval, denial, allowed use, and **blocked attempt** is one lin
 ## Real enforcement
 
 1. **Hook (session):** the hand-build guard reads tool input and command text before edits or shell run; it fails closed on unreadable or dynamic patterns.
-2. **Git hooks (repo):** `swarm handbuild install` also installs **pre-commit** and **pre-push** hooks that check what git actually commits and pushes in an agent session, complementing the text analyzer.
+2. **Git hooks (repo):** `swarm handbuild install` also installs **pre-commit**, **pre-push**, and **commit-msg** hooks. Pre-commit and pre-push check what git actually commits and pushes in an agent session, complementing the text analyzer. The **commit-msg** hook applies to every actor: if the subject line starts with `Manifest` (any casing), the staged set may contain only paths under `coordination/manifests/`. Anything else is refused with a list of offending paths—this catches manifest commits that accidentally include files left staged after a failed `git add`. Unstage stray files, commit them with their own message, then retry the manifest commit.
 3. **Server:** GitHub branch protection on `main` (and usually `master`) is the backstop for pushes the session might still attempt.
 
 If the guard script errors, the hook is designed not to lock the owner out (the call may proceed—treat that as an outage, not policy).

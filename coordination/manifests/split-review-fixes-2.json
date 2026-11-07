@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "T-8022",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3000000,
+      "outputs": [
+        "tools/ticket-paths.mjs",
+        "tools/scope-commands.mjs",
+        "tests/ticket-paths-new-files.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-split-guards.test.mjs",
+        "tools/completion.mjs"
+      ],
+      "prompt": "Ticket T-8022 (atlas bug): validateTicketPaths in tools/ticket-paths.mjs (the 'likely typo' rule, ~lines 180-220) flagged tools/warm_boi_tiles.py as a typo of tools/warm_ten_mile.py and the ingest refused the WHOLE split with no override. Fix: (1) a similar-name hit on a path the ticket CREATES (it is in the ticket's own files/outputs and does not exist in the repo yet) is only a WARNING: return it in a warnings list (code 'similar-new-file', naming both paths) that the ingest prints in its report; the 'likely typo' REFUSAL stays only for read/context paths (context, tests read, deletes) that do not exist. (2) tools/scope-commands.mjs: add `--accept-new-path PATH[,PATH]` to `swarm scope split --ingest RUN [--merge]`: any remaining path refusal for exactly those paths (exact string match after normalizing ./ and slashes) becomes a warning, and each override is logged with appendLog (event 'accept-new-path'); unknown or unmatched paths in the flag are reported as unused. If tools/completion.mjs lists scope flags, do not edit it (out of scope; mention in notes). Tests in tests/ticket-paths-new-files.test.mjs drive validateTicketPaths and the ingest with temp fixtures: a similar new file (warm_boi_tiles.py next to an existing warm_ten_mile.py) passes with a 'similar-new-file' warning; a missing CONTEXT path that looks like a typo of an existing file still refuses; --accept-new-path overrides exactly the named path and not another refused path. Keep tests/scope-ingest-paths.test.mjs and tests/scope-split-guards.test.mjs passing. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/ticket-paths-new-files.test.mjs tests/scope-ingest-*.test.mjs tests/scope-split-guards.test.mjs` and `node tools/check-package.mjs`. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github.",
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-recorder-lanes.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-approve-managers.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-ingest-acceptance.test.mjs",
+        "tests/scope-ingest-owns-tests.test.mjs",
+        "tests/scope-ingest-sensitive.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-root-files.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/ticket-paths.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import these modules for unrelated behavior; the coordinator runs the full suite after integration."
+    },
+    {
+      "id": "T-8021-oracles",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tests/board-accuracy-activity.test.mjs",
+        "tools/board-data.mjs"
+      ],
+      "prompt": "T-8021 made the card's lastTicketFinishedAt the newest ticket-done time across EVERY family ledger (main folder, linked worktrees, scratch worktrees; see the new oracle in tests/board-accuracy-activity.test.mjs). Two oracle tests still compute it from the main ledger only and now fail: tests/board-accuracy-card.test.mjs 'card.now.lastTicketFinishedAt matches the family oracle' and tests/board-accuracy-page.test.mjs 'displayed numbers match disk oracles on project page and overview'. Update ONLY those oracles to read every family member's tickets.log (and ledger history / run job finishedAt fallback, mirroring the activity test oracle) from disk; keep them independent of board functions and keep the import guards passing. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-card.test.mjs tests/board-accuracy-page.test.mjs tests/board-accuracy-activity.test.mjs`. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github."
+    }
+  ]
+}

@@ -37,6 +37,12 @@ function isPositiveIntegerPid(pid) {
   return Number.isInteger(pid) && pid > 0;
 }
 
+const unlinkQuietly = (file, context) => fs.unlink(file).catch(error => {
+  if (error?.code !== 'ENOENT') {
+    console.error(`[tools/busy-marker.mjs] ${context} ${file}:`, error?.message ?? error);
+  }
+});
+
 export function reduceBusyCommand(command) {
   const text = String(command).trim();
   // Autopilot step markers (runAutopilot deps.busy) are not in BUSY_MARKER_VERBS; still label them for update refusal.
@@ -76,7 +82,7 @@ export async function writeBusyMarker({ command, root, pid = process.pid, dir = 
     await fs.writeFile(temporary, `${JSON.stringify(record)}\n`, { flag: 'wx' });
     await fs.rename(temporary, target);
   } catch (error) {
-    await fs.unlink(temporary).catch(() => {});
+    await unlinkQuietly(temporary, 'writeBusyMarker temp cleanup');
     throw error;
   }
   return async function remove() {
@@ -92,13 +98,13 @@ export async function liveBusyMarkers({ dir = busyDir(), isAlive = pidAlive, pro
     if (!entry.endsWith('.json')) continue;
     const target = path.join(dir, entry);
     let record;
-    try { record = JSON.parse(await fs.readFile(target, 'utf8')); } catch { await fs.unlink(target).catch(() => {}); continue; }
-    if (!isPositiveIntegerPid(record.pid) || !isAlive(record.pid)) { await fs.unlink(target).catch(() => {}); continue; }
+    try { record = JSON.parse(await fs.readFile(target, 'utf8')); } catch { await unlinkQuietly(target, 'liveBusyMarkers unreadable marker'); continue; }
+    if (!isPositiveIntegerPid(record.pid) || !isAlive(record.pid)) { await unlinkQuietly(target, 'liveBusyMarkers dead pid'); continue; }
     const storedStart = record.procStart;
     if (typeof storedStart === 'string') {
       const currentStart = procStart(record.pid);
       if (currentStart != null && currentStart !== storedStart) {
-        await fs.unlink(target).catch(() => {});
+        await unlinkQuietly(target, 'liveBusyMarkers procStart mismatch');
         continue;
       }
     }

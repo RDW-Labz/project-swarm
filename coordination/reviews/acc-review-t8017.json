@@ -1,0 +1,23 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8017",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tests/pins-cycle.test.mjs:36-38,45-49 (git -c gc.auto=0 -c maintenance.auto=false with spawnSync); tests/pins-cycle.test.mjs:52,61-63 (fs.rm recursive, force, maxRetries: 10, retryDelay: 100 in t.after); tests/pins-cycle.test.mjs:80-91 (install subprocess spawnSync before test body completes)",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tests/pins-cycle.test.mjs:14-21,36-38,52 (disables background git gc/maintenance, awaits spawned children via spawnSync, retries temp removal); coordinator PR record 15/15 stress runs; local run node --import ./tests/_isolate-config.mjs --test tests/pins-cycle.test.mjs passed 2/2",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

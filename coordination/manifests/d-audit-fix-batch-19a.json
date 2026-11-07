@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-githookcheck-batch-19a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 19a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/githook-check.mjs' section. Edit ONLY tools/githook-check.mjs. Visibility only: do NOT change control flow, return values, throws, defaults, or hook exit codes.\n\nThis file runs inside git hooks, so stderr is shown to users on every commit/push. The normal paths MUST stay silent; log only truly unexpected errors.\n\nNo logger exists in this file. Use: console.error('[tools/githook-check.mjs] <short context>:', error?.message ?? error)\n\nexecFileSync note: when git runs and exits nonzero (key unset, unknown ref), the thrown error has a numeric `error.status`. Treat that as expected and stay silent. Anything without a numeric status (ENOENT = git missing, ETIMEDOUT / signal kill from the timeout) is unexpected: log it.\n\nFlagged lines (file unchanged since the audit, line numbers are current):\n1. Line 113, gitCommentChar: `} catch { /* default */ }` around `git config --get core.commentChar`. Exit status 1 is the normal 'not set' case on almost every commit. Bind the error; stay silent when typeof error?.status === 'number'; log otherwise. Still fall through to return '#'.\n2. Line 162, shouldSkipCommitMsgCheck: `} catch { /* ignore */ }` around gitDir()+fs.existsSync checks. Neither normally throws, so anything caught here is unexpected: bind and log unconditionally, then fall through as today.\n3. Line 169, shouldSkipCommitMsgCheck: `} catch { /* ignore */ }` around readCommitSubjectFromFile(msgPath, ...). A missing message file (error?.code === 'ENOENT') is expected: stay silent. Log anything else (include msgPath). Fall through as today.\n4. Line 267, syntheticRefsWhenStdinEmpty: `try { remoteSha = gitQuiet(...) } catch { /* first push */ }`. rev-parse fails with a numeric status on a first push: stay silent for typeof error?.status === 'number', log otherwise. remoteSha keeps its zero default.\n\nDo NOT touch any other catch (guardOff line 23, gitDir line 126, the nested ahead catches at line 268-269, etc.). Do not refactor, reformat, rename, or change exports. A small private helper for the numeric-status check is fine; do not export it.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run the covering tests with: node --import ./tests/_isolate-config.mjs --test tests/commit-msg-round2.test.mjs tests/commit-msg-round3.test.mjs tests/review-high-regressions.test.mjs tests/hooks-repoint-all.test.mjs tests/git-hooks.test.mjs tests/githook-push-range.test.mjs tests/commit-msg-manifest.test.mjs tests/commit-msg-review.test.mjs and confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/githook-check.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/commit-msg-review.test.mjs",
+        "tests/commit-msg-round2.test.mjs",
+        "tests/commit-msg-round3.test.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/githook-push-range.test.mjs",
+        "tests/hooks-repoint-all.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

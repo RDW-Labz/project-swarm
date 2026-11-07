@@ -1,0 +1,56 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseJ",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "Mechanical test-isolation change. Since the claude shell pause, shell-mode tests read the machine config (lanes.anthropic.paused) and fail when a test file is run directly on a machine where the paid lane is paused. In each of these 19 files add the line import './_isolate-config.mjs'; as the FIRST import statement (right after the leading comment lines; same spelling tests/claude-shell.test.mjs now uses), unless the file already imports it: tests/field-lessons-batch-ag-runtime.test.mjs, tests/field-lessons-batch-g.test.mjs, tests/field-lessons-batch-e.test.mjs, tests/field-lessons-batch-l.test.mjs, tests/field-lessons-batch-m2.test.mjs, tests/field-lessons-batch-m3.test.mjs, tests/field-lessons-batch-q.test.mjs, tests/field-lessons-batch-u.test.mjs, tests/field-lessons-batch-t1.test.mjs, tests/field-lessons-batch-o.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-w.test.mjs, tests/live-shell-sandbox.test.mjs, tests/lessons120-mutants.test.mjs, tests/orchestrator-up.test.mjs, tests/ports.test.mjs, tests/shell-scratch.test.mjs, tests/shell-setup.test.mjs, tests/shell-loopback.test.mjs. All are directly in the tests folder, so the relative path is the same for all. Change nothing else in any file. After the change each file must still pass with and without the node --import flag.",
+   "context": [
+    "tests/field-lessons-batch-ag-runtime.test.mjs",
+    "tests/field-lessons-batch-g.test.mjs",
+    "tests/field-lessons-batch-e.test.mjs",
+    "tests/field-lessons-batch-l.test.mjs",
+    "tests/field-lessons-batch-m2.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-q.test.mjs",
+    "tests/field-lessons-batch-u.test.mjs",
+    "tests/field-lessons-batch-t1.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-w.test.mjs",
+    "tests/live-shell-sandbox.test.mjs",
+    "tests/lessons120-mutants.test.mjs",
+    "tests/orchestrator-up.test.mjs",
+    "tests/ports.test.mjs",
+    "tests/shell-scratch.test.mjs",
+    "tests/shell-setup.test.mjs",
+    "tests/shell-loopback.test.mjs"
+   ],
+   "outputs": [
+    "tests/field-lessons-batch-ag-runtime.test.mjs",
+    "tests/field-lessons-batch-g.test.mjs",
+    "tests/field-lessons-batch-e.test.mjs",
+    "tests/field-lessons-batch-l.test.mjs",
+    "tests/field-lessons-batch-m2.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-q.test.mjs",
+    "tests/field-lessons-batch-u.test.mjs",
+    "tests/field-lessons-batch-t1.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-w.test.mjs",
+    "tests/live-shell-sandbox.test.mjs",
+    "tests/lessons120-mutants.test.mjs",
+    "tests/orchestrator-up.test.mjs",
+    "tests/ports.test.mjs",
+    "tests/shell-scratch.test.mjs",
+    "tests/shell-setup.test.mjs",
+    "tests/shell-loopback.test.mjs"
+   ],
+   "timeoutMs": 1200000
+  }
+ ]
+}

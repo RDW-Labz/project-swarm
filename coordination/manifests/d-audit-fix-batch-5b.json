@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-install",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md; several fix batches already merged for other files). Read that doc's methodology section first (top of file) and the per-file section for tools/install.mjs (search for '### tools/install.mjs' - it lists exact line numbers and the catch form found there: try-catch-no-binding or dot-catch-arrow).\n\nFor EACH flagged line in tools/install.mjs only (do not touch any other file, do not fix findings in other files even if you notice them while reading):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next).\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition already evidenced by context - e.g. a realpath/existsSync lookup for a 'current' install symlink that may not resolve yet, an fs.stat for a file's mode that may not exist yet (a NEW file being written, not an existing one), an optional sentinel file (an 'off'/'removed' marker) that may not exist, a best-effort write that is allowed to fail. For these, keep the swallow (do not change control flow or add noisy logging for the expected path), but if the catch currently swallows ANY error unconditionally, narrow it to the specific expected case (commonly `error?.code === 'ENOENT'`) and add minimal visibility (see point 3) for anything else unexpected - same return value, same behavior, just visible.\n   (b) A genuinely UNEXPECTED-error catch with no narrower expected case. Add minimal visibility only: a one-line log. This file has no existing logger/journal convention of its own for these catches - use `console.error('[tools/install.mjs] <short context naming the function/operation>:', error?.message ?? error)`. Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next.\n3. If a catch binds no error variable, add a REAL binding and actually reference it in a console.error call where you are not simply preserving an already-safe silent fallback per (a) above - do not just rename-and-ignore a binding.\n\nThis file is not formatted with normal spacing (compact/minified style in places) - match the existing style exactly when editing a line, do not reformat surrounding code.\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration and will send back any regression as a follow-up. List, in your final summary, which of the 9 flagged lines you narrowed (case a) vs. just added logging to (case b), with one line each.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/install.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/handbuild-guard-verbs.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/hooks-repoint-all.test.mjs",
+        "tests/install.test.mjs",
+        "tests/installed-swarm.test.mjs",
+        "tests/link.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10-swarm-command.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/pins-cycle.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/pointer-safety.test.mjs",
+        "tests/runner-pointer.test.mjs",
+        "tests/t101-vendored-skills.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "ignoreTestsReason": "worker workspace doesn't include the test suite (isolated-file copy per swarm skill); full local suite runs against the integrated result before shipping, not inside the worker"
+    }
+  ]
+}

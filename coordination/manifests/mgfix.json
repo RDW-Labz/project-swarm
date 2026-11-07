@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "mgfix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "timeoutMs": 1800000,
+   "context": [
+    "tools/merge-guard.mjs",
+    "tests/merge-guard.test.mjs"
+   ],
+   "outputs": [
+    "tests/merge-guard.test.mjs"
+   ],
+   "prompt": "tests/merge-guard.test.mjs: six runMerge tests now fail (happy path merges with exact arguments; protection API error skipped; stacked PR list carries the repo argument; merge failure returns merge-failed with reasons; remote naming another repository; dirty work tree) because tools/merge-guard.mjs now (a) runs git worktree list --porcelain and, when the list is empty or unparsable, fails closed by keeping the local branch and deleting the remote branch through gh api, and (b) calls gh pr view N --json isCrossRepository. Read tools/merge-guard.mjs first. Update ONLY the test fakes and expectations so the exec and gh fakes answer these two new calls like a healthy repo: git worktree list --porcelain returns one worktree block for the test root (no swarm state there), and the isCrossRepository view returns {\"isCrossRepository\":false}; the expected gh pr merge arguments stay exactly as the old tests expect (with --delete-branch). Add tests: an unparsable or failing worktree list keeps the local branch (no --delete-branch, one gh api DELETE with every ref segment encoded separately and the slash kept), a state-holding worktree does the same, and a cross-repository PR never calls the gh api delete. Do not change tools/. Do not weaken any assertion."
+  }
+ ]
+}

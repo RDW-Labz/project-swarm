@@ -10,6 +10,7 @@ import { validateMigrationsConfig } from './migration-gate.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { sanitizeText } from './journal.mjs';
+import { readRunnerPointer } from './runner-pointer.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
@@ -104,6 +105,14 @@ export function normalizeProtectedPath(value) {
   return parts.join('/') + (folder ? '/' : '');
 }
 
+const reportedUnprotected = new Set();
+function reportUnprotected(source, entry, error) {
+  const key = `${source}\0${entry}`;
+  if (reportedUnprotected.has(key)) return;
+  reportedUnprotected.add(key);
+  console.error(`[tools/init-profile.mjs] ${source}: not protected, ${String(entry).slice(0, 200)}:`, error?.message ?? error);
+}
+
 // `read`: the file is being READ as context. Paths in `readOnlyPaths` (a starter kit's files) are refused as outputs, deletes and edits, but a worker may read them.
 export function protectedPathHit(profile, file, { read = false } = {}) {
   // APFS treats NFC and NFD spellings as one file, so both sides are compared in NFC.
@@ -175,7 +184,7 @@ export function validateProfile(profile) {
       out.verify = checked.value;
       // The scripts a setup or test command runs, and package.json for package runners, are protected like a ci hook's files.
       for (const argv of [...(checked.value.setup ?? []), checked.value.command]) for (const entry of hookFiles(argv)) {
-        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch (error) { reportUnprotected('profile.verify', entry, error); /* not a usable path */ }
       }
     }
   }
@@ -207,7 +216,7 @@ export function validateProfile(profile) {
       out.migrations = { dir, down, ...(downDir ? { downDir } : {}), ...(migrationEnvNames?.length ? { env: migrationEnvNames } : {}), ...(Object.keys(commands).length ? { commands } : {}) };
       // The scripts the migration commands run are protected like a ci hook's files.
       for (const argv of Object.values(commands)) for (const entry of hookFiles(argv)) {
-        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch (error) { reportUnprotected('profile.migrations', entry, error); /* not a usable path */ }
       }
     }
   }
@@ -219,7 +228,7 @@ export function validateProfile(profile) {
       // The script the dev server command runs is protected like a ci hook's files.
       // The mockups are what pages are compared with: workers cannot edit them (jobs that render those screens may still read them).
       for (const entry of [...hookFiles(checked.config.start), ...checked.config.screens.map(screen => screen.mockup)]) {
-        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch (error) { reportUnprotected('profile.ui', entry, error); /* not a usable path */ }
       }
     }
   }
@@ -240,7 +249,7 @@ export function validateProfile(profile) {
       out.budgets = checked.config;
       // A script the budget tools run is protected like a ci hook's files.
       for (const tool of [checked.config.lighthouse, checked.config.axe]) for (const entry of hookFiles(tool.argv)) {
-        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch (error) { reportUnprotected('profile.budgets', entry, error); /* not a usable path */ }
       }
     }
   }
@@ -250,7 +259,7 @@ export function validateProfile(profile) {
     if (checked.config) out.ci = checked.config;
     // The files a hook runs (a script path in its argv, package.json for package runners) become protected paths, so a batch cannot edit what runs with the owner's rights.
     for (const hook of Object.values(checked.config ?? {})) for (const entry of hookFiles(hook.argv)) {
-      try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+      try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch (error) { reportUnprotected('profile.ci', entry, error); /* not a usable path */ }
     }
   }
   if (profile.approval !== undefined) {
@@ -601,7 +610,7 @@ export async function checkSetup(root, deps) {
   const readText = deps.readText ?? defaultReadText;
   // exists, readJson and stat take paths relative to the project root.
   const present = await quiet(() => deps.exists('.project-swarm.json'));
-  const pointer = present ? await quiet(() => deps.readJson('.project-swarm.json')) : null;
+  const pointer = present ? await quiet(() => readRunnerPointer(root)) : null;
   const head = typeof deps.head === 'function' ? await quiet(() => deps.head(root)) : (deps.head ?? null);
   const profile = pointer?.profile ?? (deps.readProfile ? await quiet(() => deps.readProfile(root)) : null);
   const items = [

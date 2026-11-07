@@ -12,6 +12,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadLocalConfig } from './local-config.mjs';
+import { LANE_DAILY_DEFAULTS } from './spend.mjs';
+import { MODEL_RATES } from './rates.mjs';
 
 export const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
 export const ANTHROPIC_VERSION = '2023-06-01';
@@ -19,14 +21,27 @@ export const ANTHROPIC_KEY_ENV = 'SWARM_ANTHROPIC_API_KEY';
 export const ANTHROPIC_KEY_ITEM = Object.freeze({ service: 'project-swarm', account: 'anthropic.api_key' });
 // Raising either cap is the operator's decision; nothing here reads a raise from a manifest.
 export const TOTAL_CAP_USD = 500;
-export const DAY_CAP_USD = 20;
+export const DAY_CAP_USD = LANE_DAILY_DEFAULTS.anthropic.dailyUsd;
 export const JOB_CAP_USD = 5;
+
+const perToken = usdPerMTok => usdPerMTok / 1e6;
+
+function anthropicPriceEntry(family, tier, { longAt } = {}) {
+  const rate = MODEL_RATES[family];
+  const entry = { tier, input: perToken(rate.in), output: perToken(rate.out) };
+  if (rate.longIn !== undefined) {
+    entry.longInput = perToken(rate.longIn);
+    entry.longOutput = perToken(rate.longOut);
+    entry.longAt = longAt ?? 100000;
+  }
+  return Object.freeze(entry);
+}
 
 // USD per token. Haiku 5.5 charges more once a prompt passes 100K tokens (`longIn`/`longOut`).
 export const PRICES = Object.freeze({
-  'claude-haiku-5-5': Object.freeze({ tier: 'cheap', input: 0.10e-6, output: 0.50e-6, longInput: 0.50e-6, longOutput: 2.50e-6, longAt: 100000 }),
-  'claude-sonnet-5-5': Object.freeze({ tier: 'mid', input: 2e-6, output: 10e-6 }),
-  'claude-opus-5-5': Object.freeze({ tier: 'expensive', input: 4e-6, output: 20e-6 }),
+  'claude-haiku-5-5': anthropicPriceEntry('haiku', 'cheap'),
+  'claude-sonnet-5-5': anthropicPriceEntry('sonnet', 'mid'),
+  'claude-opus-5-5': anthropicPriceEntry('opus', 'expensive'),
 });
 export const DEFAULT_MODELS = Object.freeze({ cheap: 'claude-haiku-5-5', mid: 'claude-sonnet-5-5', expensive: 'claude-opus-5-5' });
 const CACHE_WRITE = 1.25, CACHE_READ = 0.1;
@@ -51,7 +66,19 @@ export function assertModelAllowed(job) {
   anthropicPrice(job.model);
 }
 
-export function readAnthropicKey(env = process.env, { platform = process.platform, exec = execFileSync } = {}) {
+export const ANTHROPIC_LANE_PAUSED = 'anthropic-lane-paused';
+export function anthropicLanePausedProblem(config) {
+  if (config?.lanes?.anthropic?.paused !== true) return null;
+  return `${ANTHROPIC_LANE_PAUSED}: the paid anthropic lane is paused and no key was read`;
+}
+export function assertAnthropicLaneNotPaused(config) {
+  const problem = anthropicLanePausedProblem(config);
+  if (problem) throw Object.assign(new Error(problem), { code: ANTHROPIC_LANE_PAUSED });
+}
+
+export function readAnthropicKey(env = process.env, { platform = process.platform, exec = execFileSync, config, loadConfig = loadLocalConfig, home } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env, home: home ?? env?.HOME });
+  assertAnthropicLaneNotPaused(resolvedConfig);
   const fromEnv = env[ANTHROPIC_KEY_ENV];
   if (typeof fromEnv === 'string' && fromEnv.length) return fromEnv;
   if (env.SWARM_ANTHROPIC_NO_KEYCHAIN === '1' || platform !== 'darwin') return null;
@@ -105,11 +132,15 @@ export function usageCostUsd(model, usage = {}) {
 export function caps(env = process.env) {
   const lanes = loadLocalConfig({ env })?.spend?.lanes?.anthropic ?? {};
   const lower = (value, fallback) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(value, fallback) : fallback);
-  return { totalUsd: TOTAL_CAP_USD, dayUsd: lower(lanes.dailyUsd, DAY_CAP_USD), jobUsd: JOB_CAP_USD };
+  const dayMode = lanes.mode === 'notify' ? 'notify' : 'stop';
+  return { totalUsd: TOTAL_CAP_USD, dayUsd: lower(lanes.dailyUsd, DAY_CAP_USD), jobUsd: JOB_CAP_USD, dayMode };
+}
+export function dayCapWouldRefuse({ worstUsd, spent, limits = caps() }) {
+  return spent.today + worstUsd > limits.dayUsd;
 }
 export function assertWithinCaps({ worstUsd, spent, limits = caps() }) {
   if (spent.job + worstUsd > limits.jobUsd) fail(`Anthropic job cap: $${spent.job.toFixed(4)} spent + $${worstUsd.toFixed(4)} worst case > $${limits.jobUsd}; request refused`);
-  if (spent.today + worstUsd > limits.dayUsd) fail(`Anthropic day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${limits.dayUsd}; request refused (ask the operator before raising it)`);
+  if (dayCapWouldRefuse({ worstUsd, spent, limits }) && limits.dayMode === 'stop') fail(`Anthropic day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${limits.dayUsd}; request refused (ask the operator before raising it)`);
   if (spent.total + worstUsd > limits.totalUsd) fail(`Anthropic total cap: $${spent.total.toFixed(4)} spent + $${worstUsd.toFixed(4)} worst case > $${limits.totalUsd}; request refused (ask the operator before raising it)`);
 }
 

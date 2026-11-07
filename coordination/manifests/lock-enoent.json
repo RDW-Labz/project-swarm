@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "lock-enoent",
+      "agent": "auto",
+      "prompt": "Intermittent CI failure (tests/leads-run.test.mjs five leads run 105 workers, seen on macOS and ubuntu): ENOENT: no such file or directory, lstat locks/shared-HASH. In tools/integration-lock.mjs tryAcquireLock: after fs.mkdir(lock) fails with EEXIST the code calls fs.lstat(lock) and the lock directory can vanish in between (its holder released it), so the lstat throws ENOENT and the whole job fails. Fix: treat ENOENT from lstat (and from reading owner.json, and from the stale-removal rm) as the lock having been released: retry the mkdir without counting it as the stale attempt (bounded: at most 50 such retries, then throw lock-race-exhausted), keeping every other behavior (stale detection, ownerless window, release order, warnings) exactly as is. Make tryAcquireLock testable by accepting an optional fsImpl (default the real fs/promises) used for mkdir, lstat, readFile, rm, writeFile. Tests in tests/integration-lock-enoent.test.mjs: an fsImpl whose lstat deletes the lock directory first then throws ENOENT once: acquisition succeeds on retry; ENOENT forever ends with lock-race-exhausted; a real concurrency test with 20 parallel withSharedWriteLock callers on one name and 20 parallel acquireIntegrationLock callers on different branches never throws an ENOENT and every caller runs; existing integration lock tests pass (run every test file with lock in its name). ignoreTests reason: only tools/integration-lock.mjs and its tests change.",
+      "context": [
+        "tools/integration-lock.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/integration-lock.mjs",
+        "tests/integration-lock-enoent.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/integration-lock-branch.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}

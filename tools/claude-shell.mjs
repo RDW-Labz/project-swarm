@@ -111,9 +111,25 @@ export function validateLoopbackAllow(list, jobId) {
 
 // Parent-only: the environment variable wins, else the existing keychain item. The sandboxed
 // child never touches the keychain; `exec` is injectable so tests never read the real one.
-export async function resolveWorkerKey({ env = process.env, exec = execFileAsync, config } = {}) {
+// Shell jobs run under the agent name `claude` but bill the paid API key, so the machine config's
+// `lanes.anthropic.paused` (or the shell-specific `lanes.claude.shellPaused`) must stop them too.
+// Returns the refusal text, or null when shell jobs are allowed. Plain subscription claude jobs
+// never call this.
+export const CLAUDE_SHELL_PAUSED = 'claude-shell-paused';
+export function claudeShellPausedProblem(config) {
+  const lanes = config?.lanes;
+  if (lanes?.anthropic?.paused !== true && lanes?.claude?.shellPaused !== true) return null;
+  return `${CLAUDE_SHELL_PAUSED}: claude shell jobs use the paid API key and the anthropic lane is paused`;
+}
+export function assertClaudeShellNotPaused(config) {
+  const problem = claudeShellPausedProblem(config);
+  if (problem) throw Object.assign(Error(problem), { code: CLAUDE_SHELL_PAUSED });
+}
+
+export async function readWorkerKey({ env = process.env, exec = execFileAsync, config, loadConfig = loadLocalConfig } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env });
   let key = typeof env[WORKER_KEY_ENV] === 'string' ? env[WORKER_KEY_ENV].trim() : '';
-  const item = workerKeyItem(config ?? loadLocalConfig({ env }));
+  const item = workerKeyItem(resolvedConfig);
   if (!key) {
     try { key = String((await exec('/usr/bin/security', ['find-generic-password', '-s', item.service, '-a', item.account, '-w'], { encoding: 'utf8', timeout: 10000 })).stdout ?? '').trim(); }
     catch { key = ''; }
@@ -121,6 +137,12 @@ export async function resolveWorkerKey({ env = process.env, exec = execFileAsync
   if (!key) throw Error(`claude shell jobs need a worker API key: set ${WORKER_KEY_ENV} or keychain item service ${item.service} account ${item.account}; never falls back to your claude login`);
   if (!/^[\x21-\x7e]{8,512}$/.test(key)) throw Error('worker API key has an invalid shape');
   return key;
+}
+
+export async function resolveWorkerKey({ env = process.env, exec = execFileAsync, config, loadConfig = loadLocalConfig } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env });
+  assertClaudeShellNotPaused(resolvedConfig);
+  return readWorkerKey({ env, exec, config: resolvedConfig, loadConfig });
 }
 
 export function claudeShellArgs(job) {
@@ -145,7 +167,11 @@ export async function resolveRootGitInfo(root, { lstat = fs.lstat, readFile = fi
   if (!match) return null;
   const gitDir = path.resolve(root, match[1]);
   let rootCommonDir = gitDir;
-  try { rootCommonDir = path.resolve(gitDir, (await readFile(path.join(gitDir, 'commondir'))).trim()); } catch { /* gitDir is itself the common dir */ }
+  try { rootCommonDir = path.resolve(gitDir, (await readFile(path.join(gitDir, 'commondir'))).trim()); } catch (error) {
+    const id = error?.code ?? error?.message;
+    if (id !== 'ENOENT') console.error('[tools/claude-shell.mjs] resolveRootGitInfo commondir:', id);
+    /* gitDir is itself the common dir */
+  }
   return { path: gitPath, kind: 'file', gitDir, commonDir: rootCommonDir };
 }
 
@@ -360,7 +386,12 @@ export async function startConnectProxy({ allow = [`${API_HOST}:${API_PORT}`], c
   const server = http.createServer((request, response) => {
     if (handleHttp) return handleHttp(request, response);
     let host = request.headers.host;
-    try { host = new URL(request.url).hostname || host; } catch { /* origin-form request */ }
+    try { host = new URL(request.url).hostname || host; } catch (error) {
+      if (error?.code !== 'ERR_INVALID_URL' && !(error instanceof TypeError)) {
+        console.error('[tools/claude-shell.mjs] proxy request URL:', error?.name, error?.code);
+      }
+      /* origin-form request */
+    }
     note(String(host ?? '').replace(/:\d+$/, ''));
     response.writeHead(403, { connection: 'close' }).end('swarm proxy: host refused\n');
   });
@@ -394,7 +425,13 @@ export async function startConnectProxy({ allow = [`${API_HOST}:${API_PORT}`], c
 export async function resolveClaudeBinary(env = process.env) {
   for (const dir of String(env.PATH ?? '').split(':').filter(dir => path.isAbsolute(dir))) {
     const candidate = path.join(dir, 'claude');
-    try { await fs.access(candidate, fs.constants.X_OK); return await fs.realpath(candidate); } catch { /* keep looking */ }
+    try { await fs.access(candidate, fs.constants.X_OK); return await fs.realpath(candidate); } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'EACCES') {
+        console.error('[tools/claude-shell.mjs] resolveClaudeBinary PATH:', candidate, code ?? error?.message);
+      }
+      /* keep looking */
+    }
   }
   throw Error('claude CLI not found on PATH');
 }
@@ -420,7 +457,13 @@ export async function resolveVenvInterpreterDirs(worktree, { lstat = fs.lstat, r
   const home = await resolveVenvInterpreterHome(worktree, read ? { read } : {});
   if (home && path.isAbsolute(home)) {
     dirs.add(path.dirname(path.resolve(home)));
-    try { dirs.add(path.dirname(await realpath(home))); } catch { /* checked through the python link below */ }
+    try { dirs.add(path.dirname(await realpath(home))); } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        console.error('[tools/claude-shell.mjs] resolveVenvInterpreterDirs realpath home:', error?.code ?? error?.message);
+      }
+      /* checked through the python link below */
+    }
   }
   for (const name of ['python', 'python3']) {
     const link = path.join(worktree, '.venv/bin', name);

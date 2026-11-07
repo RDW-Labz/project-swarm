@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8025",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/api-adapters.mjs",
+        "tools/security-review.mjs",
+        "tests/review-structured-verdict.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/review-recorder-lanes.test.mjs",
+        "tools/scope-commands.mjs",
+        "tests/anthropic-lane.test.mjs"
+      ],
+      "prompt": "Ticket T-8025 (owner: 'Opus keeps missing the JSON verdict line. Stop relying on a text line: require the verdict through a structured output so it cannot be skipped, and parse the prose only as notes. Then a retry is never needed for formatting.'). Context: tools/api-adapters.mjs already sends a JSON schema to every API lane (outputSchema ~lines 100-131, anthropic body ~423 uses output_config.format json_schema; openai/openrouter/rented/lambda/ollama use their json_schema forms) with the envelope { summary, files, edits, result? }; today a review's verdict is free text inside summary, and tools/security-review.mjs parseReviewVerdicts only accepts the LAST text line as {\"reviews\":[...]}, so a model that forgets the line produces no verdict and the recorder pays for a format re-ask.\nDO: (1) tools/api-adapters.mjs: for READ-ONLY REVIEW jobs (job.type === 'review', or job.outputs is empty AND job.id starts with 'sec-review-' or 'acc-review-' or 'review-'), make the envelope's result REQUIRED with a strict review schema: { reviews: array (minItems 1) of { ticket: string (pattern ^T-[0-9]{4,}$), verdict: enum ['pass','fail'], findings: array of { file: string, line: integer|null, severity: enum ['high','medium','low'], issue: string (max 300), fix: string (max 300) } }, notes: string (max 4000) } (additionalProperties false everywhere; for providers that need every property required in strict mode, make line required and allow null); state in the instructions that the verdict MUST be given in result.reviews and that summary/notes are prose only. Validate the returned result against the schema in the existing envelope validation (a missing or malformed result for a review job is an envelope error, so the lane's normal schema enforcement applies, never a text parse). Make sure what the runner saves as the job's response text includes the structured result (if the adapter's returned response is only the summary, append a final line containing JSON.stringify({ reviews: result.reviews }) to it, so the existing recorders can read it without any change outside this file and tools/security-review.mjs); keep non-review jobs byte-for-byte unchanged. (2) tools/security-review.mjs parseReviewVerdicts: first try to parse the WHOLE response as JSON (an envelope with result.reviews, or an object with reviews), then the last JSON line as today; prose is never required. Export a small reviewNotes(text) that returns the prose/notes for display. Keep the existing safety rule that an object quoted from the reviewed code can never win: the structured result must come from the envelope or the final line, not from anywhere inside quoted files.\nTESTS in tests/review-structured-verdict.test.mjs: the anthropic request body for a review job (type review, outputs []) contains the review schema with result required, and a normal build job's body is unchanged (compare to a snapshot of the old schema); an adapter response with a valid structured result but prose-only summary yields a saved response from which parseReviewVerdicts returns the verdict; a review response with result missing is an envelope error (not silently accepted); parseReviewVerdicts reads a whole-JSON envelope; the old last-line format still works; a reviews object quoted inside the prose middle is ignored. Keep tests/anthropic-lane.test.mjs, tests/review-retry.test.mjs and tests/review-recorder-lanes.test.mjs passing. Do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/scope-commands.mjs, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/review-structured-verdict.test.mjs tests/review-retry.test.mjs tests/review-recorder-lanes.test.mjs` tests/anthropic-lane.test.mjs, and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/adapters.test.mjs",
+        "tests/best-of-adapter.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-y-adapters.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gpu-lineup.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/multi-edit.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import the adapters or the security-review helpers for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

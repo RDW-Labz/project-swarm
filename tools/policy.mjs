@@ -69,6 +69,12 @@ export const DEFAULT_RULES = Object.freeze([
       'Auto-approve git commit or push of swarm-produced files on a branch that is not main or master.',
   },
   {
+    id: 'commit-window-generated',
+    kind: 'hand-build-request',
+    description:
+      'Auto-approve commit-window hand-build-request when commitWindow is true, git is only commit and push, branch is a non-protected plain name, and every file is a swarm-generated path (scope, manifests, handoff, review, state, or project ledger files).',
+  },
+  {
     id: 'setup-and-routing-hand-build',
     kind: 'hand-build-request',
     description:
@@ -89,6 +95,12 @@ export const DEFAULT_RULES = Object.freeze([
     id: 'change-order-split',
     kind: 'change-order-split',
     description: 'Auto-approve change-order-split for a named project.',
+  },
+  {
+    id: 'change-order-rename-only',
+    kind: 'change-order',
+    description:
+      'Auto-approve change-order when renameOnly is true, no requirements were added or removed, no tickets are cancelled or reopened, one to five path renames touch no protected paths, and the ledger is already approved.',
   },
   {
     id: 'workflow-change',
@@ -117,6 +129,7 @@ for (const rule of DEFAULT_RULES) {
 DEFAULT_BY_KIND.set('ticket-park', DEFAULT_RULES.find(r => r.id === 'ticket-routine'));
 DEFAULT_BY_KIND.set('ticket-retry', DEFAULT_RULES.find(r => r.id === 'ticket-routine'));
 DEFAULT_BY_KIND.set('ticket-release', DEFAULT_RULES.find(r => r.id === 'ticket-routine'));
+DEFAULT_BY_KIND.set('hand-build-request', DEFAULT_RULES.find(r => r.id === 'setup-and-routing-hand-build'));
 
 const RULE_OVERRIDE_KEYS = new Set(['id', 'enabled', 'projects', 'maxPerDay']);
 
@@ -215,12 +228,162 @@ function handBuildFileOk(rel) {
   return isRoutingPath(rel) || isSetupFile(rel);
 }
 
+const COMMIT_WINDOW_EXACT = new Set([
+  'coordination/HANDOFF.md',
+  'coordination/TASK.md',
+]);
+
+const COMMIT_WINDOW_PREFIXES = [
+  'docs/scope/',
+  'coordination/manifests/',
+  'coordination/handoff/',
+  'coordination/review/',
+  'docs/state/',
+];
+
+const COMMIT_WINDOW_SWARM_PROJECT = new Set([
+  '.swarm/project/tickets.json',
+  '.swarm/project/tickets.log',
+  '.swarm/project/backlog.json',
+  '.swarm/project/scope.snapshot.md',
+]);
+
+function resolvePathUnderRoot(rel, root, fsImpl = fs) {
+  const p = normPath(rel);
+  if (!root || typeof root !== 'string') return p;
+  try {
+    const abs = path.resolve(root, p);
+    const real = fsImpl.realpathSync.native?.(abs) ?? fsImpl.realpathSync(abs);
+    const rootReal = fsImpl.realpathSync.native?.(root) ?? fsImpl.realpathSync(root);
+    const relToRoot = path.relative(rootReal, real);
+    if (!relToRoot || relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) return null;
+    return normPath(relToRoot);
+  } catch {
+    return null;
+  }
+}
+
+/** Swarm-generated paths allowed in a standing commit window (case-sensitive prefixes). */
+export function isCommitWindowGeneratedPath(rel, { root, fs: fsImpl } = {}) {
+  if (typeof rel !== 'string' || !rel) return false;
+  const p = normPath(rel);
+  if (path.isAbsolute(p) || pathHasDotDot(p)) return false;
+  const canonical = root ? resolvePathUnderRoot(p, root, fsImpl) : p;
+  if (canonical === null) return false;
+  if (canonical === 'docs/plans/ideas.md') return false;
+  if (COMMIT_WINDOW_EXACT.has(canonical)) return true;
+  if (COMMIT_WINDOW_SWARM_PROJECT.has(canonical)) return true;
+  for (const prefix of COMMIT_WINDOW_PREFIXES) {
+    if (canonical.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+export function effectiveCommitWindowMinutes(facts) {
+  const raw = facts?.minutes;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) return null;
+  return Math.min(raw, 120);
+}
+
+export function enrichHandBuildFactsForPolicy(facts, item, root) {
+  const out = { ...facts };
+  if (typeof root === 'string' && root && !Object.hasOwn(out, 'root')) out.root = root;
+  const raw = item?.raw;
+  if (raw && typeof raw === 'object' && typeof raw.minutes === 'number' && !Object.hasOwn(out, 'minutes')) {
+    out.minutes = raw.minutes;
+  }
+  if (!Object.hasOwn(out, 'commitWindow')) {
+    const git = out.git;
+    const entries = git == null || git === '' ? [] : (Array.isArray(git) ? git : [git]);
+    const ops = entries
+      .map(entry => (typeof entry === 'string' ? entry : entry?.op ?? entry?.name))
+      .filter(name => typeof name === 'string' && name);
+    const ok = ops.length > 0 && ops.every(name => name === 'commit' || name === 'push');
+    out.commitWindow = ok ? true : false;
+  }
+  return out;
+}
+
+function factsForCommitWindowGenerated(facts, request) {
+  if (facts.commitWindow !== true) return { ok: false, reason: 'not a commit window' };
+  if (effectiveCommitWindowMinutes(facts) === null) return { ok: false, reason: 'invalid window minutes' };
+  const files = facts.files;
+  if (!Array.isArray(files) || files.length === 0) return { ok: false, reason: 'files missing' };
+  const root = typeof facts.root === 'string' ? facts.root : null;
+  const fsImpl = facts.fs && typeof facts.fs === 'object' ? facts.fs : fs;
+  if (!files.every(f => isCommitWindowGeneratedPath(f, { root, fs: fsImpl }))) {
+    return { ok: false, reason: 'file outside swarm-generated paths' };
+  }
+  if (!gitFactsOk(facts)) return { ok: false, reason: 'git not limited to commit/push on non-main' };
+  return { ok: true };
+}
+
 const PLAIN_BRANCH = /^[a-zA-Z0-9._/-]+$/;
 
 function pathHasDotDot(rel) {
   const p = normPath(rel);
   if (p === '..' || p.startsWith('../') || p.endsWith('/..') || p.includes('/../')) return true;
   return p.split('/').some(seg => seg === '..');
+}
+
+const PACKAGE_BASENAMES = new Set([
+  'package.json',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lockb',
+  'npm-shrinkwrap.json',
+]);
+
+function pathLooksSecretLike(rel) {
+  const p = normPath(rel);
+  const base = p.split('/').pop()?.toLowerCase() ?? '';
+  if (!base) return false;
+  if (base.startsWith('.env')) return true;
+  if (base.includes('credential') || base.includes('secret') || base.includes('private-key')) return true;
+  if (/\.(pem|key|p12|pfx)$/i.test(base)) return true;
+  return false;
+}
+
+export function isChangeOrderProtectedRenamePath(rel) {
+  if (typeof rel !== 'string' || !rel) return true;
+  const p = normPath(rel);
+  if (pathHasDotDot(p)) return true;
+  const lower = p.toLowerCase();
+  if (lower === 'coordination/checks.json' || lower === '.project-swarm.json') return true;
+  if (lower.startsWith('.github/workflows/')) return true;
+  const base = lower.split('/').pop() ?? '';
+  if (PACKAGE_BASENAMES.has(base)) return true;
+  if (pathLooksSecretLike(p)) return true;
+  return false;
+}
+
+function renameListOk(renames) {
+  if (!Array.isArray(renames)) return { ok: false, reason: 'renames missing' };
+  if (renames.length < 1 || renames.length > 5) return { ok: false, reason: 'rename count out of range' };
+  for (const entry of renames) {
+    const from = entry?.from;
+    const to = entry?.to;
+    if (typeof from !== 'string' || typeof to !== 'string' || !from || !to) {
+      return { ok: false, reason: 'invalid rename entry' };
+    }
+    if (isChangeOrderProtectedRenamePath(from) || isChangeOrderProtectedRenamePath(to)) {
+      return { ok: false, reason: 'protected path in rename' };
+    }
+  }
+  return { ok: true };
+}
+
+function factsForChangeOrderRenameOnly(facts) {
+  if (facts.renameOnly !== true) return { ok: false, reason: 'not rename-only' };
+  if (Number(facts.addedRequirements) !== 0) return { ok: false, reason: 'requirements added' };
+  if (Number(facts.removedRequirements) !== 0) return { ok: false, reason: 'requirements removed' };
+  if (Number(facts.cancelsTickets) !== 0) return { ok: false, reason: 'cancels tickets' };
+  if (Number(facts.reopensTickets) !== 0) return { ok: false, reason: 'reopens tickets' };
+  if (facts.hasApprovedLedger !== true) return { ok: false, reason: 'ledger not approved' };
+  const renames = renameListOk(facts.renames);
+  if (!renames.ok) return renames;
+  return { ok: true };
 }
 
 function swarmSegmentSensitive(seg) {
@@ -502,6 +665,7 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
     return { ok: true };
   }
   if (kind === 'hand-build-request') {
+    if (ruleId === 'commit-window-generated') return factsForCommitWindowGenerated(facts, request);
     const files = facts.files;
     if (!Array.isArray(files) || files.length === 0) return { ok: false, reason: 'files missing' };
     if (!files.every(handBuildFileOk)) return { ok: false, reason: 'file outside routing or setup' };
@@ -555,7 +719,26 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
     if (p !== reqProject) return { ok: false, reason: 'project mismatch' };
     return { ok: true };
   }
+  if (kind === 'change-order') {
+    if (ruleId === 'change-order-rename-only') return factsForChangeOrderRenameOnly(facts);
+    return { ok: false, reason: 'no matching rule' };
+  }
   return { ok: false, reason: 'no matching rule' };
+}
+
+function candidateRuleIds(kind, facts = {}) {
+  if (kind === 'merge-pr') {
+    const id = ruleIdForKind(kind, facts);
+    return id ? [id] : [];
+  }
+  if (kind === 'hand-build-request') {
+    return ['commit-window-generated', 'setup-and-routing-hand-build'];
+  }
+  if (kind === 'change-order') {
+    return ['change-order-rename-only'];
+  }
+  const id = ruleIdForKind(kind, facts) ?? DEFAULT_BY_KIND.get(kind)?.id ?? null;
+  return id ? [id] : [];
 }
 
 export function decide(request, { rules, now = Date.now } = {}) {
@@ -563,17 +746,26 @@ export function decide(request, { rules, now = Date.now } = {}) {
   if (NEVER_AUTO.includes(kind)) {
     return { decision: 'needs-owner', rule: null, reason: 'owner-only' };
   }
-  const ruleId = ruleIdForKind(kind, request.facts ?? {});
-  if (!ruleId) return { decision: 'needs-owner', rule: null, reason: 'unknown request kind' };
-  const rule = (rules ?? []).find(r => r.id === ruleId);
-  if (!rule || !rule.enabled) {
-    return { decision: 'needs-owner', rule: null, reason: 'rule disabled or missing' };
+  const facts = request.facts ?? {};
+  const candidates = candidateRuleIds(kind, facts);
+  if (!candidates.length) return { decision: 'needs-owner', rule: null, reason: 'unknown request kind' };
+  let lastReason = 'no matching rule';
+  for (const ruleId of candidates) {
+    const rule = (rules ?? []).find(r => r.id === ruleId);
+    if (!rule || !rule.enabled) continue;
+    const scope = ruleApplies(rule, request, facts);
+    if (!scope.ok) {
+      lastReason = scope.reason;
+      continue;
+    }
+    const factsOk = factsForKind(kind, facts, ruleId, request);
+    if (!factsOk.ok) {
+      lastReason = factsOk.reason;
+      continue;
+    }
+    return { decision: 'auto-approve', rule: rule.id, reason: 'policy match' };
   }
-  const scope = ruleApplies(rule, request, request.facts ?? {});
-  if (!scope.ok) return { decision: 'needs-owner', rule: null, reason: scope.reason };
-  const factsOk = factsForKind(kind, request.facts ?? {}, ruleId, request);
-  if (!factsOk.ok) return { decision: 'needs-owner', rule: null, reason: factsOk.reason };
-  return { decision: 'auto-approve', rule: rule.id, reason: 'policy match' };
+  return { decision: 'needs-owner', rule: null, reason: lastReason };
 }
 
 export function autoDecisionEvent(request, result, { now = Date.now, machine = '' } = {}) {
@@ -589,6 +781,18 @@ export function autoDecisionEvent(request, result, { now = Date.now, machine = '
   };
   if (request?.kind === 'cap-raise' && typeof request.facts?.amountUsd === 'number') {
     event.amountUsd = request.facts.amountUsd;
+  }
+  if (result?.rule === 'commit-window-generated' && request?.facts) {
+    const mins = effectiveCommitWindowMinutes(request.facts);
+    if (mins != null) {
+      event.effectiveMinutes = mins;
+      event.expiresAt = new Date(now() + mins * 60000).toISOString();
+    }
+    if (Array.isArray(request.facts.files)) event.files = request.facts.files.map(String);
+    if (typeof request.facts.branch === 'string') event.branch = request.facts.branch;
+  }
+  if (result?.rule === 'change-order-rename-only' && Array.isArray(request?.facts?.renames)) {
+    event.renames = request.facts.renames.map(r => ({ from: String(r.from), to: String(r.to) }));
   }
   return event;
 }

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t4-guard-followups",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "process-kill and lock-adjacent guard changes; Opus review in train 4",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable).\n\nTrain 4 guard follow-ups from the 1.167.27 delta review. Apply them in this order, tests first where behavior changes. Do not change unrelated behavior.\n\n1) WATCHER SIGKILL IDENTITY CHECK (first, another kill path). In tools/concurrency-guard.mjs watch(pid, configFile), the watcher currently reads marker.childPid and SIGTERMs it, waits, then SIGKILLs, with no identity check. Before any signal, verify the marker's recorded identity (childProcStart AND childCommand) matches the live child pid with the same ps probe introduced in 1.167.27. If the identity is missing, unreadable or mismatched, do NOT signal: treat it as not ours, restore the value and remove the marker. If it matches, keep the existing SIGTERM -> wait -> SIGKILL -> restore behavior. Add tests: a reused child pid (identity mismatch) is never signalled and the value is restored; a matching identity is still killed.\n\n2) termSentAt READ-MODIFY-WRITE RACE. In restoreIfStale, the SIGTERM path writes { ...marker, termSentAt } from the marker object read earlier. Re-read the marker immediately before the write and merge that fresh copy (keep every field; if termSentAt is already set, do not send SIGTERM again). Add a test where another writer sets a field between the first read and the write and it survives.\n\n3) UNSTUBBED SELF-EXIT TEST. The self-orphan test stubs the identity probe. Add a real test: spawn a node child that writes its own marker with childPid = process.pid and the identity values from the module's real probe for that pid, then calls restoreIfStale; assert exit 143, the clear stderr message, no command side effect, and the marker left in place. Also assert the marker records childProcStart and childCommand as non-empty strings in the runGuarded recording test.\n\n4) OLD MARKERS WITHOUT IDENTITY (upgrade-only). A marker written by a pre-1.167.27 version has childPid but no childProcStart/childCommand. It must restore the value without signalling or exiting (nobody can prove the pid is ours). Pin that with a test and a short comment.\n\n5) SIGKILL ESCALATION WHEN THE WATCHER IS GONE. If restoreIfStale finds termSentAt already set, the child is still alive and the identity matches, and termSentAt is older than a grace period (30 s), send SIGKILL once and persist killSentAt; never send a second SIGKILL. If the child dies, a later call restores. Add a test with a fake child that ignores SIGTERM and injected now/kill seams.\n\n6) STRESS RUNNER TIMEOUT MUST KILL THE PROCESS GROUP. tools/stress-tests.mjs currently uses spawnSync with a timeout, which kills only the direct node runner, not its test workers. Run the round with node:child_process spawn (detached: true), enforce the timeout with a kill of the process group (process.kill(-pid, 'SIGKILL')) plus the direct child, and report the round as failed with a clear 'timed out' line. Keep: fail-fast on the first failure, the tail output, STRESS_ROUNDS/STRESS_CONCURRENCY, and the exit codes. Add a focused test if practical (a fake hung command path via env), otherwise verify by hand with a one-round low-timeout run and report it.\n\n7) LANE-HEALTH LOG INCLUDES THE CODE. tools/lane-health.mjs logs '[tools/lane-health.mjs] state persist failed' once per code but omits the code. Include the code (fixed text + code, no file contents). Update/add the matching assertion in tests/lane-health-persist.test.mjs if it checks the message.\n\nKeep every existing test. Verify: node --import ./tests/_isolate-config.mjs --test tests/concurrency-guard.test.mjs tests/lane-health-core.test.mjs tests/lane-health-persist.test.mjs; plus STRESS_ROUNDS=1 STRESS_CONCURRENCY=4 npm run test:stress. Report the exact commands and counts.",
+      "context": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tools/stress-tests.mjs",
+        "tools/lane-health.mjs",
+        "tests/lane-health-persist.test.mjs",
+        "tools/busy-marker.mjs",
+        "tests/lane-health-core.test.mjs"
+      ],
+      "outputs": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tools/stress-tests.mjs",
+        "tools/lane-health.mjs",
+        "tests/lane-health-persist.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/s13-blockers.test.mjs",
+        "tests/self-manage-monitor.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; the focused guard, stress and lane-health tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t4-guard-followups",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/concurrency-guard.test.mjs",
+        "tests/lane-health-core.test.mjs",
+        "tests/lane-health-persist.test.mjs"
+      ]
+    }
+  ]
+}

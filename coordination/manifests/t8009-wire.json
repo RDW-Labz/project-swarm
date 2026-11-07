@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8009",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2700000,
+      "outputs": [
+        "tools/swarm/core-41.mjs",
+        "tools/lane-pass-routing.mjs",
+        "tests/lane-pass-routing-wiring.test.mjs",
+        "tests/lane-pass-routing.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/router.mjs",
+        "tools/failure-regression.mjs",
+        "tools/swarm/core-51.mjs",
+        "tests/split-module.test.mjs",
+        "tests/helpers/swarm-source.mjs"
+      ],
+      "prompt": "Ticket T-8009 (wiring for T-0169, approved by the owner of tools/swarm/): make swarm run's auto routing use lane pass rates. HARD LIMIT on tools/swarm/core-41.mjs: change only the function pickJobRoute plus one import line and at most one small module-level helper directly above it; no other line in that file. In tools/lane-pass-routing.mjs add a synchronous readRunStatesSync(root, { readdirSync, readFileSync } = fs) mirroring readRunStates (skip unreadable or invalid files; read at most the newest 200 run folders by name) and passRateFailuresFor(root, deps) that memoizes per resolved root for the life of the process (one swarm run is one process, so states are read once per run) and returns routingFailures(lanePassRates(states)); never throws (returns {} on any error). In pickJobRoute(job, lanes, options): compute const passFailures = options.passRateFailures ?? passRateFailuresFor(options.root ?? process.cwd()); and pass failures = for each agent the max of (options.failures?.[agent] ?? 0) and (passFailures[agent] ?? 0) into routeJob (keep every other behavior, including editInPlaceOnly and accepts). Tests in tests/lane-pass-routing-wiring.test.mjs: pickJobRoute is not exported, so test through the exported route path that calls it if one exists in core-41 or core-51 (look for exported functions that call pickJobRoute, e.g. a dry-run/plan helper), otherwise export pickJobRoute from core-41 as a named export (that one extra 'export' keyword is allowed). Cases: a temp project root with .swarm/runs/*/state.json showing cursor failing 6 of 6 auto jobs routes the next auto job to the next cheapest configured lane (codex); with 3 failing runs (below minSamples) cursor is still chosen; explicit options.failures are kept (max); the memo reads the disk once (inject deps and count calls). Also update tests/lane-pass-routing.test.mjs for the new helpers. Do NOT touch tools/swarm.mjs, any other tools/swarm/ file, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test tests/lane-pass-routing-wiring.test.mjs tests/lane-pass-routing.test.mjs` and `node tools/check-package.mjs`. tests/split-module.test.mjs checks the tools/swarm module split (keep it passing: an added import must follow its rules). Tests in ignoreTests only list file names; the coordinator runs the full suite.",
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/swarm-source-helper.test.mjs"
+      ]
+    }
+  ]
+}

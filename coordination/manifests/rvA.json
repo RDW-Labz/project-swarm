@@ -1,0 +1,53 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rvA",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/autopilot.mjs",
+    "tools/generated-state.mjs",
+    "tests/autopilot-integrate-clean.test.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot.mjs",
+    "tools/generated-state.mjs",
+    "tests/autopilot-integrate-clean.test.mjs"
+   ],
+   "prompt": "Fix Opus review findings in the autopilot integrate check (tools/autopilot.mjs, tools/generated-state.mjs), with tests added to tests/autopilot-integrate-clean.test.mjs (injected deps only; add temp-dir git fixtures only where a real git repo is needed). 3 HIGH runIntegrateOutputPaths takes outputs only from runManifest, which is often null: fall back to run.jobs[].outputs (and child-run outputs of lead jobs); when the run has integratable jobs but the output list is empty, BLOCK with a clear reason instead of letting integration through. 4 MEDIUM any tracked modification that is not on an output path currently does not block: block when there is any tracked modified, staged or conflicted file (untracked files and the generated state paths stay ignored), naming up to 5 files; the blocker text says to commit or move them. 5 MEDIUM collisions: compare case-insensitively when git config core.ignorecase is true, treat an output directory as colliding with any dirty file under it and a dirty directory as colliding with outputs under it (prefix matching on path segments), compare realpaths so a path through a tracked symlink collides. 6 MEDIUM state checks: use git rev-parse --git-path to check rebase-merge and rebase-apply directories plus MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD, and any unmerged (U) status entry; any of them blocks. 13 LOW integrate items for a run with status failed are auto-closed only when the run has no complete job; a failed run that still has complete jobs keeps its item (or is integrated with --jobs of the complete ones by the existing path). Keep every existing test passing (tests/autopilot-*.test.mjs, tests/generated-state*.test.mjs).",
+   "ignoreTests": [
+    "tests/autopilot-blocker-resolved.test.mjs",
+    "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-ledger-only.test.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-no-outputs.test.mjs",
+    "tests/autopilot-policy-pass.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autopilot.test.mjs",
+    "tests/b7-review-fixes.test.mjs",
+    "tests/brain-commands.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/generated-state.test.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/ledger-merge.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/safety-commands.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/wave-batch.test.mjs"
+   ]
+  }
+ ]
+}

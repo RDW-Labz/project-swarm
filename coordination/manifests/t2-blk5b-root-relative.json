@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2blk5b",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them.\nFollow-up to the integrated train 2 cd fix in tools/shell-writes.mjs (omResolvePath now returns {resolved, sawSymlink}; omResolveCd refuses any target whose walk saw a symlink; omStartingCwdSymlink refuses '..' when the starting cwd differs from its realpath). Both checks currently look at the WHOLE path from '/', which on macOS is wrong: /var -> /private/var and /tmp -> /private/tmp are OS-level symlinks, and projects, worktrees and test fixtures often live under /var/folders/... or /tmp/.... Today (a) an absolute cd target inside the project, e.g. `cd /var/folders/xx/proj/docs && ...`, is refused because the walk from '/' sees /var; and (b) a session whose cwd is under /var or /tmp refuses every '..'. Both fail closed (safe) but block legitimate work. FIX: consider symlinks ONLY at or below the project root. (a) In omResolvePath, for an absolute target that lies inside the project (lexically under ctx.root, or under the realpath of ctx.root), start the component walk at realpath(ctx.root) with only the components below the root; an absolute target outside the project keeps today's behaviour (it is refused later anyway). Relative targets already start from realpath(cwd); keep that. (b) omStartingCwdSymlink: compare path.relative(ctx.root, cwd) with path.relative(realpath(ctx.root), realpath(cwd)); report a mismatch only if those differ (a symlink between the root and the cwd), not because of an OS prefix above the root. Keep all class-closing behaviour: any symlinked component BELOW the root in a cd target still refuses the cd; redirects on cd segments still refused; '..' after a symlink below the root still refused. Tests (add to tests/t2-redirect-symlink.test.mjs): a project created under os.tmpdir() addressed through its non-realpath form (on darwin /var/folders/...; elsewhere skip the darwin-specific assertion, or build the same shape with a symlinked parent ABOVE the root made in the test): `cd <abs project>/docs && echo x > plans/a.md` allowed; a session cwd = <non-realpath project>/docs with `cd .. && ...` allowed; a symlink BELOW the root (docs/L -> ../coordination/manifests) still refused for cd; all existing cases still pass. Do not touch any other file.",
+      "context": [
+        "tests/om-redirect-realpath.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tests/t2-redirect-symlink.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/auto-approve.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-reason-words.test.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/orchestrator-allow.test.mjs",
+        "tests/orchestrator-mode-default.test.mjs",
+        "tests/orchestrator-mode-review2.test.mjs",
+        "tests/orchestrator-mode-review3.test.mjs",
+        "tests/orchestrator-mode-review4.test.mjs",
+        "tests/orchestrator-mode-timeout.test.mjs",
+        "tests/orchestrator-mode.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2blk5",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/t2-redirect-symlink.test.mjs",
+        "tests/om-redirect-realpath.test.mjs"
+      ]
+    }
+  ]
+}

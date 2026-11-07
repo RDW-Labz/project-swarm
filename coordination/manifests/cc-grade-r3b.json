@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccgrade3b",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner order: Opus grades the Command Center design each round",
+   "prompt": "Grade round 3b of the Swarm Command Center. You are an independent design grader. Read ONLY the files in your context.\nThe four PNGs are screenshots of the running app's real code, rendered against a realistic, populated board (several projects, running agents across lanes, live runs, tickets in every status): Hive (all projects) and Cockpit (one project), each at 1440x900 desktop and 390x844 phone.\nThe mockup docs/design/command-center-mockup/ (hive.html, cockpit.html, shared.css) is a STRUCTURE reference only (which panels exist and roughly where). Do not score resemblance to it; a page may beat the mockup.\nGrade against the 4.5 bar: ship-ready for the owner, Braden. Score each page 0.0-5.0 in steps of 0.1 on these six criteria, then give an overall per page (the mean, one decimal):\n1 workflow: organization first; can the owner see at a glance what is running, what needs them, what is next and what failed, and act from there; logical grouping and reading order.\n2 layout: grid, alignment, spacing; nothing overlapping, clipped, cut off, stacked down one edge or leaving large dead areas.\n3 readability: clear hierarchy (what matters first is biggest/brightest), comfortable contrast (no harsh pure-black/pure-white glare, no low-contrast grey on grey), readable type scale, mono for labels and numbers.\n4 data: every number and state is legible, labelled, consistent with the others on the page (no contradictions, no 'undefined', no stray debug text), and empty states are short and deliberate.\n5 phone: single column, no overlap, real tap targets, nothing hidden behind other panels, the important things above the fold.\n6 polish, by the owner's stated taste: rounded cards; pill buttons and chips; gradients that separate sections; several accent colours used meaningfully (not one colour for everything); a shadcn-style dark admin feel (grouped navigation, stat cards with trend pills, dense tables or lists with status pills); HUD touches (mono labels, corner brackets, live status chips); the colourful robot-head assets used for agents or projects; visible motion cues for navigation and live state (judge from structure: transitions you can infer, live chips, progress); and exactly one tasteful glitch effect, not more. Penalize generic flat boxes, one-colour palettes, harsh contrast and clutter.\n5.0 = better than a top product admin dashboard; 4.5 = ship-ready with small nits; 3.0 = works but rough or generic; 1.0 = unstyled or broken.\nThen list the top fixes per page (at most 6 each, most impactful first). Each fix: the visible problem, where on screen, the likely file (tools/watch-assets/cc-hive.css, cc-hive-mount.js, hive-panels.js for Hive; cc-cockpit.css, cc-cockpit-mount.js, cockpit-view.js, cockpit-lists.js for Cockpit) and a concrete CSS or markup change. Do not suggest hard-coded sample data.\nWrite ONLY coordination/review/cc-grade/r3b/grade.json as JSON: {\"round\":\"3b\",\"hive\":{\"scores\":{\"workflow\":n,\"layout\":n,\"readability\":n,\"data\":n,\"phone\":n,\"polish\":n},\"overall\":n,\"fixes\":[{\"problem\":\"\",\"where\":\"\",\"file\":\"\",\"change\":\"\"}]},\"cockpit\":{same shape},\"notes\":\"one or two sentences\"}.",
+   "context": [
+    "coordination/review/cc-grade/r3b/hive-desktop.png",
+    "coordination/review/cc-grade/r3b/hive-phone.png",
+    "coordination/review/cc-grade/r3b/cockpit-desktop.png",
+    "coordination/review/cc-grade/r3b/cockpit-phone.png",
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/cockpit.html",
+    "docs/design/command-center-mockup/shared.css"
+   ],
+   "outputs": [
+    "coordination/review/cc-grade/r3b/grade.json"
+   ],
+   "resultFile": "coordination/review/cc-grade/r3b/grade.json",
+   "timeoutMs": 1200000
+  }
+ ]
+}

@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { openItems } from './journal.mjs';
+import { runIntegratedFromState } from './run-kind.mjs';
 
 const MAX_BYTES = 4096;
 const LIVE = ['running', 'queued', 'paused'];
@@ -72,7 +73,9 @@ export async function loadRuns(root, { limit = 10 } = {}) {
       counts: state.summary?.counts ?? null,
       costUsd: costs.length ? costs.reduce((sum, value) => sum + value, 0) : null,
       pause: state.pause ?? null,
-      integrated: Boolean(state.integratedFiles?.length) || state.integrated === true,
+      integrated: runIntegratedFromState(state),
+      integratedAt: state.integratedAt ?? null,
+      handled: state.handled === true,
       sortTime: timeOf(state.startedAt),
       name: entry.name,
     });

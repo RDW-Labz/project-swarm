@@ -1,0 +1,23 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8014",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/watch-assets/board-lib.js:226-233 percentBoard, :312-487 renderWatchProjectCard; tools/watch-assets/project.js:33-35 L.renderWatchProjectCard pageMode; tools/watch-assets/board.js:277-281,384-386 same L.renderWatchProjectCard; test board project card matches project page for the same project",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": false,
+          "evidence": "tests/board-accuracy-page.test.mjs:286-301 project page card matches projectDetail.card oracle fields (DOM vs detail.card); :303-322 board project card matches project page (detail vs boardSnapshot); :324-345 overview KPI DOM numbers match boardSnapshot machine totals",
+          "gap": "No test computes displayed numbers from fixture files on disk (ledger, git, merged PRs, spend); assertions use projectDetail/boardSnapshot (and DOM built from those) as truth, not independent oracles. COVERAGE/progress.overall is documented but not asserted via boardPercent from disk. Overview card DOM numbers and most COVERAGE fields lack value-vs-source tests; overview table view numbers are not covered."
+        }
+      ]
+    }
+  ]
+}

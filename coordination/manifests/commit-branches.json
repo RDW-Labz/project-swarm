@@ -1,0 +1,40 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "commitbranches",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Goal g-4b652c66. Today commitIntegratedRun in tools/go.mjs commits integrated files only when the checkout is on a swarm/* branch; on any other branch it commits nothing. Add a project setting so a project can name extra branches integrate may commit to.\n\nSetting: in the project pointer file .project-swarm.json (repo root), an optional key integrate.commitBranches: an array of strings. Each entry is either an exact branch name (build/s18-confirmation) or a pattern whose only wildcard is a trailing star (build/*), matching any branch that starts with the text before the star; no other glob syntax. If .project-swarm.json is missing in a linked worktree, fall back to the main worktree's .project-swarm.json the same way readProjectCap in tools/project-spend.mjs does (import and reuse its exported mainWorktreeRoot). A missing file or missing key means the default: only swarm/*. A file that exists but is not valid JSON, or a commitBranches value that is not an array of non-empty strings, makes integrate skip the commit with a clear reason naming .project-swarm.json and integrate.commitBranches (never throw, never commit).\n\nRules, in this order inside commitIntegratedRun:\n1. Never commit to main or master, and never to the repository's default branch (read refs/remotes/origin/HEAD with git symbolic-ref --short refs/remotes/origin/HEAD and strip origin/; ignore failure), even if commitBranches names it or a pattern matches it. Skip reason: 'checkout is on <branch>, the main branch; integrate never commits there'.\n2. swarm/* branches commit as today.\n3. A branch matched by commitBranches commits.\n4. Any other branch skips with reason: 'checkout is on <branch>, not a swarm/* branch or a branch named in .project-swarm.json integrate.commitBranches'.\nKeep the existing humanLine form 'committed nothing: <reason>' and every other existing behavior (staged-file check, hash checks, retries, events) unchanged. Read the setting via a small exported helper in tools/go.mjs, e.g. readIntegrateCommitBranches(root) returning {patterns, error}, plus an exported pure matcher branchAllowedForIntegrateCommit(branch, patterns).\n\nTests in the NEW file tests/integrate-commit-branches.test.mjs (first import line: import './_isolate-config.mjs';), using real temporary git repos like tests/integrate-autocommit.test.mjs does, calling commitIntegratedRun directly with a minimal state (integratedFiles plus integratedHashes as sha256 hex of the file bytes; check how digest is computed in tools/go.mjs and match it): (a) branch build/s18-confirmation named exactly in commitBranches gets the commit; (b) pattern build/* matches build/x and the commit lands; (c) an unnamed non-swarm branch skips with the new reason text and HEAD does not move; (d) main is never committed even when commitBranches lists main or a lone star; (e) the default branch from origin/HEAD is never committed even when named; (f) swarm/* still commits with no config; (g) invalid JSON and a non-array commitBranches each skip with a reason naming integrate.commitBranches; (h) the matcher unit cases (exact, trailing star, no partial match without the star, a lone star matches everything but rule 1 still wins). Do not edit tools/swarm.mjs or any file not in outputs. tests/split-module.test.mjs only checks that tools/go.mjs exists as a split module; keep the file name and existing exports.",
+   "context": [
+    "tools/go.mjs",
+    "tools/project-spend.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/go.mjs",
+    "tests/integrate-commit-branches.test.mjs"
+   ],
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "name": "commit-branches",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/integrate-commit-branches.test.mjs",
+    "tests/integrate-autocommit.test.mjs"
+   ]
+  }
+ ]
+}

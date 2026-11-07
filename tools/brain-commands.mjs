@@ -50,7 +50,10 @@ export function haikuFallback({ env = process.env, fetchImpl = fetch, now = () =
       response = await fetchImpl(ANTHROPIC_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION }, body: JSON.stringify({ model, max_tokens: maxTokens, ...(system ? { system } : {}), messages: turns }), signal: AbortSignal.timeout(120000) });
     } catch { throw Object.assign(new Error('brain-unavailable: fallback request failed'), { code: 'brain-unavailable' }); }
     if (!response.ok) throw Object.assign(new Error(`brain-unavailable: fallback answered ${response.status}`), { code: 'brain-unavailable' });
-    const body = await response.json().catch(() => null);
+    const body = await response.json().catch((error) => {
+      console.error('[tools/brain-commands.mjs] haikuFallback response.json:', error?.message ?? error);
+      return null;
+    });
     const text = Array.isArray(body?.content) ? body.content.filter(block => block.type === 'text').map(block => block.text).join('') : '';
     const usage = body?.usage ?? {};
     // A reply without usage is recorded at the worst case, never at zero.
@@ -86,15 +89,33 @@ export function createProjectBrain({ root, env = process.env, openLink = openBra
   const getLink = async () => {
     if (!settings.enabled || !settings.sshTarget || !settings.sshKey || !settings.keyCommand) return null;
     if (linkPromise && (await linkPromise)?.status().up === false) linkPromise = null;
-    linkPromise ??= openLink({ sshTarget: settings.sshTarget, sshKey: expandHome(settings.sshKey), remotePort: settings.remotePort ?? 8000, keyCommand: settings.keyCommand }, {}).catch(() => null);
+    linkPromise ??= openLink({ sshTarget: settings.sshTarget, sshKey: expandHome(settings.sshKey), remotePort: settings.remotePort ?? 8000, keyCommand: settings.keyCommand }, {}).catch((error) => {
+      const code = error?.code;
+      if (!code || !['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'ECONNRESET'].includes(code)) {
+        console.error('[tools/brain-commands.mjs] createProjectBrain openBrainLink:', error?.message ?? error);
+      }
+      return null;
+    });
     return linkPromise;
   };
   const brain = createBrain({ getLink, fallback: haikuFallback({ env, fetchImpl }), concurrency: settings.concurrency, ledger: event => writeEvent(root, event) });
   return {
     brain, settings, link: getLink,
     ask: request => brain.ask(request),
-    saved: (kind, savedTokens) => writeEvent(root, { kind, savedOnly: true, savedTokens }).catch(() => {}),
-    async close() { brain.close(); const link = await linkPromise?.catch(() => null); link?.close(); },
+    saved: (kind, savedTokens) => writeEvent(root, { kind, savedOnly: true, savedTokens }).catch((error) => {
+      console.error('[tools/brain-commands.mjs] createProjectBrain saved writeEvent:', error?.message ?? error);
+    }),
+    async close() {
+      brain.close();
+      const link = await linkPromise?.catch((error) => {
+        const code = error?.code;
+        if (!code || !['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'ECONNRESET'].includes(code)) {
+          console.error('[tools/brain-commands.mjs] createProjectBrain close linkPromise:', error?.message ?? error);
+        }
+        return null;
+      });
+      link?.close();
+    },
   };
 }
 
@@ -236,7 +257,9 @@ export async function triageRun(root, runId, { project, readState, projectProfil
     try {
       const handle = await fs.open(path.join(root, '.swarm', 'runs', runId, job.id, 'response.txt'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       try { tail = (await handle.readFile('utf8')).slice(-2000); } finally { await handle.close(); }
-    } catch { /* no response to read */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/brain-commands.mjs] triageRun read response tail:', error?.message ?? error);
+    }
     const sensitive = projectSensitive || manifestJobs.find(entry => entry.id === job.id)?.sensitive !== false;
     const attempts = Array.isArray(job.attempts) ? job.attempts.length : Number(job.attempts) || 0;
     const result = await triage(request => project.ask({ ...request, sensitive }), { jobId: job.id, status: job.status, error: job.error ?? '', tail, attempts, agent: job.agent ?? '', sensitive });
@@ -248,7 +271,9 @@ export async function triageRun(root, runId, { project, readState, projectProfil
       await assertRegularOrMissing(file);
       const handle = await fs.open(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW, 0o600);
       try { await handle.writeFile(`${JSON.stringify({ verdict: result.verdict, hint: result.hint, via: result.via, at: new Date().toISOString() })}\n`); } finally { await handle.close(); }
-    } catch { /* a missing job folder only means no record on disk */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/brain-commands.mjs] triageRun write triage.json:', error?.message ?? error);
+    }
   }
   return verdicts;
 }

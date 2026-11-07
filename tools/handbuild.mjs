@@ -1,23 +1,78 @@
 // SPDX-License-Identifier: Apache-2.0
 // The hand-build guard: an orchestrator session may not build by hand. All build work goes through the swarm (a ticket); the only exceptions are a hand-build the owner approved, for
-// a valid reason, for named files, for a short time. This module is the state and the decision; tools/handbuild-guard.mjs is the Claude Code hook that asks it before every edit or shell
+// a valid reason, for named files, for a short time. Orchestrator mode (shell allowlist) is on by default at the project root; the owner disables it with `.swarm/orchestrator-mode/off`.
+// This module is the state and the decision; tools/handbuild-guard.mjs is the Claude Code hook that asks it before every edit or shell
 // command, and tools/handbuild-commands.mjs is `swarm handbuild request | approve | deny | status | log`.
-//   Allowed without approval: reading, running tests and builds, writing under .swarm/ and docs/plans/ (tickets and plans), build output, anything outside the checkout, and swarm worker
-//   workspaces. Everything else in the checkout (an edit, a write, sed -i, a redirect, tee, mv or cp into it, rm, git commit/push...) needs an approval that names the file.
+//   Allowed without approval: reading, running tests and builds, writing under .swarm/ and docs/plans/ (tickets and plans), build output, anything outside the checkout.
+//   Everything else in the checkout (an edit, a write, sed -i, a redirect, tee, mv or cp into it, rm, git commit/push...) needs an approval that names the file.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { insideProject, ORCHESTRATOR_OWN, WRITE_TOOLS } from './orchestrator-events.mjs';
+import { insideProject, ORCHESTRATOR_OWN, WRITE_TOOLS, appendEvent } from './orchestrator-events.mjs';
 import { execFileSync } from 'node:child_process';
-import { analyzeShell, writesAnything, TOOL_DIRS, tokenize } from './shell-writes.mjs';
+import {
+  analyzeShell,
+  writesAnything,
+  TOOL_DIRS,
+  tokenize,
+  isReadOnlyGitSub,
+  orchestratorModeCommandAllowed,
+  orchestratorModeEnabled,
+  orchestratorModeApplies,
+  orchestratorResolvedRoot,
+  orchestratorTestHarnessSigned,
+  ORCHESTRATOR_MODE_OFF_FILE,
+  ORCHESTRATOR_MODE_RULE_ID,
+  ORCHESTRATOR_MODE_DENY_REASON,
+  ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+  orchestratorCommandTooLong,
+  orchestratorModeAgentLaunchBlocked,
+  orchestratorSwarmSubfolderBlocked,
+  orchestratorSwarmCwdDenyReason,
+} from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
-import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from './self-approval.mjs';
+import {
+  isSelfApprovalCommand,
+  SELF_APPROVAL_REASON,
+  handbuildShellPolicy,
+  HANDBUILD_SELF_APPROVAL_RULE_ID,
+  swarmChangeShellPolicy,
+} from './self-approval.mjs';
+import {
+  orchestratorWriteAllowed,
+  orchestratorWriteAllowListAppliesRel,
+  orchestratorWriteAllowedRel,
+} from './orchestrator-allow.mjs';
+import {
+  AUTO_OFF_FILE,
+  STATS_FILE,
+  STATS_INITIALIZED_FILE,
+  POLICY_ID,
+  POLICY_VERSION,
+  evaluateHandbuildAutoApprove,
+  autoApproveKillSwitchOn,
+  policyRateLimits,
+  POLICY_STATS_UNREADABLE,
+  isSwarmAdminHandbuildPath,
+  canonicalPolicyRel,
+  fold,
+} from './auto-approve-policy.mjs';
+export const SCRATCH_DENY_REASON = 'scratch project';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
 export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D']);
 const CHAT_MERGE_MS = 60 * 60000;
-const ALLOWED_GH = new Set(['pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'run list', 'run watch', 'run view']);
+const ALLOWED_GH = new Set([
+  'pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'pr status',
+  'issue view', 'issue list', 'issue status',
+  'run list', 'run watch', 'run view', 'run status',
+  'release list', 'release view',
+  'workflow list', 'workflow view',
+  'repo view',
+  'search', 'auth status',
+]);
+const GH_BLOCKED_READ_MODIFIERS = /(?:^|\s)--web(?:\s|$)/;
 const VERCEL_TOP_FREE = new Set(['ls', 'list', 'inspect', 'logs', 'whoami', '--version', 'help']);
 const VERCEL_LIST_PARENTS = new Set(['env', 'domains', 'projects', 'project', 'teams', 'team', 'dns', 'certs', 'certificates', 'alias', 'secrets', 'integration', 'redirects', 'rolling-release']);
 const VERCEL_INFO_FLAGS = new Set(['--help', '-h', '--version', '-v']);
@@ -398,12 +453,21 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
   if (cmd === 'eval') { buildPolicyOps(args.join(' ')).forEach(o => ops.push(o)); return; }
   if (cmd === 'git') {
     let globalOpts = false;
+    let benignGlobalOnly = true;
     let i = 0;
     const globalWords = [];
     while (i < args.length && args[i].startsWith('-') && args[i] !== '--') {
+      const g = args[i];
+      if (g === '--no-pager') { globalOpts = true; i += 1; continue; }
       globalOpts = true;
-      globalWords.push(args[i]);
-      if (args[i] === '-C' || args[i] === '-c' || args[i] === '--config-env' || ['--git-dir', '--work-tree', '--namespace'].includes(args[i])) {
+      globalWords.push(g);
+      if (g === '-C' || ['--git-dir', '--work-tree', '--namespace'].includes(g) || g.startsWith('--work-tree=') || g.startsWith('--git-dir=')) {
+        if (g === '-C' && args[i + 1] !== undefined) globalWords.push(args[i + 1]);
+        i += g.includes('=') ? 1 : 2;
+        continue;
+      }
+      if (g === '-c' || g === '--config-env' || g.startsWith('--config=')) benignGlobalOnly = false;
+      if (g === '-c' || g === '--config-env' || ['--git-dir', '--work-tree', '--namespace'].includes(g)) {
         if (args[i + 1] !== undefined) globalWords.push(args[i + 1]);
         i += 2;
       } else i += 1;
@@ -415,16 +479,16 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
     const gitHasConfig = (sub === 'switch' || sub === 'checkout')
       ? gitHasConfigGlobal
       : hasConfigInWords([...globalWords, ...rest]);
-    const meta = { globalOpts, hasConfig: gitHasConfig, gitEnv, target: null };
-    if (sub === 'push') ops.push(gitPushPolicy(rest, meta));
-    else if (sub === 'fetch') ops.push(gitFetchPolicy(rest, meta));
-    else if (sub === 'branch') ops.push(gitBranchPolicy(rest, meta));
+    const meta = { globalOpts, benignGlobalOnly: globalOpts && benignGlobalOnly, hasConfig: gitHasConfig, gitEnv, target: null };
+    if (sub === 'push') ops.push({ ...gitPushPolicy(rest, meta), rest });
+    else if (sub === 'fetch') ops.push({ ...gitFetchPolicy(rest, meta), rest });
+    else if (sub === 'branch') ops.push({ ...gitBranchPolicy(rest, meta), rest });
     else {
       const pos = rest.filter(a => a && !a.startsWith('-'));
       let branch = null;
       if (sub === 'rebase' && pos[0]) branch = pos[0];
       else if (sub === 'merge') branch = pos[0] ?? null;
-      ops.push({ tool: 'git', sub, args: pos, rest, globalOpts, hasConfig: gitHasConfig, flags: rest.filter(a => a.startsWith('-')), branch, force: false, delete: null, target: null });
+      ops.push({ tool: 'git', sub, args: pos, rest, globalOpts, benignGlobalOnly: meta.benignGlobalOnly, hasConfig: gitHasConfig, flags: rest.filter(a => a.startsWith('-')), branch, force: false, delete: null, target: null });
     }
   } else if (cmd === 'gh') {
       let globalOpts = false;
@@ -435,7 +499,7 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
       }
       const pos = args.slice(i).filter(a => !a.startsWith('-'));
       const prMerge = ghArgsImplyPrMerge(args);
-      const sub = prMerge ? 'pr merge' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null);
+      const sub = prMerge ? 'pr merge' : (pos[0] === 'api' ? 'api' : (pos[0] === 'search' ? 'search' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null)));
       let ghTarget = null;
       if (prMerge) {
         const pi = args.findIndex((a, idx) => a === 'pr' && args[idx + 1] === 'merge');
@@ -560,7 +624,8 @@ const isFreeGitRebase = (op, protBranch) => {
   return true;
 };
 
-const isFreeReadGit = op => !op.globalOpts && !op.hasConfig && !op.gitEnv && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='));
+const isFreeReadGit = op => !op.hasConfig && !op.gitEnv && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='))
+  && (!op.globalOpts || op.benignGlobalOnly === true);
 
 const vercelFlagIsInfoOnly = f => VERCEL_INFO_FLAGS.has(f);
 
@@ -578,20 +643,88 @@ const skipGhGlobalOpt = (args, i) => {
   return i + 1;
 };
 
+const vercelFlagsBlockRead = flags => flags.some(f => f === '--token' || f.startsWith('--token=') || (f === '-t' && flags.includes('--token')));
+
 const isFreeVercel = op => {
   if (op.hasConfig) return false;
   const flags = op.flags ?? [];
   const args = op.args ?? [];
   const sub = op.sub;
+  if (vercelFlagsBlockRead(flags)) return false;
   if (flags.includes('--prod')) return false;
+  if (sub === 'git') {
+    if (args[0] === 'ls') return true;
+    if (['connect', 'disconnect'].includes(args[0])) return false;
+    return false;
+  }
   if (sub === 'deploy') {
     if (args.length > 0) return false;
     if (flags.length === 0) return false;
     return flags.every(vercelFlagIsInfoOnly);
   }
   if (VERCEL_TOP_FREE.has(sub)) return true;
+  if (sub === 'inspect') return true;
   if (VERCEL_LIST_PARENTS.has(sub) && args.length >= 1 && ['ls', 'list', 'inspect'].includes(args[0])) return true;
   return false;
+};
+
+const ghApiEndpointReadOnly = endpoint => {
+  const e = String(endpoint ?? '').replace(/^['"]|['"]$/g, '').replace(/^\/+/, '');
+  if (!e || /^graphql/i.test(e)) return false;
+  if (e === 'user' || e.startsWith('user/')) return false;
+  return /^repos\//.test(e) || /^orgs\//.test(e) || e === 'rate_limit';
+};
+
+const GH_API_VALUE_FLAGS = new Set(['-H', '--header', '-q', '--jq', '--template', '-t', '--paginate', '--slurp', '-i', '--include', '--silent', '--hostname', '--cache']);
+
+const ghApiArgsReadOnly = rest => {
+  let endpoint = null;
+  let i = 0;
+  while (i < rest.length) {
+    const w = rest[i];
+    if (w === '-X' || w === '--method') {
+      const m = String(rest[i + 1] ?? 'GET').toUpperCase();
+      if (m !== 'GET') return false;
+      i += 2;
+      continue;
+    }
+    if (w.startsWith('--method=')) {
+      if (w.slice(9).toUpperCase() !== 'GET') return false;
+      i += 1;
+      continue;
+    }
+    if (['-f', '-F', '--field', '--raw-field', '--input'].includes(w)) return false;
+    if (w === 'graphql' || /\/graphql\b/i.test(w)) return false;
+    if (GH_API_VALUE_FLAGS.has(w) || (w.startsWith('--') && ['--jq=', '--template=', '--header='].some(p => w.startsWith(p)))) {
+      i += w.includes('=') ? 1 : 2;
+      continue;
+    }
+    if (!w.startsWith('-') && endpoint === null) endpoint = w;
+    i += 1;
+  }
+  return ghApiEndpointReadOnly(endpoint);
+};
+
+const isGhApiReadOnlyCommand = command => {
+  for (const words of tokenize(command)) {
+    const plain = plainWords(words);
+    const gi = plain.findIndex(w => path.basename(w) === 'gh');
+    if (gi === -1) continue;
+    const rest = plain.slice(gi + 1);
+    if (rest[0] !== 'api') continue;
+    return ghApiArgsReadOnly(rest.slice(1));
+  }
+  return false;
+};
+
+const isFreeReadOnlyGh = (op, command) => {
+  const flags = op.flags ?? [];
+  if ((flags.includes('--version') || flags.includes('-v')) && !op.sub) return true;
+  if (op.sub === '--version') return true;
+  if (op.sub === 'run download') return false;
+  if (op.sub === 'pr view' && GH_BLOCKED_READ_MODIFIERS.test(String(command ?? ''))) return false;
+  if (op.sub === 'api') return isGhApiReadOnlyCommand(command);
+  return ALLOWED_GH.has(op.sub);
 };
 
 const swarmConfigDir = home => (process.env.SWARM_CONFIG ? path.dirname(process.env.SWARM_CONFIG) : path.join(home, '.config', 'project-swarm'));
@@ -839,6 +972,116 @@ const ghApiWrite = (command, ops) => {
 export const STATE_FILE = '.swarm/handbuild/state.json';
 export const LOG_FILE = '.swarm/handbuild/log.ndjson';
 export const OFF_FILE = '.swarm/handbuild/off';
+export { AUTO_OFF_FILE, STATS_FILE, POLICY_ID, POLICY_VERSION };
+export const GUARD_ERRORS_FILE = '.swarm/handbuild/guard-errors.ndjson';
+export const GUARD_VERSION = 1;
+export const GUARD_ERROR_DENY_REASON = 'guard error: retry or make a ticket (swarm ticket ... or swarm tickets ... or swarm backlog add "goal")';
+export const DEFAULT_GUARD_TIMEOUT_MS = 15000;
+export {
+  ORCHESTRATOR_MODE_OFF_FILE,
+  ORCHESTRATOR_MODE_RULE_ID,
+  ORCHESTRATOR_MODE_DENY_REASON,
+  ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+  orchestratorModeEnabled,
+} from './shell-writes.mjs';
+
+/** True when guard fault injection / timeout overrides are allowed for this project root. */
+export function guardHarnessAllowsFaultInjection(root) {
+  if (root && orchestratorTestHarnessSigned(root)) return true;
+  return (process.env.NODE_ENV === 'test' || process.env.SWARM_GUARD_TEST_MODE === '1') && isTempProjectRoot(root);
+}
+
+/** Watchdog duration for tools/handbuild-guard.mjs (override SWARM_GUARD_TIMEOUT_MS only with signed test marker or temp test project). */
+export function guardTimeoutMs(root = null) {
+  const raw = process.env.SWARM_GUARD_TIMEOUT_MS;
+  if (raw !== undefined && String(raw).trim() !== '' && guardHarnessAllowsFaultInjection(root)) {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return Math.min(60000, Math.max(50, Math.floor(n)));
+  }
+  return DEFAULT_GUARD_TIMEOUT_MS;
+}
+
+export function isGuardTestMode(root = null) {
+  return guardHarnessAllowsFaultInjection(root);
+}
+
+/** True when `root` is under the OS temp dir (guard fault injection is limited to temp projects in test mode). */
+export function isTempProjectRoot(root) {
+  if (!root) return false;
+  try {
+    const real = fs.realpathSync.native(root);
+    const tmp = fs.realpathSync.native(os.tmpdir());
+    return real === tmp || real.startsWith(`${tmp}${path.sep}`);
+  } catch { return false; }
+}
+
+const guardErrorDayKey = now => new Date(now).toISOString().slice(0, 10);
+
+/** Count guard crash/timeout lines in guard-errors.ndjson for the UTC calendar day of `now`. */
+export function guardErrorsToday(root, { now = Date.now } = {}) {
+  try {
+    const file = path.join(root, GUARD_ERRORS_FILE);
+    if (isLink(file)) return 0;
+    const day = guardErrorDayKey(now());
+    const text = fs.readFileSync(file, 'utf8');
+    let n = 0;
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row && typeof row.at === 'string' && row.at.slice(0, 10) === day) n += 1;
+      } catch { /* skip */ }
+    }
+    return n;
+  } catch { return 0; }
+}
+
+/** One JSON line per guard crash or timeout; first error of the day is also appended to orchestrator events. Never throws. */
+export function logGuardError(root, { kind, tool, error }, { now = Date.now } = {}) {
+  const at = new Date(now()).toISOString();
+  const name = cleanText(error?.name ?? 'Error', 80) || 'Error';
+  const message = cleanText(error?.message ?? 'unknown', 400) || 'unknown';
+  const row = { at, tool: cleanText(tool ?? 'unknown', 60), kind: kind === 'timeout' ? 'timeout' : 'crash', name, message, guardVersion: GUARD_VERSION };
+  let firstToday = false;
+  try {
+    const before = guardErrorsToday(root, { now });
+    firstToday = before === 0;
+    const dir = safeDir(root);
+    const fd = fs.openSync(path.join(dir, 'guard-errors.ndjson'), fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+    try { fs.writeSync(fd, `${JSON.stringify(row)}\n`); } finally { fs.closeSync(fd); }
+  } catch { /* best effort */ }
+  if (firstToday) {
+    try {
+      appendEvent(root, { at, e: 'guard-error', kind: row.kind, t: row.tool, n: row.name, m: row.message, gv: GUARD_VERSION });
+    } catch { /* best effort */ }
+  }
+}
+
+const applyGuardTestFault = root => {
+  if (!isGuardTestMode(root)) return;
+  try {
+    if (fs.existsSync(path.join(root, OFF_FILE))) return;
+  } catch { /* best effort */ }
+  if (process.env.SWARM_GUARD_TEST_FAULT === 'throw') throw new Error('SWARM_GUARD_TEST_THROW');
+  if (process.env.SWARM_GUARD_TEST_FAULT === 'spin') {
+    for (;;) { /* test-only CPU hang */ }
+  }
+  if (process.env.SWARM_GUARD_TEST_FAULT === 'crash') process.exit(2);
+};
+
+/** Run guard decision for a parsed hook payload (used by handbuild-guard child). */
+export function runGuardDecisionForHook(input, { root, cwd } = {}) {
+  const tool = input.tool_name;
+  const sessionCwd = cwd ?? input.cwd;
+  const projectRoot = root ?? orchestratorResolvedRoot(sessionCwd);
+  const decision = guardDecision({
+    tool,
+    toolInput: input.tool_input,
+    root: projectRoot,
+    cwd: sessionCwd,
+  });
+  return { tool, decision, input };
+}
 export const MAX_MINUTES = 120;
 export const DEFAULT_MINUTES = 30;
 export const MAX_FILES = 20;
@@ -990,20 +1233,92 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
   const ops = (Array.isArray(git) ? git : String(git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
   for (const g of ops) if (!GIT_REQUEST_OPS.includes(g)) throw Error(`handbuild-git: --git must name one of ${GIT_REQUEST_OPS.join(', ')}`);
   return withStateLock(root, () => {
+  const policy = evaluateHandbuildAutoApprove(root, { files: list, minutes: mins, git: ops });
+  const limits = policyRateLimits(undefined, { root });
+  ensureHandbuildStatsInitialized(root);
+  const statsForCaps = readHandbuildStatsRaw(root);
+  const policyOk = policy.ok && ops.length === 0 && !policyRateLimitsExceeded(statsForCaps, null, limits, now(), { countNewWindow: true }).blocked;
   const state = readState(root);
   const id = newId(now());
-  state.requests[id] = { id, kind, reason: why, files: list, git: ops, minutes: mins, status: 'pending', requestedAt: new Date(now()).toISOString(), requestedBy: cleanText(by, 40) };
+  const at = new Date(now()).toISOString();
+  const row = { id, kind, reason: why, files: list, git: ops, minutes: mins, requestedAt: at, requestedBy: cleanText(by, 40) };
+  if (policyOk) {
+    ensureHandbuildStatsInitialized(root);
+    row.status = 'approved';
+    row.git = [];
+    row.decidedAt = at;
+    row.decidedBy = 'policy';
+    row.policyId = policy.policyId;
+    row.policyVersion = policy.policyVersion;
+    row.policyWindow = true;
+    row.expiresAt = new Date(now() + policy.minutes * 60000).toISOString();
+    row.autoApproved = true;
+  } else {
+    row.status = 'pending';
+  }
+  state.requests[id] = row;
   // Old finished requests are dropped so the file stays small.
   const done = Object.values(state.requests).filter(r => r.status !== 'pending' && r.status !== 'approved').sort((a, b) => String(a.requestedAt).localeCompare(String(b.requestedAt)));
   for (const r of done.slice(0, Math.max(0, done.length - 50))) delete state.requests[r.id];
   writeState(root, state);
   logAction(root, { event: 'request', id, by, files: list, reason: `${kind}: ${why}` }, { now });
+  if (policyOk) {
+    const stats = readHandbuildStatsRaw(root);
+    bumpHandbuildStatsInMemory(stats, 'autoApproved', now());
+    initPolicyWindowStats(stats, id);
+    writeHandbuildStats(root, stats);
+    logAction(root, {
+      event: 'auto-approved',
+      id,
+      by: 'policy',
+      files: list,
+      reason: `${policy.policyId} v${policy.policyVersion}`,
+      policyId: policy.policyId,
+      policyVersion: policy.policyVersion,
+      minutes: policy.minutes,
+      rule: POLICY_ID,
+    }, { now });
+  }
   return state.requests[id];
   });
 }
 
+/** Owner-facing `swarm handbuild request` in a scratch project: stored denied, never queued for Needs you. */
+export function createScratchDeniedHandbuildRequest(root, fields, { now = Date.now, by = 'orchestrator' } = {}) {
+  if (!KIND_LIST.includes(fields.kind)) throw Error(`handbuild-kind: --kind must be one of ${KIND_LIST.join(', ')}.`);
+  const why = cleanText(fields.reason, 400);
+  if (why.length < 10) throw Error('handbuild-reason: --reason must say why the swarm cannot do it (at least 10 characters)');
+  const list = (Array.isArray(fields.files) ? fields.files : String(fields.files ?? '').split(',')).map(f => cleanText(f, 200)).filter(Boolean);
+  if (!list.length) throw Error('handbuild-files: --files must name the files (comma separated)');
+  const mins = fields.minutes === undefined ? DEFAULT_MINUTES : Number(fields.minutes);
+  const ops = (Array.isArray(fields.git) ? fields.git : String(fields.git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
+  return withStateLock(root, () => {
+    const state = readState(root);
+    const id = newId(now());
+    const at = new Date(now()).toISOString();
+    const row = {
+      id,
+      kind: fields.kind,
+      reason: why,
+      files: list,
+      git: ops,
+      minutes: mins,
+      status: 'denied',
+      denyReason: SCRATCH_DENY_REASON,
+      requestedAt: at,
+      requestedBy: cleanText(by, 40),
+      decidedAt: at,
+      decidedBy: 'scratch',
+    };
+    state.requests[id] = row;
+    writeState(root, state);
+    logAction(root, { event: 'request', id, by, files: list, reason: `${fields.kind}: ${why}` }, { now });
+    return row;
+  });
+}
+
 /** approve | deny a pending request. An approval runs for `minutes` from now and covers only the files (and git operations) it names. */
-export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', channel } = {}) {
+export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', channel, policyRule, approvalMinutes } = {}) {
   return withStateLock(root, () => {
   const state = readState(root);
   const r = state.requests[id];
@@ -1017,14 +1332,491 @@ export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', 
   r.status = choice === 'approve' ? 'approved' : 'denied';
   r.decidedAt = new Date(now()).toISOString();
   r.decidedBy = cleanText(by, 40);
-  if (choice === 'approve') r.expiresAt = new Date(now() + r.minutes * 60000).toISOString();
+  if (choice === 'approve') {
+    const mins = Number.isInteger(approvalMinutes) && approvalMinutes >= 1 && approvalMinutes <= MAX_MINUTES
+      ? approvalMinutes
+      : r.minutes;
+    r.expiresAt = new Date(now() + mins * 60000).toISOString();
+  }
   writeState(root, state);
-  logAction(root, { event: choice === 'approve' ? 'approve' : 'deny', id, by, files: r.files, reason: choice === 'approve' ? `until ${r.expiresAt}` : '' }, { now });
+  const ruleNote = typeof policyRule === 'string' && policyRule ? `policy ${policyRule}` : '';
+  const approveReason = choice === 'approve'
+    ? [ruleNote, `until ${r.expiresAt}`].filter(Boolean).join(' ')
+    : '';
+  logAction(root, { event: choice === 'approve' ? 'approve' : 'deny', id, by, files: r.files, reason: approveReason }, { now });
+  if (choice === 'approve' && by === 'owner' && channel !== 'board' && channel !== 'phone' && channel !== 'policy') {
+    const stats = readHandbuildStatsRaw(root);
+    if (!stats?.[POLICY_STATS_UNREADABLE]) {
+      bumpHandbuildStatsInMemory(stats, 'ownerTerminal', now());
+      writeHandbuildStats(root, stats);
+    }
+  }
   return r;
   });
 }
 
+/** Policy pass apply helper: same approval record as owner approve, with optional capped minutes and rule id in the log. */
+export function applyHandbuildPolicyApproval(root, item, { now = Date.now, policyRule, policyFacts, approvalMinutes } = {}) {
+  const ref = String(item?.id ?? '');
+  const hbId = ref.startsWith('handbuild-') ? ref.slice('handbuild-'.length) : ref;
+  return decideRequest(root, hbId, 'approve', {
+    now,
+    by: 'policy',
+    channel: 'policy',
+    policyRule,
+    approvalMinutes,
+  });
+}
+
 export function listRequests(root) { return Object.values(readState(root).requests).sort((a, b) => String(b.requestedAt).localeCompare(String(a.requestedAt))); }
+
+function statsDayKey(now = Date.now()) {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+export function handbuildStatsInitialized(root) {
+  try {
+    const marker = path.join(safeDir(root), path.basename(STATS_INITIALIZED_FILE));
+    return fs.existsSync(marker);
+  } catch {
+    return false;
+  }
+}
+
+function ensureHandbuildStatsInitialized(root) {
+  const dir = safeDir(root);
+  const marker = path.join(dir, path.basename(STATS_INITIALIZED_FILE));
+  const statsPath = path.join(dir, 'stats.json');
+  try {
+    fs.writeFileSync(marker, `${POLICY_ID}\n`, { flag: 'wx', mode: 0o600 });
+    if (!fs.existsSync(statsPath)) fs.writeFileSync(statsPath, '{}\n', { mode: 0o600 });
+  } catch { /* already initialized */ }
+}
+
+function readHandbuildStatsRaw(root) {
+  try {
+    const file = path.join(root, STATS_FILE);
+    if (isLink(file)) return { [POLICY_STATS_UNREADABLE]: true };
+    if (!fs.existsSync(file)) {
+      if (!handbuildStatsInitialized(root)) return {};
+      return { [POLICY_STATS_UNREADABLE]: true };
+    }
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return { [POLICY_STATS_UNREADABLE]: true };
+    return data;
+  } catch {
+    return { [POLICY_STATS_UNREADABLE]: true };
+  }
+}
+
+function writeHandbuildStats(root, data) {
+  const dir = safeDir(root);
+  ensureHandbuildStatsInitialized(root);
+  const temp = path.join(dir, `stats.json.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  fs.writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  fs.renameSync(temp, path.join(dir, 'stats.json'));
+}
+
+function bumpHandbuildStatsInMemory(data, field, now) {
+  const day = statsDayKey(now);
+  const row = data[day] && typeof data[day] === 'object' ? data[day] : {};
+  row[field] = (Number(row[field]) || 0) + 1;
+  data[day] = row;
+  return row;
+}
+
+function initPolicyWindowStats(data, approvalId) {
+  if (!data.policyWindows || typeof data.policyWindows !== 'object') data.policyWindows = {};
+  data.policyWindows[approvalId] = { actions: 0, files: 0 };
+}
+
+function policyRateLimitsExceeded(data, approvalId, limits, now, { countNewWindow = false } = {}) {
+  if (data?.[POLICY_STATS_UNREADABLE]) return { blocked: true, reason: 'stats-unreadable' };
+  const day = statsDayKey(now);
+  const dayRow = data[day] && typeof data[day] === 'object' ? data[day] : {};
+  const actionsDay = Number(dayRow.policyActions) || 0;
+  const filesDay = Number(dayRow.policyFiles) || 0;
+  const windowsDay = Number(dayRow.autoApproved) || 0;
+  if (countNewWindow && windowsDay >= limits.maxAutoApproveWindowsPerDay) return { blocked: true, reason: 'daily-windows' };
+  if (actionsDay >= limits.maxActionsPerDay) return { blocked: true, reason: 'daily-actions' };
+  if (filesDay >= limits.maxFilesPerDay) return { blocked: true, reason: 'daily-files' };
+  if (approvalId) {
+    const win = data.policyWindows?.[approvalId];
+    const actionsWin = Number(win?.actions) || 0;
+    if (actionsWin >= limits.maxActionsPerWindow) return { blocked: true, reason: 'window-actions' };
+  }
+  return { blocked: false };
+}
+
+export function recordPolicyGuardAllow(root, { approvalId, files = [], rule, command }, { now = Date.now, home = os.homedir() } = {}) {
+  const limits = policyRateLimits(home, { root });
+  const list = Array.isArray(files) ? files : [];
+  for (const f of list) {
+    if (!isSwarmAdminHandbuildPath(f, { root })) {
+      return { blocked: true, reason: 'policy-path' };
+    }
+  }
+  return withStateLock(root, () => {
+    const data = readHandbuildStatsRaw(root);
+    const blocked = policyRateLimitsExceeded(data, approvalId, limits, now());
+    if (blocked.blocked) return blocked;
+    const day = statsDayKey(now());
+    const dayRow = data[day] && typeof data[day] === 'object' ? data[day] : {};
+    dayRow.policyActions = (Number(dayRow.policyActions) || 0) + 1;
+    dayRow.policyFiles = (Number(dayRow.policyFiles) || 0) + list.length;
+    data[day] = dayRow;
+    if (!data.policyWindows || typeof data.policyWindows !== 'object') data.policyWindows = {};
+    const win = data.policyWindows[approvalId] && typeof data.policyWindows[approvalId] === 'object'
+      ? data.policyWindows[approvalId]
+      : { actions: 0, files: 0 };
+    win.actions = (Number(win.actions) || 0) + 1;
+    win.files = (Number(win.files) || 0) + list.length;
+    data.policyWindows[approvalId] = win;
+    writeHandbuildStats(root, data);
+    logAction(root, {
+      event: 'policy-allowed',
+      id: approvalId,
+      by: 'policy',
+      files,
+      command: cleanText(command, 300),
+      rule,
+    }, { now });
+    return { blocked: false };
+  });
+}
+
+export function bumpHandbuildStats(root, field, { now = Date.now } = {}) {
+  if (field !== 'autoApproved' && field !== 'ownerTerminal') return;
+  return withStateLock(root, () => {
+    ensureHandbuildStatsInitialized(root);
+    const data = readHandbuildStatsRaw(root);
+    if (data?.[POLICY_STATS_UNREADABLE]) return;
+    bumpHandbuildStatsInMemory(data, field, now());
+    writeHandbuildStats(root, data);
+    return data[statsDayKey(now())];
+  });
+}
+
+export const POLICY_VERIFY_FILE = '.swarm/handbuild/policy-write-verify.ndjson';
+export const POLICY_INTEGRITY_ALERT_FILE = '.swarm/handbuild/policy-integrity-alert';
+
+export function readHandbuildStats(root, { now = Date.now } = {}) {
+  const data = readHandbuildStatsRaw(root);
+  const day = statsDayKey(now());
+  const row = data[day] && typeof data[day] === 'object' ? data[day] : {};
+  let policyIntegrityAlert = false;
+  try {
+    policyIntegrityAlert = fs.existsSync(path.join(root, POLICY_INTEGRITY_ALERT_FILE));
+  } catch { policyIntegrityAlert = false; }
+  return {
+    day,
+    autoApproved: Number(row.autoApproved) || 0,
+    ownerTerminal: Number(row.ownerTerminal) || 0,
+    policyActions: Number(row.policyActions) || 0,
+    policyFiles: Number(row.policyFiles) || 0,
+    killSwitch: autoApproveKillSwitchOn(root),
+    policyIntegrityAlert,
+    policyId: POLICY_ID,
+    policyVersion: POLICY_VERSION,
+  };
+}
+
+function readPolicyWriteVerifyQueue(root) {
+  const file = path.join(root, POLICY_VERIFY_FILE);
+  if (isLink(file)) return { error: 'symlink-queue' };
+  try {
+    if (!fs.existsSync(file)) return { rows: [] };
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean);
+    const out = [];
+    for (const line of lines) {
+      try {
+        const row = JSON.parse(line);
+        if (row && typeof row.rel === 'string') out.push(row);
+      } catch { /* skip */ }
+    }
+    return { rows: out };
+  } catch {
+    return { error: 'unreadable-queue' };
+  }
+}
+
+function writePolicyWriteVerifyQueue(root, rows) {
+  const dir = safeDir(root);
+  const file = path.join(dir, path.basename(POLICY_VERIFY_FILE));
+  if (!rows.length) {
+    try { fs.rmSync(file, { force: true }); } catch { /* absent */ }
+    return;
+  }
+  const temp = path.join(dir, `policy-write-verify.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  fs.writeFileSync(temp, `${rows.map(r => JSON.stringify(r)).join('\n')}\n`, { flag: 'wx', mode: 0o600 });
+  fs.renameSync(temp, file);
+}
+
+function engagePolicyIntegrityKill(root, detail, { now = Date.now } = {}) {
+  try {
+    const off = path.join(root, AUTO_OFF_FILE);
+    if (!fs.existsSync(off)) fs.writeFileSync(off, '', { mode: 0o600 });
+  } catch { /* best effort */ }
+  try {
+    fs.writeFileSync(path.join(safeDir(root), path.basename(POLICY_INTEGRITY_ALERT_FILE)), `${String(detail ?? 'policy write verification failed').slice(0, 500)}\n`, { mode: 0o600 });
+  } catch { /* best effort */ }
+  writePolicyWriteVerifyQueue(root, []);
+  try {
+    logAction(root, { event: 'policy-integrity-alert', reason: String(detail ?? '').slice(0, 300) }, { now });
+  } catch { /* best effort */ }
+}
+
+export function queuePolicyWriteVerify(root, fileRels, { now = Date.now } = {}) {
+  const list = [...new Set((fileRels ?? []).map(normPolicyRel).filter(Boolean))];
+  if (!list.length) return;
+  const ts = typeof now === 'function' ? now() : now;
+  withStateLock(root, () => {
+    const read = readPolicyWriteVerifyQueue(root);
+    if (read.error) {
+      engagePolicyIntegrityKill(root, `policy write verify queue ${read.error}`, { now: ts });
+      return;
+    }
+    const rows = read.rows;
+    for (const rel of list) {
+      const abs = path.join(root, rel);
+      let row = { rel, at: new Date(ts).toISOString() };
+      try {
+        const st = fs.lstatSync(abs);
+        row = { ...row, inode: st.ino, dev: st.dev, nlink: st.nlink };
+      } catch {
+        row.absentAtAllow = true;
+        try {
+          const parent = path.dirname(abs);
+          const pst = fs.lstatSync(parent);
+          row = { ...row, parentInode: pst.ino, parentDev: pst.dev };
+        } catch { /* verify will fail closed */ }
+      }
+      rows.push(row);
+    }
+    writePolicyWriteVerifyQueue(root, rows);
+  });
+}
+
+export function verifyPolicyWriteQueue(root, { now = Date.now } = {}) {
+  const ts = typeof now === 'function' ? now() : now;
+  return withStateLock(root, () => {
+    const read = readPolicyWriteVerifyQueue(root);
+    if (read.error) {
+      engagePolicyIntegrityKill(root, `policy write verify queue ${read.error}`, { now: ts });
+      return { ok: false };
+    }
+    const queue = read.rows;
+    if (!queue.length) return { ok: true };
+    let rootReal;
+    try { rootReal = fs.realpathSync.native(root); } catch {
+      engagePolicyIntegrityKill(root, 'project root unreadable', { now: ts });
+      return { ok: false };
+    }
+    for (const item of queue) {
+      const rel = normPolicyRel(item.rel);
+      const abs = path.join(root, rel);
+      if (item.absentAtAllow) {
+        try {
+          const parent = path.dirname(abs);
+          const pst = fs.lstatSync(parent);
+          if (item.parentInode !== undefined && (pst.ino !== item.parentInode || pst.dev !== item.parentDev)) {
+            engagePolicyIntegrityKill(root, `policy window parent for ${rel} changed after allow`, { now: ts });
+            return { ok: false, rel };
+          }
+        } catch {
+          engagePolicyIntegrityKill(root, `policy window parent for ${rel} unreadable after allow`, { now: ts });
+          return { ok: false, rel };
+        }
+      }
+      let st;
+      try {
+        st = fs.lstatSync(abs);
+      } catch {
+        engagePolicyIntegrityKill(root, `missing policy window file ${rel}`, { now: ts });
+        return { ok: false, rel };
+      }
+      if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} is not a plain regular file`, { now: ts });
+        return { ok: false, rel };
+      }
+      if (item.inode !== undefined && (st.ino !== item.inode || st.dev !== item.dev)) {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} changed identity after allow`, { now: ts });
+        return { ok: false, rel };
+      }
+      let real;
+      try { real = fs.realpathSync.native(abs); } catch {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} realpath failed`, { now: ts });
+        return { ok: false, rel };
+      }
+      const relReal = normPolicyRel(path.relative(rootReal, real));
+      if (!relReal || relReal.startsWith('..') || !relReal.startsWith('docs/state/')) {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} left docs/state`, { now: ts });
+        return { ok: false, rel };
+      }
+      if (!isSwarmAdminHandbuildPath(rel, { root })) {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} failed post-write policy check`, { now: ts });
+        return { ok: false, rel };
+      }
+    }
+    writePolicyWriteVerifyQueue(root, []);
+    return { ok: true };
+  });
+}
+
+export function handbuildStatsJson(root, { now = Date.now } = {}) {
+  verifyPolicyWriteQueue(root, { now });
+  return JSON.stringify(readHandbuildStats(root, { now }));
+}
+
+const normPolicyRel = rel => String(rel ?? '').replace(/\\/g, '/');
+
+function policyRowCovers(root, row, rel) {
+  if (matchesFile(row.files, rel)) return true;
+  const want = canonicalPolicyRel(root, rel);
+  if (want === null) return false;
+  return (row.files ?? []).some(f => canonicalPolicyRel(root, f) === want);
+}
+
+function pickPolicyApproval(policyApprovals, fileRels = [], root = null) {
+  if (!policyApprovals.length || !fileRels.length) return null;
+  const want = [...new Set(fileRels.map(normPolicyRel))];
+  const full = policyApprovals.filter(a => {
+    if (!root) {
+      const listed = (a.files ?? []).map(normPolicyRel);
+      return want.every(f => listed.includes(f));
+    }
+    const listed = (a.files ?? []).map(f => canonicalPolicyRel(root, f));
+    return want.every(f => { const c = canonicalPolicyRel(root, f); return c !== null && listed.includes(c); });
+  });
+  if (full.length === 1) return full[0];
+  if (full.length > 1) return null;
+  return null;
+}
+
+export function handbuildPolicyGuardCheck(root, {
+  approvals,
+  home = os.homedir(),
+  now = Date.now,
+  files: guardFiles = [],
+} = {}) {
+  const ts = typeof now === 'function' ? now() : now;
+  const policyApprovals = (approvals ?? []).filter(a => a?.policyWindow === true && a.status === 'approved');
+  if (!policyApprovals.length) return null;
+  const fileRels = (guardFiles ?? []).map(normPolicyRel).filter(Boolean);
+  if (!fileRels.length) return null;
+  return withStateLock(root, () => {
+    const used = pickPolicyApproval(policyApprovals, fileRels, root);
+    if (!used) {
+      return { ok: false, reason: `${DENY_ADVICE} (blocked: ambiguous policy window)`, approvalId: policyApprovals[0]?.id };
+    }
+    if (autoApproveKillSwitchOn(root)) {
+      return { ok: false, reason: `${DENY_ADVICE} (blocked: policy kill-switch)`, approvalId: used.id };
+    }
+    const limits = policyRateLimits(home, { root });
+    const stats = readHandbuildStatsRaw(root);
+    const exceeded = policyRateLimitsExceeded(stats, used.id, limits, ts);
+    if (exceeded.blocked) {
+      return { ok: false, reason: `${DENY_ADVICE} (blocked: policy rate limit ${exceeded.reason})`, approvalId: used.id };
+    }
+    for (const f of fileRels) {
+      const canon = canonicalPolicyRel(root, f);
+      const listedCanon = (used.files ?? []).map(w => canonicalPolicyRel(root, w));
+      const listedExact = (used.files ?? []).map(w => normPolicyRel(w));
+      const fNorm = normPolicyRel(f);
+      if (canon === null || !listedCanon.includes(canon)) {
+        return {
+          ok: false,
+          reason: `${DENY_ADVICE} (blocked: policy path ${f} does not match the window spelling)`,
+          approvalId: used.id,
+          rule: 'policy-path',
+        };
+      }
+      if (!listedExact.some(w => fold(w) === fold(fNorm))) {
+        return {
+          ok: false,
+          reason: `${DENY_ADVICE} (blocked: policy path ${f} does not match the window spelling)`,
+          approvalId: used.id,
+          rule: 'policy-path',
+        };
+      }
+      if (!isSwarmAdminHandbuildPath(f, { root })) {
+        return {
+          ok: false,
+          reason: `${DENY_ADVICE} (blocked: policy path ${f})`,
+          approvalId: used.id,
+          rule: 'policy-path',
+        };
+      }
+    }
+    return { ok: true, approvalId: used.id, rule: POLICY_ID };
+  });
+}
+
+export function applyPolicyGuardedAllow(root, {
+  command = '',
+  files = [],
+  allowResult,
+  now,
+  h,
+  approvals,
+}) {
+  if (!allowResult?.allow) return allowResult;
+  const policyRows = (approvals ?? []).filter(a => a.policyWindow === true);
+  const approvalIsPolicyRow = policyRows.some(a => a.id === allowResult.approval);
+  if (approvalIsPolicyRow && !(files?.length)) {
+    return {
+      allow: false,
+      files: files ?? [],
+      reason: `${DENY_ADVICE} (blocked: policy window requires named files)`,
+    };
+  }
+  if (policyRows.length && autoApproveKillSwitchOn(root) && approvalIsPolicyRow) {
+    return { allow: false, files, reason: `${DENY_ADVICE} (blocked: policy kill-switch)` };
+  }
+  const coveringIsPolicy = files.length > 0 && approvalIsPolicyRow;
+  const touchesPolicyFiles = coveringIsPolicy || files.some(f => policyRows.some(a => policyRowCovers(root, a, f)));
+  if (!policyRows.length || !touchesPolicyFiles) return allowResult;
+  const check = handbuildPolicyGuardCheck(root, {
+    approvals: policyRows,
+    home: h,
+    now: typeof now === 'function' ? now() : now,
+    files,
+  });
+  if (check && !check.ok) {
+    return { allow: false, files, reason: check.reason };
+  }
+  const policyRow = pickPolicyApproval(policyRows, files, root);
+  if (!policyRow) {
+    return { allow: false, files, reason: `${DENY_ADVICE} (blocked: ambiguous policy window)` };
+  }
+  for (const f of files) {
+    if (!isSwarmAdminHandbuildPath(f, { root })) {
+      return {
+        allow: false,
+        files,
+        reason: `${DENY_ADVICE} (blocked: policy path ${f})`,
+      };
+    }
+  }
+  const rec = recordPolicyGuardAllow(root, {
+    approvalId: policyRow.id,
+    files,
+    rule: check?.rule ?? POLICY_ID,
+    command,
+  }, { now, home: h });
+  if (rec?.blocked) {
+    return {
+      allow: false,
+      files,
+      reason: `${DENY_ADVICE} (blocked: policy rate limit ${rec.reason})`,
+    };
+  }
+  if (allowResult?.allow && files?.length) {
+    const ts = typeof now === 'function' ? now() : now;
+    queuePolicyWriteVerify(root, files, { now: ts });
+  }
+  return allowResult;
+}
 
 /** The live approvals (approved and not expired). */
 export function activeApprovals(root, now = Date.now()) { return listRequests(root).filter(r => r.status === 'approved' && Date.parse(r.expiresAt) > now); }
@@ -1074,8 +1866,91 @@ const orchestratorSwarmRunWrites = (command, root, cwd) => {
 const isProtected = rel => { const r = rel.toLowerCase(); return r === '.swarm' || r === '.claude' || isSwarmRunRecord(r) || PROTECTED.some(p => r === p || r.startsWith(p.endsWith('/') ? p : `${p}/`)); };
 const swarmRecordReason = rel => `Hand-build guard: ${rel} is swarm run state (only swarm commands may write it); no approval covers it.`;
 // Outside the checkout too: the install (the guard's own scripts) and the user's own Claude settings could switch the hooks off.
-export const protectedAbsolute = (home = os.homedir()) => [path.join(home, '.project-swarm'), path.join(home, '.claude', 'settings.json'), path.join(home, '.claude', 'settings.local.json'), ...(process.env.SWARM_INSTALL_DIR ? [process.env.SWARM_INSTALL_DIR] : [])];
-const underAbs = (abs, list) => list.some(prefix => abs === prefix || abs.startsWith(`${prefix}/`));
+export const protectedAbsolute = (home = os.homedir()) => {
+  const defaultConfig = path.join(home, '.config');
+  const xdgEnv = process.env.XDG_CONFIG_HOME;
+  const paths = new Set([
+    path.join(defaultConfig, 'project-swarm'),
+    path.join(defaultConfig, 'git'),
+    path.join(defaultConfig, 'fish'),
+    path.join(defaultConfig, 'gh'),
+    path.join(home, '.project-swarm'),
+    path.join(home, '.claude.json'),
+    path.join(home, '.claude', 'settings.json'),
+    path.join(home, '.claude', 'settings.local.json'),
+    path.join(home, '.claude', 'hooks'),
+    path.join(home, '.claude', 'plugins'),
+    path.join(home, '.claude', 'commands'),
+    path.join(home, '.claude', 'agents'),
+    path.join(home, '.claude', 'skills'),
+    path.join(home, '.claude', 'CLAUDE.md'),
+    path.join(home, '.netrc'),
+    path.join(defaultConfig, 'zsh'),
+    path.join(home, '.bash_logout'),
+    path.join(home, '.ssh'),
+    path.join(home, '.gitconfig'),
+    path.join(home, '.npmrc'),
+    path.join(home, '.gnupg'),
+    path.join(home, '.local', 'bin'),
+    path.join(home, 'bin'),
+    path.join(home, 'Library', 'LaunchAgents'),
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    path.join(home, '.zshenv'),
+    path.join(home, '.zprofile'),
+    path.join(home, '.zshrc'),
+    path.join(home, '.zlogin'),
+    path.join(home, '.zlogout'),
+    path.join(home, '.bash_profile'),
+    path.join(home, '.bash_login'),
+    path.join(home, '.bashrc'),
+    path.join(home, '.profile'),
+    ...(process.env.SWARM_INSTALL_DIR ? [process.env.SWARM_INSTALL_DIR] : []),
+  ]);
+  if (xdgEnv) {
+    paths.add(path.join(xdgEnv, 'project-swarm'));
+    paths.add(path.join(xdgEnv, 'git'));
+    paths.add(path.join(xdgEnv, 'fish'));
+    paths.add(path.join(xdgEnv, 'gh'));
+    paths.add(path.join(xdgEnv, 'zsh'));
+  }
+  const zdot = process.env.ZDOTDIR;
+  if (zdot) {
+    for (const name of ['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout']) {
+      paths.add(path.join(zdot, name));
+    }
+  }
+  return [...paths];
+};
+
+function resolveProtectedReal(absPath) {
+  let cur = path.resolve(absPath);
+  const tail = [];
+  for (let i = 0; i < 64; i += 1) {
+    try {
+      const real = fs.realpathSync.native(cur);
+      return tail.length ? path.resolve(real, ...tail) : real;
+    } catch {
+      const base = path.basename(cur);
+      if (base) tail.unshift(base);
+      const up = path.dirname(cur);
+      if (up === cur) break;
+      cur = up;
+    }
+  }
+  try { return fs.realpathSync.native(cur); } catch { return path.resolve(absPath); }
+}
+
+const absFold = abs => fold(path.resolve(abs));
+const underAbs = (abs, list) => {
+  const a = absFold(resolveProtectedReal(abs));
+  return list.some(prefix => {
+    const p = absFold(resolveProtectedReal(prefix));
+    return a === p || a.startsWith(`${p}${path.sep}`);
+  });
+};
+
+const handbuildRowIsPolicy = a => Boolean(a?.policyWindow);
 const AllowRel = rel => { const r = rel.toLowerCase(); return ORCHESTRATOR_OWN.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)) || TOOL_DIRS.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)); };
 
 /** { allow, reason, files, approval } for one tool call. `input` is the hook input (tool_name, tool_input, cwd). */
@@ -1086,10 +1961,94 @@ const policyOpDenyLabel = (policyGitOps, command, policyOps) => {
   return `git ${op0}`;
 };
 
-export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit } = {}) {
+const ORCHESTRATOR_MODE_PRESERVE_DENY = new Set([
+  HANDBUILD_SELF_APPROVAL_RULE_ID,
+  'handbuild-owner-verb',
+]);
+
+const orchestratorModeBlockedOps = command => {
+  if (orchestratorModeAgentLaunchBlocked(command)) return true;
+  for (const op of buildPolicyOps(command)) {
+    if (op.tool === 'git' && (op.sub === 'commit' || op.sub === 'push')) return true;
+    if (op.tool === 'gh' && (op.sub === 'pr create' || op.sub === 'pr merge' || op.ghPrMerge)) return true;
+  }
+  return false;
+};
+
+const sessionProtectedHandbuildRel = rel => {
+  if (rel === null || rel === undefined) return false;
+  const norm = String(rel).replace(/\\/g, '/').toLowerCase();
+  const hb = '.swarm/handbuild';
+  if (norm === hb || norm.startsWith(`${hb}/`)) return true;
+  return norm === '.git' || norm.startsWith('.git/');
+};
+
+const orchestratorModeProtectedWriteRel = (rel, root, cwd) => {
+  if (sessionProtectedHandbuildRel(rel)) return true;
+  if (rel === null || rel === undefined) return false;
+  const normFromRel = String(rel).replace(/\\/g, '/').toLowerCase();
+  if (normFromRel === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || normFromRel === OFF_FILE.toLowerCase()) return true;
+  if (normFromRel === '.swarm/orchestrator-mode' || normFromRel.startsWith('.swarm/orchestrator-mode/')) return true;
+  if (!orchestratorWriteAllowListAppliesRel(rel, root, cwd ?? root)) return false;
+  const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
+  return !orchestratorWriteAllowed(candidate, root);
+};
+
+export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit, enforceOrchestratorMode = undefined } = {}) {
+  applyGuardTestFault(root);
   const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
   const h = home ?? os.homedir();
+  const resolvedRoot = root ?? orchestratorResolvedRoot(cwd);
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  const orchestratorSession = Boolean(fromEnv && String(fromEnv).trim() && fs.existsSync(String(fromEnv).trim()));
+  const omActive = enforceOrchestratorMode !== undefined
+    ? Boolean(enforceOrchestratorMode)
+    : (orchestratorSession && orchestratorModeEnabled(resolvedRoot, cwd));
+  if (tool === 'Bash' && omActive && orchestratorCommandTooLong(ti.command)) {
+    return {
+      allow: false,
+      files: [],
+      reason: ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+      ruleId: ORCHESTRATOR_MODE_RULE_ID,
+    };
+  }
+  if (root) verifyPolicyWriteQueue(root, { now: typeof now === 'function' ? now() : now });
+  let handbuildOff = false;
+  try { handbuildOff = fs.existsSync(path.join(resolvedRoot ?? root ?? '', OFF_FILE)); } catch { handbuildOff = false; }
+  if (handbuildOff && !omActive) return { allow: true };
+  const omDeny = (files = [], reason = ORCHESTRATOR_MODE_DENY_REASON) => ({
+    allow: false,
+    files,
+    reason,
+    ruleId: ORCHESTRATOR_MODE_RULE_ID,
+  });
+  const omShellCtx = { root, cwd, home: h };
+  const omSwarmCwdDeny = files => (
+    orchestratorSwarmSubfolderBlocked(ti.command, omShellCtx)
+      ? omDeny(files, orchestratorSwarmCwdDenyReason(root))
+      : omDeny(files)
+  );
+  const applyOrchestratorMode = decision => {
+    if (!omActive || tool !== 'Bash') return decision;
+    if (decision.reason === ORCHESTRATOR_COMMAND_TOO_LONG_REASON) return decision;
+    if (decision.reason === GH_PR_MERGE_BLOCKED || decision.reason === MERGE_BLOCKED_REASON) return decision;
+    if (ORCHESTRATOR_MODE_PRESERVE_DENY.has(decision.ruleId)) return decision;
+    if (orchestratorModeBlockedOps(ti.command)) return omDeny(decision.files ?? []);
+    if (decision.allow) {
+      if (orchestratorModeCommandAllowed(ti.command, omShellCtx)) return decision;
+      return omSwarmCwdDeny(decision.files ?? []);
+    }
+    if (decision.reason?.startsWith('Hand-build guard:') && /belongs to the owner|session transcripts|swarm run state|deletes outside|too large|force push to a protected branch/.test(decision.reason)) {
+      return decision;
+    }
+    if (decision.reason?.includes(DENY_ADVICE) && !orchestratorModeCommandAllowed(ti.command, omShellCtx)) {
+      return decision;
+    }
+    if (!orchestratorModeCommandAllowed(ti.command, omShellCtx)) return omSwarmCwdDeny(decision.files ?? []);
+    return { allow: true, files: decision.files ?? [] };
+  };
   const approvals = activeApprovals(root, now());
+  const ownerApprovals = approvals.filter(a => !handbuildRowIsPolicy(a));
   const produced = swarmProducedFiles(root);
   const stagedCarryOk = rel => carryBytesOk(root, rel, readGitShowBytes(root, `:${rel}`));
   const headCarryOk = rel => carryBytesOk(root, rel, readGitShowBytes(root, `HEAD:${rel}`));
@@ -1101,14 +2060,36 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     return op;
   };
   const covers = (rels, gitOps = []) => {
-    // every file and every git operation must be covered by one live approval
-    for (const rel of rels) if (!approvals.some(a => matchesFile(a.files, rel))) return { ok: false, missing: rel };
-    const gitCovered = op => approvals.some(a => a.git.includes(approvalGitOp(op)) || (op === 'add' && a.git.includes('commit')));
+    // every file and every git operation must be covered by one live owner approval (never a policy row)
+    for (const rel of rels) if (!ownerApprovals.some(a => matchesFile(a.files, rel))) return { ok: false, missing: rel };
+    const gitCovered = op => ownerApprovals.some(a => a.git.includes(approvalGitOp(op)) || (op === 'add' && a.git.includes('commit')));
     for (const op of gitOps) if (!gitCovered(op)) return { ok: false, missing: `git ${approvalGitOp(op)}` };
-    const used = approvals.find(a => rels.some(rel => matchesFile(a.files, rel)) || gitOps.some(op => gitCovered(op)));
+    const used = ownerApprovals.find(a => rels.some(rel => matchesFile(a.files, rel)) || gitOps.some(op => gitCovered(op)));
     return { ok: true, approval: used?.id };
   };
+  const writeToolCover = rel => {
+    const c = covers([rel]);
+    if (c.ok) return c;
+    const policyCheck = handbuildPolicyGuardCheck(root, {
+      approvals,
+      home: h,
+      now,
+      files: [rel],
+    });
+    if (policyCheck?.ok) return { ok: true, approval: policyCheck.approvalId };
+    return c;
+  };
   if (WRITE_TOOLS.includes(tool)) {
+    if (handbuildOff) {
+      const raw0 = ti.file_path ?? ti.notebook_path ?? ti.path;
+      const raw = typeof raw0 === 'string' && raw0 && !path.isAbsolute(raw0) ? path.resolve(cwd || root, raw0) : raw0;
+      const rel = insideProject(root, raw);
+      if (rel !== null && sessionProtectedHandbuildRel(rel)) {
+        return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
+      }
+      if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root, cwd)) return omDeny([rel]);
+      return { allow: true };
+    }
     const raw0 = ti.file_path ?? ti.notebook_path ?? ti.path;
     // a relative path means relative to the folder the session is in
     const raw = typeof raw0 === 'string' && raw0 && !path.isAbsolute(raw0) ? path.resolve(cwd || root, raw0) : raw0;
@@ -1118,28 +2099,108 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (rel === null && typeof raw === 'string' && raw && underAbs(absRaw, protectedAbsolute(h)) && !isClaudeMemoryPathOutside(absRaw, h)) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
     if (rel !== null && isSwarmRunRecord(rel)) return { allow: false, files: [rel], reason: swarmRecordReason(rel) };
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
+    if (rel !== null && sessionProtectedHandbuildRel(rel)) {
+      return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
+    }
+    if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root, cwd)) {
+      return omDeny([rel]);
+    }
+    if (omActive && rel !== null && orchestratorWriteAllowedRel(String(rel).replace(/\\/g, '/'))) {
+      return { allow: true };
+    }
     if (rel === null || AllowRel(rel)) return { allow: true };
     if (rel !== null && isRoutingPathResolved(root, rel)) return { allow: true, files: [rel] };
     if (rel !== null && produced.has(rel)) {
-      const c = covers([rel]);
-      return c.ok ? { allow: true, files: [rel], approval: c.approval } : { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
+      const c = writeToolCover(rel);
+      if (!c.ok) return { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
+      return applyPolicyGuardedAllow(root, {
+        files: [rel],
+        allowResult: { allow: true, files: [rel], approval: c.approval },
+        now,
+        h,
+        approvals,
+      });
     }
-    const c = covers([rel]);
-    return c.ok ? { allow: true, files: [rel], approval: c.approval } : { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
+    const c = writeToolCover(rel);
+    if (!c.ok) return { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
+    return applyPolicyGuardedAllow(root, {
+      files: [rel],
+      allowResult: { allow: true, files: [rel], approval: c.approval },
+      now,
+      h,
+      approvals,
+    });
   }
   if (tool === 'Bash') {
+    const finishBash = decision => applyOrchestratorMode(decision);
+    if (handbuildOff) {
+      if (omActive && orchestratorCommandTooLong(ti.command)) {
+        return finishBash({
+          allow: false,
+          files: [],
+          reason: ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+          ruleId: ORCHESTRATOR_MODE_RULE_ID,
+        });
+      }
+      if (omActive) {
+        const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
+        const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
+          .filter(rel => orchestratorModeProtectedWriteRel(rel, root, cwd));
+        if (protectedWrites.length) return omDeny(protectedWrites);
+        if (orchestratorModeBlockedOps(ti.command)) return omDeny(a.writes ?? []);
+        if (!orchestratorModeCommandAllowed(ti.command, omShellCtx)) {
+          return orchestratorSwarmSubfolderBlocked(ti.command, omShellCtx)
+            ? omDeny(a.writes ?? [], orchestratorSwarmCwdDenyReason(root))
+            : omDeny(a.writes ?? []);
+        }
+      }
+      return { allow: true };
+    }
+    if (omActive && orchestratorCommandTooLong(ti.command)) {
+      return finishBash({
+        allow: false,
+        files: [],
+        reason: ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+        ruleId: ORCHESTRATOR_MODE_RULE_ID,
+      });
+    }
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
+    if (omActive) {
+      const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
+        .filter(rel => orchestratorModeProtectedWriteRel(rel, root, cwd));
+      if (protectedWrites.length) return omDeny(protectedWrites);
+    }
     const current = branchOfFn(root);
     const protBranch = isProtectedBranch(current);
-    if (isSelfApprovalCommand(ti.command)) return { allow: false, files: [], reason: SELF_APPROVAL_REASON };
+    const handbuildPol = handbuildShellPolicy(ti.command);
+    if (handbuildPol.applies && !handbuildPol.allow) {
+      return finishBash({ allow: false, files: [], reason: handbuildPol.reason, ruleId: handbuildPol.ruleId });
+    }
+    const changePol = swarmChangeShellPolicy(ti.command);
+    if (changePol.applies && !changePol.allow) {
+      if (omActive && orchestratorModeCommandAllowed(ti.command, omShellCtx)) {
+        return finishBash({ allow: true });
+      }
+      return finishBash({ allow: false, files: [], reason: changePol.reason, ruleId: changePol.ruleId });
+    }
+    if (changePol.applies && changePol.allow) {
+      return finishBash({ allow: true });
+    }
+    if (handbuildPol.applies && handbuildPol.allow
+      && !a.writes.length && !a.git.length && !a.inline && !a.protectedOutside.length && !(a.outsideDeletes?.length)) {
+      return finishBash({ allow: true });
+    }
+    if (!handbuildPol.applies && isSelfApprovalCommand(ti.command)) {
+      return finishBash({ allow: false, files: [], reason: SELF_APPROVAL_REASON, ruleId: HANDBUILD_SELF_APPROVAL_RULE_ID });
+    }
     const transcriptHits = bashTranscriptWrites(ti.command, h);
-    if (transcriptHits.length) return { allow: false, files: [], reason: `Hand-build guard: ${transcriptHits[0]} belongs to the owner (session transcripts under .claude/projects); no approval covers it.` };
-    if (a.protectedOutside.length) return { allow: false, files: [], reason: `Hand-build guard: ${a.protectedOutside.join(', ')} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
+    if (transcriptHits.length) return finishBash({ allow: false, files: [], reason: `Hand-build guard: ${transcriptHits[0]} belongs to the owner (session transcripts under .claude/projects); no approval covers it.` });
+    if (a.protectedOutside.length) return finishBash({ allow: false, files: [], reason: `Hand-build guard: ${a.protectedOutside.join(', ')} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` });
     const swarmRunWrites = [...new Set([...a.writes.filter(isSwarmRunRecord), ...orchestratorSwarmRunWrites(ti.command, root, cwd)])];
-    if (swarmRunWrites.length) return { allow: false, files: [...a.writes, ...swarmRunWrites], reason: swarmRecordReason(swarmRunWrites[0]) };
-    if (a.writes.some(isProtected)) return { allow: false, files: a.writes, reason: `Hand-build guard: ${a.writes.filter(isProtected).join(', ')} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
+    if (swarmRunWrites.length) return finishBash({ allow: false, files: [...a.writes, ...swarmRunWrites], reason: swarmRecordReason(swarmRunWrites[0]) });
+    if (a.writes.some(isProtected)) return finishBash({ allow: false, files: a.writes, reason: `Hand-build guard: ${a.writes.filter(isProtected).join(', ')} belongs to the owner (approvals and the guard's own settings); no approval covers it.` });
     if (a.outsideDeletes?.length && !a.outsideDeletes.every(p => allowedOutsideDelete(p, h))) {
-      return { allow: false, files: [], reason: 'Hand-build guard: deletes outside the scratchpad are the owner\'s.' };
+      return finishBash({ allow: false, files: [], reason: 'Hand-build guard: deletes outside the scratchpad are the owner\'s.' });
     }
     const policyOps = buildPolicyOps(ti.command);
     const gitEnvCmd = commandHasGitEnv(ti.command);
@@ -1164,6 +2225,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           if (!isFreeReadGit(op)) policyGitOps.push(op.sub === 'diff' && (op.flags ?? []).some(f => f.startsWith('--output')) ? 'output' : 'config');
           continue;
         }
+        if (isReadOnlyGitSub(op.sub, op.rest ?? [])) continue;
         if (op.sub === 'branch') {
           if (op.delete === 'safe') continue;
           policyGitOps.push('branch-D');
@@ -1181,7 +2243,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           const deletePush = op.delete === 'remote' || refspecs.some(r => r.delete) || flags.includes('--mirror') || flags.includes('--prune');
           const forceOnProtected = (op.force || refspecs.some(r => r.force)) && (isProtectedBranch(current) || refspecs.some(r => protectedBranchName(r.dst)) || (pos.length >= 2 && protectedBranchName(pos[1])));
           if (pushBlockedOnProtected(pos, op.force || deletePush) || (deletePush && pushBlockedOnProtected(pos, true)) || forceOnProtected) {
-            return { allow: false, files: [], reason: 'Hand-build guard: force push to a protected branch (main or master) is never approvable, even with a hand-build approval that names force-push.' };
+            return finishBash({ allow: false, files: [], reason: 'Hand-build guard: force push to a protected branch (main or master) is never approvable, even with a hand-build approval that names force-push.' });
           }
           if (op.force || refspecs.some(r => r.force)) { policyGitOps.push('force-push'); continue; }
           if (deletePush || flags.includes('--mirror') || flags.includes('--prune')) { policyGitOps.push('push'); continue; }
@@ -1213,7 +2275,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           policyGitOps.push('gh-pr-merge');
           continue;
         }
-        if (ALLOWED_GH.has(op.sub)) continue;
+        if (isFreeReadOnlyGh(op, ti.command)) continue;
         policyGitOps.push('gh');
       } else if (op.tool === 'vercel') {
         if (isFreeVercel(op)) continue;
@@ -1231,7 +2293,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     }
     if (ghApiWrite(ti.command, policyOps) && !policyGitOps.includes('gh')) policyGitOps.push('gh');
     if (policyGitOps.includes('gh-pr-merge')) {
-      return { allow: false, files: [], reason: GH_PR_MERGE_BLOCKED };
+      return finishBash({ allow: false, files: [], reason: GH_PR_MERGE_BLOCKED });
     }
     const mergeOps = policyOps.filter(o => o.tool === 'swarm' && o.sub === 'merge');
     const chatMergeOk = !commandHasGhRepoFlag(ti.command) && mergeOps.length === 1 && mergeOps[0].target && peekChatMerge(root, mergeOps[0].target, now());
@@ -1240,20 +2302,23 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     }
     if (policyGitOps.length && !covers([], policyGitOps).ok) {
       if (policyGitOps.includes('swarm-merge')) {
-        return { allow: false, files: [], reason: MERGE_BLOCKED_REASON };
+        return finishBash({ allow: false, files: [], reason: MERGE_BLOCKED_REASON });
       }
       const label = policyOpDenyLabel(policyGitOps, ti.command, policyOps);
-      return { allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` };
+      return finishBash({ allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` });
     }
     const finishAllow = result => {
-      if (chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
-      const out = standingMergeAllow ? { ...result, standing: 'merge-swarm-pr' } : result;
-      return out;
+      if (result.allow && chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
+      if (result.allow && standingMergeAllow) return finishBash({ ...result, standing: 'merge-swarm-pr' });
+      return finishBash(result);
     };
-    if (!writesAnything(a)) return finishAllow({ allow: true });
+    if (!writesAnything(a)) {
+      const gitCover = policyGitOps.length ? covers([], policyGitOps) : null;
+      return finishAllow(gitCover?.ok && gitCover.approval ? { allow: true, approval: gitCover.approval } : { allow: true });
+    }
     if (a.dynamic || a.inline || a.unknown) {
       const need = [a.dynamic ? 'a dynamic shell command' : null, a.inline ? 'an inline script that writes files' : null, a.unknown ? 'a write whose target is a variable or substitution' : null].filter(Boolean).join(' and ');
-      return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${need}; the guard cannot tell what it writes, so it needs an approval that names the files, or a ticket)` };
+      return finishBash({ allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${need}; the guard cannot tell what it writes, so it needs an approval that names the files, or a ticket)` });
     }
     let staged = [];
     const commitPathspecs = commitCarriedPaths(ti.command, root, cwd);
@@ -1273,11 +2338,11 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           else if (!w.startsWith('-') && w !== '--') { const rel = insideProject(root, path.isAbsolute(w) ? w : path.resolve(cwd || root, w)); if (rel) added.push(rel); }
         }
       }
-      if (everything) return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: a git add of everything, or of a pattern, cannot be checked against an approval; add the approved files by name)` };
+      if (everything) return finishBash({ allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: a git add of everything, or of a pattern, cannot be checked against an approval; add the approved files by name)` });
       staged.push(...added);
       const all = /\bcommit\b[^;&|]*\s-[A-Za-z]*a|--all\b/.test(String(ti.command ?? ''));
       try { staged = [...staged, ...execFileSync('git', ['diff', all ? '--name-only' : '--cached', ...(all ? ['HEAD'] : ['--name-only'])], { cwd: root, encoding: 'utf8', timeout: 3000 }).split('\n').filter(Boolean)]; }
-      catch { return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: git commit, and the guard could not read which files it would carry)` }; }
+      catch { return finishBash({ allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: git commit, and the guard could not read which files it would carry)` }); }
       staged.push(...commitPathspecs);
       if (commitStagedCheck === 'allowlist' && staged.length && staged.every(stagedCarryOk)) {
         /* fall through: same-line writes and other git ops must still pass */
@@ -1302,15 +2367,16 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       const c = covers(fileRels, policyGitOps);
       if (c.ok) return finishAllow({ allow: true, files: [...a.writes, ...staged], approval: c.approval });
       if (policyGitOps.includes('swarm-merge')) {
-        return { allow: false, files: a.writes, reason: MERGE_BLOCKED_REASON };
+        return finishBash({ allow: false, files: a.writes, reason: MERGE_BLOCKED_REASON });
       }
       const label = policyOpDenyLabel(policyGitOps, ti.command, policyOps);
-      return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${label})` };
+      return finishBash({ allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${label})` });
     }
     const residualGit = a.git.filter(g => {
+      if (policyOps.some(o => o.tool === 'git' && o.sub === g && isReadOnlyGitSub(o.sub, o.rest ?? []))) return false;
       if (g === 'rebase' && policyOps.some(o => o.tool === 'git' && o.sub === 'rebase' && isFreeGitRebase(o, protBranch))) return false;
       if (g === 'push' && policyOps.some(o => o.tool === 'git' && o.sub === 'push' && isFreeGitPush(o, current, root))) return false;
-      if (g === 'branch' && policyOps.some(o => o.tool === 'git' && o.sub === 'branch' && o.delete === 'safe')) return false;
+      if (g === 'branch' && policyOps.some(o => o.tool === 'git' && o.sub === 'branch' && (o.delete === 'safe' || isReadOnlyGitSub('branch', o.rest ?? [])))) return false;
       if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(stagedCarryOk)) return false;
       if (['switch', 'checkout', 'restore'].includes(g) && policyOps.some(o => o.tool === 'git' && (isFreeGitSwitchCheckout(o, root, revParseCommitFn) || isFreeGitRestorePaths(o, root)))) return false;
       return true;
@@ -1319,7 +2385,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (a.writes.length && a.writes.every(w => writeFree(w) || scratchDests.has(w) || mvUntrackedFree.has(w)) && !mvApprovals.length && !residualGit.length) return finishAllow({ allow: true, files: a.writes });
     const c = covers(fileRels, residualGit);
     if (c.ok) return finishAllow({ allow: true, files: [...a.writes, ...staged], approval: c.approval });
-    return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${[...fileRels.map(w => `writes ${w}`), ...residualGit.map(g => `git ${g}`)].join(', ')})` };
+    return finishBash({ allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${[...fileRels.map(w => `writes ${w}`), ...residualGit.map(g => `git ${g}`)].join(', ')})` });
   }
   return { allow: true };
 }

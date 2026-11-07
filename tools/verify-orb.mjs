@@ -234,6 +234,8 @@ export async function runVerifyOrb({
   } catch (error) {
     return errorResult(error.message);
   } finally {
-    await app.close().catch(() => {});
+    await app.close().catch((error) => {
+      console.error('[tools/verify-orb.mjs] app.close in finally:', error?.message ?? error);
+    });
   }
 }

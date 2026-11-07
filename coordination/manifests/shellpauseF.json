@@ -1,0 +1,39 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseF",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Fix a regression from the claude shell pause validate refusal. tools/swarm/core-31.mjs validateManifest (around lines 258-268, the block using claudeShellPauseResolved, claudeShellPauseRefusal and CLAUDE_SHELL_PAUSED) is also run on SAVED manifests of finished runs by integrate, ship and go (they re-read .swarm/runs/ID/manifest.json), so a finished, already-paid shell run cannot be integrated while the lane is paused. Move the refusal out of validateManifest: remove that block (and any imports and variables that become unused) from tools/swarm/core-31.mjs, and instead do the check in validateProject in tools/swarm/core-51.mjs (the up-front swarm validate entry, around lines 347-360): after the manifest has been validated and shell presets are expanded, if any job has shell === true and claudeShellPausedProblem(loadLocalConfig({ env })) (from tools/claude-shell.mjs; look at how that file gets env) returns text, fail with that text and code claude-shell-paused using the same failure mechanism validateProject uses for its other refusals. Dispatch stays guarded separately by resolveWorkerKey at run start; do not change that. Update tests/claude-shell-paused-validate.test.mjs: validateProject refuses a shell job while the anthropic lane is paused and while lanes.claude.shellPaused is true, passes when not paused, passes a plain claude job while paused; and NEW: validateManifest on a saved-style manifest with one shell job does NOT throw while paused (this is the integrate case), and a test calling the real integrate path is not needed if validateManifest is the only re-check. Keep fake values built at run time; no credential-looking literals; per-test timeout at most 60 s.",
+   "context": [
+    "tools/swarm/core-31.mjs",
+    "tools/swarm/core-51.mjs",
+    "tools/claude-shell.mjs",
+    "tests/claude-shell-paused-validate.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-31.mjs",
+    "tools/swarm/core-51.mjs",
+    "tests/claude-shell-paused-validate.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/cache-context-normalize.test.mjs",
+    "tests/guard-backup-fixes3.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/ignore-tests-reason.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/run-cleanup.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ]
+  }
+ ]
+}

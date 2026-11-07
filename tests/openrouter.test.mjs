@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // OpenRouter worker pool (decisions #226-#228): data_collection deny on every request,
 // anthropic/* pinned to Anthropic, deepseek/* bookkeeping only, $5/job and $25/day caps.
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -8,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { executeApi, apiConfiguration, apiDoctor } from '../tools/api-adapters.mjs';
 import { validateManifest } from '../tools/swarm.mjs';
-import { providerPolicy, assertRequestBody, nonBookkeepingOutputs, readOpenRouterKey, spentSoFar, worstCaseUsd, OPENROUTER_ENDPOINT, OPENROUTER_MODELS_URL } from '../tools/openrouter.mjs';
+import { providerPolicy, assertRequestBody, nonBookkeepingOutputs, openrouterAllowsCodeOutputs, resolveOpenRouterAllowCodeOutputs, readOpenRouterKey, spentSoFar, worstCaseUsd, OPENROUTER_ENDPOINT, OPENROUTER_MODELS_URL } from '../tools/openrouter.mjs';
 
 const KEY = 'sk-or-FAKE-0000-0000-0000';
 const envelope = { summary: 'Wrote the payload; tests not run.', files: [{ path: 'coordination/x-pr-create.json', content: '{"title":"t"}\n' }] };
@@ -78,6 +79,65 @@ test('deepseek models may write bookkeeping files only, refused at validate and 
   assert.equal(result.status, 'failed');
   assert.match(result.error, /bookkeeping jobs only/);
   assert.equal(calls.length, 0, 'no pricing or chat request is made');
+});
+
+test('unset and false allowCodeOutputs keep bookkeeping-only; only boolean true opts in', () => {
+  assert.equal(openrouterAllowsCodeOutputs({}), false);
+  assert.equal(openrouterAllowsCodeOutputs({ openrouter: { allowCodeOutputs: true } }), true);
+  assert.equal(openrouterAllowsCodeOutputs({ lanes: { openrouter: { allowCodeOutputs: true } } }), true);
+  for (const allowCodeOutputs of [false, undefined, 'true', 1, null]) {
+    assert.equal(openrouterAllowsCodeOutputs({ lanes: { openrouter: { allowCodeOutputs } } }), false);
+  }
+  assert.equal(resolveOpenRouterAllowCodeOutputs({
+    config: { lanes: { openrouter: { allowCodeOutputs: true } } },
+    manifest: { lanes: { openrouter: { allowCodeOutputs: false } } },
+  }), false, 'manifest false overwrites machine-config true');
+  assert.equal(resolveOpenRouterAllowCodeOutputs({
+    config: { lanes: { openrouter: { allowCodeOutputs: false } } },
+    manifest: { lanes: { openrouter: { allowCodeOutputs: true } } },
+  }), true);
+  assert.equal(resolveOpenRouterAllowCodeOutputs({ allowCodeOutputs: true, manifest: { lanes: { openrouter: { allowCodeOutputs: false } } } }), true);
+});
+
+test('lanes.openrouter.allowCodeOutputs lets deepseek write non-sensitive code at validate and run', async t => {
+  const coding = job({ model: 'deepseek/deepseek-v4.1-flash', outputs: ['src/app.py'] });
+  assert.doesNotThrow(() => validateManifest({ version: 1, concurrency: 1, lanes: { openrouter: { allowCodeOutputs: true } }, jobs: [coding] }));
+  assert.throws(
+    () => validateManifest({ version: 1, concurrency: 1, lanes: { openrouter: { allowCodeOutputs: false } }, jobs: [coding] }),
+    /bookkeeping jobs only.*src\/app\.py/,
+  );
+  assert.throws(
+    () => validateManifest({ version: 1, concurrency: 1, lanes: { openrouter: { allowCodeOutputs: true } }, jobs: [job({ sensitive: true, model: 'deepseek/deepseek-v4.1-flash', outputs: ['src/app.py'] })] }),
+    /sensitive: false/,
+  );
+  const dir = await logsDir(t);
+  const configFile = path.join(dir, 'config.json');
+  await fs.writeFile(configFile, JSON.stringify({ lanes: { openrouter: { allowCodeOutputs: true } } }));
+  const env = { OPENROUTER_API_KEY: KEY, SWARM_LOGS_DIR: dir, SWARM_CONFIG: configFile, HOME: dir };
+  assert.doesNotThrow(() => validateManifest({ version: 1, concurrency: 1, jobs: [coding] }, { env }));
+  const codeEnvelope = { summary: 'Updated the app.', files: [{ path: 'src/app.py', content: 'print("ok")\n' }] };
+  const { fetchImpl, calls } = transport(() => reply(completion(codeEnvelope)));
+  const result = await executeApi(coding, [], { env, fetchImpl });
+  assert.equal(result.status, 'complete', result.error);
+  const chat = calls.find(call => call.url === OPENROUTER_ENDPOINT);
+  assert.ok(chat, 'the chat request is sent once the operator opts in');
+  const sent = JSON.parse(chat.options.body);
+  assert.equal(sent.provider.data_collection, 'deny');
+  assert.equal(sent.provider.order, undefined, 'deepseek is not pinned to Anthropic');
+});
+
+test('allowCodeOutputs does not lift OpenRouter spend caps or the Anthropic pin', async t => {
+  const dir = await logsDir(t);
+  const env = { OPENROUTER_API_KEY: KEY, SWARM_LOGS_DIR: dir };
+  const { fetchImpl, calls } = transport(() => reply(completion()));
+  const result = await executeApi(job({ model: 'pricey/model', outputs: ['src/app.py'] }), [], { env, fetchImpl, allowCodeOutputs: true });
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /job cap/);
+  assert.ok(!calls.some(call => call.url === OPENROUTER_ENDPOINT), 'the chat endpoint is never called');
+  assert.throws(
+    () => assertRequestBody({ model: 'anthropic/claude-sonnet-5', provider: { data_collection: 'deny', order: ['anthropic'], allow_fallbacks: true } }),
+    /must pin/,
+  );
 });
 
 test('spend caps: a request whose worst case would pass $5 for the job or $25 for the day is refused before the chat call', async t => {

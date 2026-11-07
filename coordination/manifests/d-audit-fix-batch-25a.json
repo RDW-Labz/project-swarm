@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-25a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 25a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/best-of.mjs, tools/budgets.mjs, tools/status.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/best-of.mjs\nLogger prefix: console.error('[tools/best-of.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (money: paid lanes / budgets / spend). Line 158 `} catch {}`: SILENT-<nonzero git exit code> (`git worktree remove --force` failing because the worktree was never registered or already gone), log the rest (e.g. permission errors); no fallback value, best-effort cleanup.\n- Line 161 `} catch {}`: cleanup with `{ recursive: true, force: true }` on fs.rm (can't ENOENT) \u2014 LOG-ALWAYS, include the tmp path; no fallback value, best-effort cleanup.\n\n### tools/budgets.mjs\nLogger prefix: console.error('[tools/budgets.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (money: paid lanes / budgets / spend). Line 155 `... try { if (new URL(finalUrl).host !== new URL(url).host) {...} } catch { /* an unreadable address is not a reason to refuse */ } ...`: SILENT-TypeError (`new URL()` on a malformed finalUrl/url), log the rest; no fallback value, the host check is simply skipped.\n- Line 179 `const serial = fn => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run; };`: LEAVE \u2014 promise-queue serializer; the real rejection still reaches the caller through the returned `run` promise.\n\n### tools/status.mjs\nLogger prefix: console.error('[tools/status.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (money: paid lanes / budgets / spend). Line 29 `} catch { /* Unreadable or corrupt runs do not hide usable history. */ }`: SILENT-ENOENT/SyntaxError (run's state.json missing or torn), log the rest; no fallback value, the run is left out of `runs`.\n- Line 65 `catch { /* A missing ledger should not prevent status. */ }` (around `spend = await spendToday();`): SILENT-ENOENT (no spend ledger yet), log the rest (e.g. a real bug computing spend); keep the already-initialized `spend = { usd: null, byLane: {} }` fallback.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/best-of.mjs",
+        "tools/budgets.mjs",
+        "tools/status.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/bare-status.test.mjs",
+        "tests/best-of.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/runner-pointer.test.mjs",
+        "tests/scope-integrity.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/status.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

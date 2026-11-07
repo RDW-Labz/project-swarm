@@ -1,0 +1,95 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8019",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "wiring.mjs:167-189 alignTestTicketsWithBuildStages; wiring.mjs:110-146 orderTestsAfterBuild; scope-commands.mjs:1154-1155; tests/scope-split-guards.test.mjs: ingest moves a later-stage test ticket into the build stage and wires dependsOn; ingest rejects a later-stage test ticket when no build matches its context",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "wiring.mjs:202-225 reconcileTicketContext; tests/scope-split-guards.test.mjs: ingest drops orphan context but keeps dependsOn-produced context",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "wiring.mjs:227-262 peelProtectedOutputs (protectedPathHit); tests/scope-split-guards.test.mjs: ingest peels coordination/checks.json into an owner commit window human ticket",
+          "gap": ""
+        },
+        {
+          "n": 4,
+          "met": true,
+          "evidence": "tests/scope-split-guards.test.mjs: all four ingest guard tests (stage repair/reject, context drop, protected peel, simple ingest)",
+          "gap": ""
+        }
+      ]
+    },
+    {
+      "ticket": "T-8020",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/scope-loop.mjs:205-222 skipAcceptanceReview; tools/scope-loop.mjs:257-316 recordAcceptanceReviews; tools/acceptance.mjs:381-388 acceptanceReviewSkipNote/acceptanceReviewSkipWarning; tests/acceptance-review-skip.test.mjs: one ticket in another worktree is skipped while the rest of the wave completes; a review-start exception for one ticket is skipped and does not stall the loop",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tests/acceptance-review-skip.test.mjs: one ticket in another worktree is skipped while the rest of the wave completes (T-8020 and T-8021 done, T-8022 stays in review)",
+          "gap": ""
+        }
+      ]
+    },
+    {
+      "ticket": "T-8021",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:391-442 lastTicketFinishedAt (family roots, tickets.log, ledger history, run jobs); tests/board-accuracy-activity.test.mjs: lastTicketFinishedAt falls back to the newest finished job; lastTicketFinishedAt uses a scratch-dir run when that is the only finish source",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tests/board-accuracy-activity.test.mjs:495-516 lastTicketFinishedAt uses the newest tickets.log done transition across linked worktree ledgers (card.now.lastTicketFinishedAt)",
+          "gap": ""
+        }
+      ]
+    },
+    {
+      "ticket": "T-8022",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/ticket-paths.mjs:218-237 similar-new-file warning for write outputs; tools/ticket-paths.mjs:245-255 context typo refusal; tests/ticket-paths-new-files.test.mjs: validateTicketPaths warns on a similar new output file; validateTicketPaths still refuses a missing context path that looks like a typo",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/scope-commands.mjs:229-250 ticketPathCheckLines; tools/scope-commands.mjs:1170-1210 --accept-new-path ingest; tests/ticket-paths-new-files.test.mjs: --accept-new-path overrides only the named refused path",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tests/ticket-paths-new-files.test.mjs: all four tests (similar new warning, context refusal, ingest warning, accept-new-path override)",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

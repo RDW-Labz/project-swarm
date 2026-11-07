@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8023",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/split-repair.mjs",
+        "tools/wiring.mjs",
+        "tests/split-repair.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/scope-commands.mjs",
+        "tools/scope-integrity.mjs",
+        "tools/ticket-paths.mjs",
+        "tools/journal.mjs",
+        "tests/scope-split-guards.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/wiring-build-owns.test.mjs"
+      ],
+      "prompt": "Ticket T-8023 (OWNER TOP PRIORITY: the splitter is the #1 blocker across projects; split refusals come from context files that do not exist yet, shared files, tests split from the code they test, and missing integration tickets). Build a PURE, fully injected split repair engine in a NEW file tools/split-repair.mjs (no model calls, no fs writes, no imports of tools/swarm.mjs). Read tools/scope-commands.mjs cmdSplit (~lines 1095-1227) to see every place ingest refuses today and the data each refusal has (readStageFiles errors; built.rejected {id,title,reason}; ingestAcceptanceChecks refusals; wiringGaps/unwiredRequirements {req, reason}; validateTicketPaths results {field,path,suggestion,reason,message} in tools/ticket-paths.mjs; lane-size refusals; checkTicketTree errors {code, message, conflicts:[{wave,file,tickets}], ids, deps, refs} in tools/scope-integrity.mjs; change-order stray tickets; wave simulation refusal). EXPORT exactly this interface (T-8024 wires it into scope-commands.mjs next):\n- ROOT_RULES: frozen array of plain sentences, used verbatim in both the split prompt and the repair prompt: (1) never put a file in a ticket's context or reads unless it exists in the repo now or is produced by a ticket in its dependsOn chain (the producer must be an ancestor); (2) two tickets in the same wave never write the same file: chain them with dependsOn or merge them; (3) a test ticket is never in a later stage or wave than the code it tests: put tests in the build ticket's own outputs, or a test ticket that dependsOn it in the same stage; (4) protected files (coordination/checks.json, .project-swarm.json, .swarm/, .git/ and the project's protected paths) are never assigned to worker tickets: route them to an owner-window human ticket; (5) every requirement with build tickets gets exactly one integration ticket that mounts the modules in the real entry point (route, CLI command or page) with a route-level or end-to-end test.\n- collectSplitIssues(sources) -> issues[]: each { code, stage, ticket (id or key), title, path, req, reason, fixable } built from an object holding any of the refusal sources above (accept the shapes listed; unknown shapes become { code: 'other', reason }). Codes at least: 'future-context', 'shared-file-same-wave', 'test-after-code', 'protected-file', 'missing-integration', 'path', 'acceptance', 'lane-size', 'tree', 'stray', 'stage-output', 'waves'.\n- autoFix(tickets, issues, { existing }) -> { tickets, fixed, remaining }: deterministic fixes only, never a model: same-wave shared writers are chained (the later ticket id dependsOn the earlier, without creating a cycle; if a cycle would form, leave it as remaining); anything the T-8019 ingest guards already repair is reported as fixed and not sent to a round. Pure: returns new ticket objects.\n- buildRepairJobs({ scopeText or requirementsByStage, stage, failedTickets (raw JSON the worker returned), issues, rules = ROOT_RULES, round, outputPath }) -> { id: 'split-' + stage, prompt } where the prompt contains the original requirement text, the failed ticket JSON, the exact issues (code, ticket, path, reason), the root rules, and the instruction to return the FULL corrected JSON array of tickets for that stage to outputPath (the same path the split job used, so readStageFiles still works).\n- runRepairLoop({ maxRepairs = 3, validate, rerun, log, now }) -> { tickets, parked, rounds, history }: validate() returns { tickets (valid), issues (per ticket, with stage) , stageIssues (stage-level) }; if no issues -> done; else autoFix first, then if issues remain and rounds < maxRepairs call rerun(stagesWithIssues, issuesByStage, round) which re-runs ONLY those stages and returns nothing (validate is called again after); log({ round, errorsIn, errorsLeft }) every round; stop early when a round makes no progress (same issue set as the previous round: never loop forever); when rounds are exhausted (or maxRepairs is 0) the valid tickets are returned and every remaining bad ticket is parked: parked = [{ ticket, stage, issues }]; a ticket that fails validation is NEVER in the returned tickets.\n- parkedBlockers(parked, { runId }) -> [{ kind: 'blocker', id: 'split-park-<stage>-<ticket>', text: one plain sentence naming the ticket, its stage and the exact errors and the command to retry ('swarm scope split --ingest RUN --merge --max-repairs N'), ticket }] (journal event shapes for tools/journal.mjs appendEvent).\nAlso in tools/wiring.mjs: extend chainSharedFiles so NON-integration tickets that write the same file in the same split are chained too (later dependsOn earlier, no cycles, done existing tickets never added), keeping current integration behavior; keep tests/splitter-lesson-55.test.mjs, tests/wiring-build-owns.test.mjs and tests/scope-split-guards.test.mjs passing.\nTESTS in tests/split-repair.test.mjs with an INJECTED FAKE WORKER (rerun replaces the stage's ticket list with a canned answer): for each of the four defects (future context file, same-wave shared file between two build tickets, test ticket in a later stage than its code, requirement with build tickets but no integration ticket) round 1 returns the defect and round 2 returns the fix: the loop ends with all tickets valid and rounds = 1 (or 0 when autoFix fixed it: assert the shared-file case is fixed with no round); with maxRepairs exhausted the bad tickets are parked and the good ones returned; maxRepairs 0 parks immediately; a worker that keeps returning the same bad answer stops after one no-progress round; parkedBlockers output has kind 'blocker', a stable id and the exact errors; ROOT_RULES has the five rules. Do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/scope-commands.mjs (T-8024 owns it), package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/split-repair.test.mjs tests/splitter-lesson-55.test.mjs tests/wiring-build-owns.test.mjs tests/scope-split-guards.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/batch-c-eval.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs",
+        "tests/wiring.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import wiring.mjs for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

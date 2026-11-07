@@ -1,0 +1,68 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "locallane3",
+   "agent": "auto",
+   "prompt": "Opus security review of the local lane (verdict FAIL) found these; fix each and add tests (tests/local-lane-review.test.mjs). Keep tests/local-lane.test.mjs, tests/lanes.test.mjs, tests/router.test.mjs, tests/api-workers.test.mjs passing.\n1 MEDIUM tools/lanes.mjs claimLaneSlots (around line 612): it passes only the first waiter's endpoint and agency settings for the whole batch and tags every granted slot with them, so mixed waiters (one job for endpoint A, three docs jobs for endpoint B) skip B's slots limit and agencyConcurrency. Evaluate and tag each waiter with its own endpoint and agency status.\n2 MEDIUM tools/router.mjs and tools/api-adapters.mjs: auto-routing puts local first for every job including sensitive ones, and there is no executor guard, but baseUrl may be any https host. Sensitive jobs (sensitive !== false) may use a local endpoint only when its baseUrl host is loopback (127.0.0.1, [::1], localhost); add an executor guard in executeApi that refuses a sensitive job on a non-loopback local endpoint, and make the router skip such endpoints for sensitive jobs.\n3 MEDIUM tools/lanes.mjs localSlotRoom (around line 352): slots counted from store.slots.local while new slots go into a fresh array that is only stored later, so a first claim may count zero. Make the count include slots granted earlier in the same claim loop.\n4 LOW tools/lanes.mjs lines about 76 and 100: lane overrides from a manifest can carry endpoints and agencyConcurrency that skip validation. Strip or validate them (always through validateLocalLaneBlock) and ignore manifest-supplied endpoints for routing and limits.\n5 Request: in executeApi for the local lane set redirect: 'error' on the fetch so the Authorization header can never follow a redirect.\n6 BUG tools/api-adapters.mjs probeLocalProvider (about line 136) runs new URL(report.endpoint) before the local branch, but local doctor output has no endpoint field, so doctor local throws; handle the local report first.",
+   "context": [
+    "tools/lanes.mjs",
+    "tools/router.mjs",
+    "tools/api-adapters.mjs",
+    "tools/local-lane.mjs",
+    "tests/local-lane.test.mjs",
+    "tests/lanes.test.mjs",
+    "tests/router.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/lanes.mjs",
+    "tools/router.mjs",
+    "tools/api-adapters.mjs",
+    "tools/local-lane.mjs",
+    "tests/local-lane-review.test.mjs"
+   ],
+   "timeoutMs": 3000000,
+   "ignoreTests": [
+    "tests/adapters.test.mjs",
+    "tests/anthropic-lane.test.mjs",
+    "tests/batch-c-eval.test.mjs",
+    "tests/best-of-adapter.test.mjs",
+    "tests/board-accuracy-card.test.mjs",
+    "tests/board-accuracy-page.test.mjs",
+    "tests/cap-reroute.test.mjs",
+    "tests/field-lessons-batch-aa-core.test.mjs",
+    "tests/field-lessons-batch-n.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-y-adapters.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/gpu-lineup.test.mjs",
+    "tests/gpu.test.mjs",
+    "tests/helpers/board-accuracy-fixture.mjs",
+    "tests/job-types.test.mjs",
+    "tests/kickoff.test.mjs",
+    "tests/lanes-run.test.mjs",
+    "tests/lanes-timer-leak.test.mjs",
+    "tests/leads-run.test.mjs",
+    "tests/lesson-37-eval.test.mjs",
+    "tests/machine-share.test.mjs",
+    "tests/multi-edit.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/review-structured-verdict.test.mjs",
+    "tests/router-ready.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/split-repair.test.mjs",
+    "tests/watch-ui.test.mjs",
+    "tests/worker-skills.test.mjs"
+   ],
+   "ignoreTestsReason": "tests in context cover the change; full suite before merge"
+  }
+ ]
+}

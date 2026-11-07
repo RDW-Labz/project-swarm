@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2adapters",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them.\nTrain 2 regression from the new per-request daily-limit check (tools/spend.mjs assertDailyLimitBeforeSend, called by tools/api-adapters.mjs executeApi before every paid send). The full suite now fails 9 tests in tests/adapters.test.mjs (failure lines below). Those tests call executeApi directly with their own env objects that carry no SWARM_SPEND_DIR and no SWARM_CONFIG, so the new check reads the developer machine's real spend store (~/.project-swarm/spend) and real daily-limit config. That is a test-isolation bug: give every env those tests pass an isolated SWARM_SPEND_DIR (a temp dir) and SWARM_CONFIG (a temp config with a generous daily limit in notify mode, the same way tests/_isolate-config.mjs isolates process.env; reuse its approach), so no test reads or writes real machine state. ALSO find out exactly why the refusal says 'billed $2.5000 today' (the real machine store has only $0 entries today, and swarm budget show reports billedTodayUsd 0): trace billedMeteredTodayUsd and the inputs assertDailyLimitBeforeSend uses for these calls. If it shows a real accounting bug in tools/spend.mjs or tools/api-adapters.mjs (for example billedUsd defaulting to the reservation, counting a non-metered lane, a wrong day key, or reading a different store than reserveSpend), fix it minimally there and add a test in tests/t2-daily-limit-per-request.test.mjs; if it is only the missing isolation, change no product code. State which in your notes, with the line. Also confirm the cancellation test (adapters.test.mjs ~203, expected cancelled, got failed) and the 4-concurrent test (~113, expected 4 fetches, saw 3) pass for the right reason after the fix: a cancel during the daily-limit check must still report cancelled, not failed (fix api-adapters if not). Never raise or change a cap. Do not touch any other file.\n\nFailures:\nnot ok 52 - four concurrent API requests cancel together and queued jobs never start\n  error: 'expected 4 fetch calls, saw 3'\nnot ok 56 - cancellation while reading a response body rejects partial output\n  error: |-\n  expected: 'cancelled'\n  actual: 'failed'\nnot ok 57 - openai rejects decoded credential echoes before retaining output\n  error: |-\n  expected:\n  actual: 'daily-limit-stop: billed $2.5000 today + in-flight reserves $0.0000 + worstUsd $0.5000 > daily limit $2.50; request refused'\nnot ok 58 - gemini rejects decoded credential echoes before retaining output\n  error: |-\n  expected:\n  actual: 'daily-limit-stop: billed $2.5000 today + in-flight reserves $0.0000 + worstUsd $0.5000 > daily limit $2.50; request refused'\nnot ok 60 - lambda rejects decoded credential echoes before retaining output\n  error: |-\n  expected:\n  actual: 'daily-limit-stop: billed $2.5000 today + in-flight reserves $0.0000 + worstUsd $0.5000 > daily limit $2.50; request refused'\nnot ok 61 - credential checks inspect retained metadata without treating JSON field names as echoes\n  error: |-\n  expected: 'complete'\n  actual: 'failed'\nnot ok 62 - Lambda sessions are unique for repeated and concurrent same-ID requests\n  error: |-\n  expected: true\n  actual: false\nnot ok 63 - Lambda sessions remain distinct across manifest runs in one process\n  error: |-\n  expected: 'complete'\n  actual: 'paused'\nnot ok 64 - escaped credential rejection fails the manifest without persisting or integrating output\n  error: |-\n  expected: 'failed'\n  actual: 'paused'\n",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/daily-limit.mjs",
+        "tools/local-config.mjs"
+      ],
+      "outputs": [
+        "tests/adapters.test.mjs",
+        "tools/spend.mjs",
+        "tools/api-adapters.mjs",
+        "tests/t2-daily-limit-per-request.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/api-short-report.test.mjs",
+        "tests/api-workers.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/best-of-adapter.test.mjs",
+        "tests/crash-guards.test.mjs",
+        "tests/daily-limit-admission.test.mjs",
+        "tests/daily-limit-hardening-round3.test.mjs",
+        "tests/daily-limit-hardening-round4.test.mjs",
+        "tests/daily-limit-hardening.test.mjs",
+        "tests/dead-run.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-y-adapters.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/flat-rate-reserve.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/local-lane-cache-context.test.mjs",
+        "tests/local-lane-review.test.mjs",
+        "tests/local-lane.test.mjs",
+        "tests/managers/r037-budget-lane.test.mjs",
+        "tests/multi-edit.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/paid-lane-pause.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/project-cap-billed.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/review-structured-verdict.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/t2-lambda-hosted.test.mjs",
+        "tests/t2-resume-recheck.test.mjs",
+        "tests/train2-money.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2adapters",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/adapters.test.mjs",
+        "tests/t2-daily-limit-per-request.test.mjs",
+        "tests/t2-resume-recheck.test.mjs",
+        "tests/api-workers.test.mjs",
+        "tests/anthropic-lane.test.mjs",
+        "tests/spend.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/train2-money.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/paid-lane-pause.test.mjs"
+      ]
+    }
+  ]
+}

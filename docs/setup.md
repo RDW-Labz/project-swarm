@@ -36,6 +36,9 @@ config file, never as a source literal: `$XDG_CONFIG_HOME/project-swarm/config.j
 `XDG_CONFIG_HOME` is set to an absolute path, else `~/.config/project-swarm/config.json`.
 `SWARM_CONFIG` overrides either. This file must sit outside any git work tree, including the
 shared install's own checkout — the runner refuses to read a config file found inside one.
+`lanes.openrouter.allowCodeOutputs: true` belongs here when an operator wants OpenRouter
+(including `deepseek/*`) to write non-sensitive code; default is off, and `swarm update`
+does not touch this file.
 
 Live Codex and Claude shell runs put their detached worktrees outside the project root by
 default. Set `{"worktreesOutsideRoot": false}` in this local config to opt back into the
@@ -153,7 +156,7 @@ git clone https://github.com/RDW-Labz/project-swarm.git
 
 The owner name in the URL is the source repository location. You do not sign into that account. You can also download the source archive from the release page. Model execution still uses your own provider setup.
 
-`doctor all` lists all twelve adapters without making network requests by default. `doctor all --probe-local` opts into a short HTTP health probe only for loopback Ollama and self-hosted Lambda endpoints. It sends no credentials, follows no redirects and makes no model request. Remote endpoints and cloud keys are never probed. Reports distinguish `configured`, `reachable` (HTTP health only), and `unreachable`; `reachable: null` means not checked. `configured` means a required environment key is present, or a local Ollama endpoint is selected; it does not prove service health or model access. Each run checks only its selected providers. Default concurrency is 2; set `concurrency` to an integer from 1 to 32 when you deliberately want more simultaneous workers.
+`doctor all` lists all thirteen adapters without making network requests by default. `doctor all --probe-local` opts into a short HTTP health probe only for loopback Ollama and self-hosted Lambda endpoints. It sends no credentials, follows no redirects and makes no model request. Remote endpoints and cloud keys are never probed. Reports distinguish `configured`, `reachable` (HTTP health only), and `unreachable`; `reachable: null` means not checked. `configured` means a required environment key is present, or a local Ollama endpoint is selected; it does not prove service health or model access. Each run checks only its selected providers. Default concurrency is 2; set `concurrency` to an integer from 1 to 32 when you deliberately want more simultaneous workers.
 
 ## Preflight before larger assignments
 

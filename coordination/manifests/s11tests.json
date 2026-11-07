@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "s11tests",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/scope/roadmap.md",
+    "tests/build-progress-roadmap.test.mjs"
+   ],
+   "outputs": [
+    "tests/build-progress-roadmap.test.mjs"
+   ],
+   "prompt": "Adding stage S11 to docs/scope/roadmap.md raised the requirement count from 80 to 91 and the stage count from 10 to 11, which breaks tests that assert the old counts for the real roadmap file (CI: build-progress tests such as 'build progress follows the newest approved roadmap ledger across linked worktrees and excludes human tickets', 'an approved main ledger wins over a newer but unapproved linked ledger', 'ETA widens from fourteen to thirty days...', 'roadmap progress excludes cancelled, proposed and human tickets...', 'scope milestones ignore unrelated PRs...', 'ETA falls back to run finish times...': they expect 80). Find every test under tests/ that hard-codes the requirement count 80 (or the 10 stages, or any ticket count derived from the roadmap) for the real docs/scope/roadmap.md and make it derive the number from the file (count the '### R-' headings and the '- S' lines under '## Stages') instead of a literal, so future scope changes do not break tests again. Do not change docs/scope/roadmap.md or tools/. Do not weaken any assertion. Run those test files and make them pass."
+  }
+ ]
+}

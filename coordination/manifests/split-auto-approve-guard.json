@@ -1,0 +1,38 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "aaguard",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "Tighten omSwarmScopeApproveAutoOkOnly in tools/orchestrator-allow.mjs. Today it finds the first non-flag word and only checks the words AFTER it, so flags placed BEFORE 'approve' slip through (for example rest = ['--yes', 'approve', '--auto-ok'] or ['--json', 'approve', '--auto-ok'] returns true). It must return true only when the whole rest, lowercased, is exactly ['approve', '--auto-ok']; anything else returns false. Change nothing else. Add cases to tests/split-auto-approve.test.mjs: swarmSubcommandAlwaysAllowed('scope', ['--yes','approve','--auto-ok']), ['--json','approve','--auto-ok'], ['approve','--auto-ok',''] and ['APPROVE','--AUTO-OK'] (the last one stays allowed since words are lowercased, keep whatever the existing lowercase rule implies and assert it) — the first three must be false. tests/split-module.test.mjs only checks module file names.",
+   "context": [
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tests/split-auto-approve.test.mjs"
+   ],
+   "timeoutMs": 1200000,
+   "ignoreTests": [
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "name": "aa-guard",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/split-auto-approve.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-mode.test.mjs"
+   ]
+  }
+ ]
+}

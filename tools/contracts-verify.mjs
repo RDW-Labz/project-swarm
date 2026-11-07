@@ -15,7 +15,7 @@ export async function verifyContracts(dir, { timeoutMs = 60000 } = {}) {
   const home = await mkdtemp(path.join(os.tmpdir(), 'swarm-contract-verify-'));
   const env = { PATH: process.env.PATH ?? '', HOME: home, NODE_ENV: 'test' };
   const children = [];
-  const killAll = () => { for (const child of children) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } } };
+  const killAll = () => { for (const child of children) { try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') { console.error('[tools/contracts-verify.mjs] killAll process group:', error?.message ?? error); } } } };
   const timer = setTimeout(killAll, timeoutMs);
   try {
     const mockUrl = pathToFileURL(path.join(dir, 'contracts', 'mock-server.mjs')).href;

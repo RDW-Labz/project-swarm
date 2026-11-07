@@ -1,0 +1,45 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omode6",
+   "agent": "auto",
+   "prompt": "Two tests in tests/orchestrator-mode.test.mjs fail after the last guard change: orchestratorModeCommandAllowed now returns true for 'git commit -m x' (line 138) and 'gh pr create --title x' (line 358), but the owner's rule is that orchestrator mode must still refuse both (they are hand-build actions; the deny lists in those tests are correct). Fix the code in tools/shell-writes.mjs (and tools/handbuild-guard.mjs if needed) so orchestrator mode refuses git commit and gh pr create in every form, while the free-text channel behaviour the new tests/guard-free-text.test.mjs and tests/handbuild-reason-words.test.mjs expect for normal hand-build mode keeps passing, plus tests/orchestrator-mode-timeout.test.mjs, tests/orchestrator-mode-fail-closed.test.mjs and tests/orchestrator-mode-default.test.mjs. Do not edit the deny lists. If a free-text test needs a git commit or gh pr create to be allowed inside orchestrator mode itself, stop and say so in your report instead of weakening the refusal.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild-guard.mjs",
+    "tools/handbuild.mjs",
+    "tools/orchestrator-hook.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/orchestrator-mode-fail-closed.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild-guard.mjs"
+   ],
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/hook-path-stable.test.mjs",
+    "tests/hooks-repoint-all.test.mjs",
+    "tests/phase10b-init.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs"
+   ],
+   "ignoreTestsReason": "guard tests listed in context cover the change; the full suite runs before merge"
+  }
+ ]
+}

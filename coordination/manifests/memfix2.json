@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "memfix2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "context": [
+    "tools/autotune.mjs",
+    "tools/board-keepalive.mjs",
+    "tests/memory-fixes.test.mjs"
+   ],
+   "outputs": [
+    "tools/autotune.mjs",
+    "tools/board-keepalive.mjs",
+    "tools/machine-limit.mjs",
+    "tools/swarm/core-31.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs"
+   ],
+   "prompt": "Fix seven second-review findings, with tests in tests/memory-fixes.test.mjs (injected fakes only). 1 HIGH tools/autotune.mjs defaultMemoryExec: call /usr/bin/vm_stat and /usr/sbin/sysctl by absolute path (launchd PATH has no /usr/sbin and a user-writable dir sits first); wrap the sysctl swap call in its own try/catch so a swap failure keeps the vm_stat result (a missing swap line is already handled). 2 MEDIUM tools/autotune.mjs: on darwin the last-resort fallback must not be os.freemem() (it counts only truly free pages and reads hard); when the probes fail on darwin return a pressure-unknown result treated as ok, with a warning string in the result. Linux keeps its fallback. 3 MEDIUM the hard-pressure wait before a node --test check in tools/swarm/core-31.mjs runChecks (and any constant it uses in tools/machine-limit.mjs): cut it from 5 minutes to 60 seconds total (polls every 15 seconds), then run at concurrency 1 with the existing warning. 4 LOW tools/board-keepalive.mjs: if the config directory is not owned by the user, refuse with an error instead of writing there. 5 LOW tools/board-keepalive.mjs: add O_NONBLOCK to the identity open flags so a planted FIFO cannot block (the isFile check after fstat already rejects it); test with the injected fs. 6 LOW tools/autotune.mjs: remove the NODE_TEST_CONTEXT to linux platform override from production code; tests pass platform explicitly. 7 LOW tests: tests/autopilot-ready-deps.test.mjs around line 143 fakes memory with {memTotal, memAvailable} which the code never reads; use availRamGb and swapUsedGb, tests/autopilot-wide-waves.test.mjs around line 174 needs memoryAware: false. Keep every existing test passing.",
+   "ignoreTests": [
+    "tests/autotune.test.mjs",
+    "tests/board-keepalive.test.mjs",
+    "tests/cache-context-normalize.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/ignore-tests-reason.test.mjs",
+    "tests/machine-limit.test.mjs",
+    "tests/memory-aware-limits.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/run-cleanup.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ]
+  }
+ ]
+}

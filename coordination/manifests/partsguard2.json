@@ -1,0 +1,30 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "partsguard2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "sensitive": true,
+   "prompt": "Second fix of the orchestrator-mode guard for the parts project (spellings: swarm ARGS and node .../swarm.mjs --root ROOT ARGS). Wrongly denied today, found by running the real guard: (a) swarm run with a manifest PATH argument such as coordination/manifests/m.json: omSwarmRunLikeAllowed in tools/orchestrator-allow.mjs requires every positional to match only letters, digits, dot, underscore and dash, so a relative path with a slash is refused; allow a positional for run only when it is a relative path under coordination/manifests/ or the project's .swarm folder ending in .json, with no dot-dot segment, not absolute, not starting with a dash (same path-safety style as the existing write allow-list helpers); (b) swarm integrate RUN --jobs a,b: the value of --jobs is a comma list and is currently counted as a positional and refused; values of the flags that take a value (OM_SWARM_RUN_FLAGS_WITH_VALUE) must not be checked as positionals, and --jobs values must match comma separated job ids of letters, digits, dot, underscore and dash; (c) swarm integrate RUN --approve-manifest FILE (also together with --jobs): the flag is not in OM_SWARM_RUN_FLAGS and any argument containing approve is refused by swarmArgsHaveApprove; allow --approve-manifest FILE ONLY for the integrate subcommand, with exactly one FILE value that is a relative path of letters, digits, underscore, at, plus, dot, slash or dash, not starting with a dash, slash or dot-slash and with no dot-dot segment (the swarm CLI validates it the same way); it must stay denied for run, go, merge, scope, tickets, change and every other subcommand, and every other approve spelling must stay denied exactly as now (scope approve, decide approve, handbuild approve, tickets approve, a bare approve word); (d) swarm tickets ID --depends-on +T-1,-T-2 (a ticket edit flag that is being added to swarm): allow it in the tickets edit flag allow-list with the same shape rules as the other value flags (a list of plus or minus signed ticket ids like T-0001); it needs no yes flag. All still denied: scope approve, a bare change with yes, resolve, done, decide, handbuild approve, run with an absolute path or a path outside the two folders, git commit, git push, gh pr create. Tests: extend tests/orchestrator-parts-flow.test.mjs (it already builds a fixture project root with the swarm markers and calls the REAL guard decision in both spellings): add every allowed command above and the denied counterparts, including run with a path outside coordination/manifests, --approve-manifest on run and go (denied), --approve-manifest with a dot-dot file (denied), and the existing assertions must stay. Do not weaken any existing assertion. No credential-looking literals. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-parts-flow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-parts-flow.test.mjs"
+   ],
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}

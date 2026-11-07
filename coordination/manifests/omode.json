@@ -1,0 +1,65 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omode",
+   "agent": "auto",
+   "prompt": "Owner top priority: enforce that orchestrators orchestrate. Add an ORCHESTRATOR MODE to the existing hand-build guard (tools/handbuild-guard.mjs, tools/handbuild.mjs guardDecision, tools/shell-writes.mjs, tools/self-approval.mjs). In a project root, in a session that is an orchestrator (not a swarm worker; see isWorkerCwd/projectRootOf in orchestrator-events.mjs), a Bash tool call is ALLOWED only if every command in it is one of: (a) a swarm command (swarm ..., node .../tools/swarm.mjs ..., the installed swarm); (b) read-only git (status, log, diff, show, branch --list, rev-parse, ls-files, ls-tree, merge-base, fetch, worktree list, tag --list, remote -v; plus the git actions the current guard already allows through requests/approvals); (c) read-only gh (the existing ALLOWED_GH set, plus pr merge stays blocked); (d) capped reads: head/tail/grep/rg/wc/ls/cat/sed -n/jq/cut/sort/uniq/find (read only, no -exec/-delete) where output is capped: head or tail -n at most 200, or a pipe into head -n <=200, or a command whose output is naturally small (wc, ls of one dir, git status -s piped to head). Anything else is refused with the reason text exactly: 'Orchestrator mode: make a ticket instead: swarm diagnose \"<question>\" or swarm ticket ... (see swarm diagnose --help). Hand shell work (scripts, test runs, debugging, edits) belongs to workers.' This covers node/python/npm/ruby scripts, test runs, sed -i, redirects into files, tee, curl|sh, and shell loops/pipes into interpreters. Compound commands (&&, ;, |, $(), backticks, process substitution, newlines, line continuations, variable expansion tricks) must be checked part by part; anything the parser cannot prove safe is refused (fail closed for orchestrator mode, but the existing fail-open on a guard crash stays). Edit/Write tools stay governed by the existing hand-build rules. Escape hatch for the owner only: the existing .swarm/handbuild/off file and the existing approved hand-build request flow still work unchanged; add no new agent-usable bypass. Ship ON by default with an owner-only switch: file .swarm/orchestrator-mode/off (checked like OFF_FILE) turns it off. Log refusals to the existing handbuild log with reason kind orchestrator-mode. Tests: a new tests/orchestrator-mode.test.mjs with at least 40 cases: each allowed class, each refused class, every compound/obfuscation bypass above, worker cwd unaffected, off file, crash fails open. Keep every existing tests/handbuild-*.test.mjs, tests/self-approval-*.test.mjs, tests/shell-writes-*.test.mjs passing (update an existing test only if its command is now refused by design, with a short comment).",
+   "context": [
+    "tools/handbuild-guard.mjs",
+    "tools/handbuild.mjs",
+    "tools/shell-writes.mjs",
+    "tools/self-approval.mjs",
+    "tools/orchestrator-events.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-hardening.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/handbuild-guard.mjs",
+    "tools/handbuild.mjs",
+    "tools/shell-writes.mjs",
+    "tools/self-approval.mjs",
+    "tests/orchestrator-mode.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/git-hooks.test.mjs",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-allowlist.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-hardening2.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/handbuild-switch.test.mjs",
+    "tests/handbuild-vercel-merge.test.mjs",
+    "tests/hook-path-stable.test.mjs",
+    "tests/hooks-repoint-all.test.mjs",
+    "tests/phase10b-init.test.mjs",
+    "tests/policy-commit-window.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/registry-round3.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/scratch-strict-broad.test.mjs",
+    "tests/self-approval-claude-word.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-produced-hash.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json"
+   ],
+   "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+  }
+ ]
+}

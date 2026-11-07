@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omode12",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "One test fails after the review fixes: tests/handbuild-guard.test.mjs 'the guard hook as a process: ... junk fails open, off switches it off' (line about 173). The third Opus review required that unparsable or non-object hook input is NOT let through inside a swarm project (it must deny with the guard error reason), so the old expectation that junk input prints nothing is now wrong when the hook runs in a guarded project. Update that test: junk input in a guarded project (a .swarm directory at the project root) now yields the deny output with the guard error reason; keep a separate assertion that junk input with no project at all (no .swarm or .git root reachable from cwd and no CLAUDE_PROJECT_DIR) still prints nothing. Change only the test unless the code contradicts this rule.",
+   "context": [
+    "tools/handbuild-guard.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/handbuild-guard.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "tests listed in context cover the guard; the full suite runs before merge"
+  }
+ ]
+}

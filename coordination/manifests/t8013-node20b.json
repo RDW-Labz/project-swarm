@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8013-node20b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "timeoutMs": 1800000,
+      "outputs": [
+        "tests/board-card-ui.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/watch-assets/board.js"
+      ],
+      "prompt": "Diagnosed by the coordinator: in tests/board-card-ui.test.mjs, registerNavigatorHooks() calls test.before/test.after from INSIDE installBoardDom, which runs inside the first test, so restoreGlobalNavigator fires when that first test ends; later tests then see Node's real navigator (no clipboard) and the copy button shows 'Select it' (debug output: globalThis.navigator === window.navigator is false, button text after click 'Select it'). Fix: register the before/after hooks at MODULE TOP LEVEL (outside any test) so they wrap the whole file, and also call applyGlobalNavigatorStub() at the start of assertCopyButtonsCopyExactCommands as a belt-and-braces guard; keep restoring the original descriptor after the file. Change only this test file. Verify on this machine's Node 20: `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-card-ui.test.mjs` must report 0 failures, then `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-*.test.mjs`."
+    }
+  ]
+}

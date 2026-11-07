@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-gate-v2",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "merge-approval trust source; Opus review in train 5",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: declared outputs are readable and writable. Tests first.\n\nTrain 5, item 4: the merge gate must verify the review run's own record, not a JSON block typed into the PR. Reviews run on the mini, so `.swarm/runs/<runId>` does not exist on the MacBook; the review run's record travels with the branch and the MacBook verifies it from GitHub.\n\nRecord contract (coordination/review/<train>-review-run.json, committed on the PR branch as a metadata-only commit R whose PARENT is the reviewed code head H):\n{\n  \"train\": \"5\",\n  \"runId\": \"<swarm run id>\",\n  \"agent\": \"claude\",\n  \"model\": \"<actual model, must match /opus/i>\",\n  \"verdict\": \"pass\",\n  \"head\": \"<full 40-char H>\",\n  \"resultFile\": \"coordination/review/<train>-review.json\",\n  \"resultHash\": \"<sha256 hex of the resultFile bytes at R>\",\n  \"manifest\": \"coordination/manifests/review-<train>.json\",\n  \"at\": \"<ISO>\"\n}\nThe PR body carries only a hidden marker naming the record path, e.g. `<!-- swarm-review-run: coordination/review/train5-review-run.json -->`.\n\nGate v2 (tools/merge-guard.mjs), for release PRs only (semver title; make the title regex case-insensitive and trim leading whitespace, and also accept 'Release X.Y.Z'):\n1) Parse the PR body fence-aware: when extracting the `## Reviews` section and the `<!-- swarm-review-run: PATH -->` marker, ignore headings/markers inside fenced code blocks (``` and ~~~, any length, indented fences). A fenced `## ` line must not end the section.\n2) The marker path must be a safe repo-relative path under coordination/review/ ending in -review-run.json; refuse otherwise.\n3) Via the existing gh exec, fetch from GitHub at the PR head: the record file contents (`repos/<repo>/contents/<path>?ref=<head>`), the head commit's parents (`repos/<repo>/commits/<head>`), and the compare R^...R files (`repos/<repo>/compare/<parent>...<head>`). Decode base64 contents. Refuse on any fetch/parse failure (fail closed).\n4) Verify: R has exactly one parent H; compare files are ONLY the record file and the record.resultFile (no code changes in R); record.head is a full 40-char SHA equal to H; record.verdict exactly 'pass'; record.agent exactly 'claude'; record.model matches /opus/i; record.runId is a non-empty string; record.resultFile equals the compare's other file and is a safe coordination/review path; the resultFile bytes at head hash to record.resultHash (sha256 hex, case-insensitive); the resultFile JSON parses with verdict exactly 'pass' and its `head` (if present) equals H. If a local `.swarm/runs/<runId>/state.json` exists, additionally cross-check the run status is complete and its job agent/model; if it does not exist (mini), the committed record is the trust source.\n5) Refuse with distinct reasons: marker-missing, record-missing, record-malformed, record-not-metadata-commit, record-head-mismatch, record-verdict-not-pass, record-model-not-opus, record-result-hash-mismatch, record-result-verdict, record-run-invalid. Keep the refusal before any `gh pr merge` call. Non-release PRs unaffected.\n6) Keep the existing merge mechanics; remove the old free JSON verdict block parsing as the trust source.\n\nTests (tests/merge-guard.test.mjs): replace the JSON-block gate tests with fake gh routes for contents/commits/compare. Cases: valid record -> merged; marker missing -> refuse; record missing/malformed -> refuse; record commit touching code -> refuse; record head != parent -> refuse; verdict fail -> refuse; model not opus -> refuse; result hash mismatch -> refuse; result verdict fail -> refuse; a typed JSON verdict block without a record marker -> refuse; non-release PR -> merged; fence-aware: a fenced `## ` line does not hide the marker/section; CRLF and ~~~ fences parse; uppercase head accepted; short head refused; null body refuses; the gate refuses before any gh pr merge call. Keep the mechanical runMerge tests (non-release fixtures) green.\nVerify: node --import ./tests/_isolate-config.mjs --test tests/merge-guard.test.mjs tests/guard-backup-fixes.test.mjs tests/guard-backup-fixes4.test.mjs tests/state-guard.test.mjs -> all pass. Report counts.",
+      "context": [
+        "tools/merge-guard.mjs",
+        "tests/merge-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/merge-guard.mjs",
+        "tests/merge-guard.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/fix-1167-12.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/guard-backup-fixes.test.mjs",
+        "tests/guard-backup-fixes4.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/state-guard.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused merge-guard and merge fixture tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t5-gate-v2",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/merge-guard.test.mjs",
+        "tests/guard-backup-fixes.test.mjs",
+        "tests/guard-backup-fixes4.test.mjs",
+        "tests/state-guard.test.mjs"
+      ]
+    }
+  ]
+}

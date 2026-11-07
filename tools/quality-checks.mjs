@@ -1,5 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import fs from 'node:fs';
+import path from 'node:path';
+
+/** Same package-manager detection as scope-commands `packageManagerOf` / `qualityFor`. */
+export function packageManagerOfProfile(profile) {
+  return (profile?.stack ?? []).find((entry) => entry?.name === 'node')?.packageManager ?? null;
+}
+
+/** Argvs from deriveQualityChecks for a project root and profile (sync counterpart of scope-commands qualityFor). */
+export function qualityCheckArgvsForProject(root, profile = {}) {
+  let pkg = null;
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  } catch {
+    /* no package.json */
+  }
+  const hasTsconfig = fs.existsSync(path.join(root, 'tsconfig.json'));
+  const manager = packageManagerOfProfile(profile) ?? 'npm';
+  return deriveQualityChecks({
+    pkg,
+    hasTsconfig,
+    manager,
+    config: profile?.quality ?? {},
+  }).map((check) => [...check.argv]);
+}
+
 export function deriveQualityChecks({ pkg, hasTsconfig, manager = 'npm', config = {} } = {}) {
   const scripts = (pkg && pkg.scripts) || {};
   const cfg = config || {};

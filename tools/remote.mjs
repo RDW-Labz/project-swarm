@@ -32,6 +32,8 @@ export const REMOTE_USAGE = [
 ].join('\n');
 
 export const remoteFile = (env = process.env, home = os.homedir()) => env.SWARM_REMOTE_FILE || path.join(home, '.project-swarm', 'remote.json');
+import { remoteServerFile, tokenizePsArgs } from './server-restart.mjs';
+export { remoteServerFile };
 const logFile = (env, home) => path.join(path.dirname(remoteFile(env, home)), 'remote.log');
 
 export async function readRemote(env = process.env) {
@@ -86,7 +88,7 @@ export function realDeps(env = process.env) {
   const execp = (file, args, opts) => new Promise(resolve => execFile(file, args, { timeout: 30000, maxBuffer: 4 * 1024 * 1024, env, ...opts }, (error, stdout, stderr) => resolve({ ok: !error, stdout: String(stdout ?? ''), stderr: String(stderr ?? error?.message ?? '') })));
   const find = async () => {
     if (env.SWARM_TAILSCALE_BIN) return env.SWARM_TAILSCALE_BIN;
-    for (const dir of String(env.PATH ?? '').split(path.delimiter)) { if (!dir) continue; const p = path.join(dir, 'tailscale'); try { await fs.access(p, 1); return p; } catch { /* next */ } }
+    for (const dir of String(env.PATH ?? '').split(path.delimiter)) { if (!dir) continue; const p = path.join(dir, 'tailscale'); try { await fs.access(p, 1); return p; } catch (error) { if (error?.code !== 'ENOENT' && error?.code !== 'EACCES' && error?.code !== 'ENOTDIR') console.error('[tools/remote.mjs] find tailscale PATH probe:', error?.message ?? error); /* next */ } }
     try { await fs.access(MAC_APP_CLI, 1); return MAC_APP_CLI; } catch { return null; }
   };
   let bin;
@@ -116,25 +118,91 @@ export function realDeps(env = process.env) {
       req.end();
     }),
     // The board's tailnet address, fetched the way the phone would: HTTPS to the tailnet name.
-    reach: async (url) => { try { const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(8000) }); return { status: res.status, body: res.status === 200 ? await res.text() : '' }; } catch (error) { return { status: 0, body: '', error: String(error?.cause?.code ?? error?.message ?? error) }; } },
+    reach: async (url, { headers = {} } = {}) => { try { const res = await fetch(url, { redirect: 'manual', headers, signal: AbortSignal.timeout(8000) }); return { status: res.status, body: res.status === 200 ? await res.text() : '' }; } catch (error) { return { status: 0, body: '', error: String(error?.cause?.code ?? error?.message ?? error) }; } },
     resolve: async name => { try { return (await dns.lookup(name, { all: true })).map(a => a.address); } catch { return []; } },
     sleep: ms => new Promise(r => setTimeout(r, ms)),
     now: Date.now,
   };
 }
 
+// Production CLI deps: dead-pid checks and real listener lookup (optional in injected test deps).
+export function completeRealDeps(env = process.env) {
+  const deps = realDeps(env);
+  const execp = (file, args, opts) => new Promise(resolve => execFile(file, args, { timeout: 30000, maxBuffer: 4 * 1024 * 1024, env, ...opts }, (error, stdout, stderr) => resolve({ ok: !error, stdout: String(stdout ?? ''), stderr: String(stderr ?? error?.message ?? '') })));
+  deps.alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
+  deps.listenerPids = async port => {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return [];
+    try {
+      const res = await execp('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { timeout: 2000 });
+      if (!res.ok) return null;
+      return res.stdout.trim().split('\n').filter(Boolean).map(n => Number(n)).filter(n => validStopPid(n));
+    } catch {
+      return null;
+    }
+  };
+  deps.commandOf = async pid => {
+    try {
+      const res = await execp('/bin/ps', ['-o', 'command=', '-p', String(pid)], { timeout: 3000 });
+      return res.ok ? res.stdout.trim() : '';
+    } catch {
+      return '';
+    }
+  };
+  return deps;
+}
+
 const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
 const boardUrl = (state, withToken = true) => `https://${state.dns}:${state.httpsPort}/${withToken ? `?t=${state.token}` : ''}`;
-const localUrl = (state, pathname = '/api/board') => `http://127.0.0.1:${state.port}${pathname}?t=${state.token}`;
+const localUrl = (state, pathname = '/api/board') => `http://127.0.0.1:${state.port}${pathname}`;
 
 async function boardUp(deps, state) {
-  const res = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}`, headers: { 'Tailscale-User-Login': state.login } });
+  const res = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}`, headers: { 'Tailscale-User-Login': state.login, 'x-watch-token': state.token } });
   if (res.status !== 200) return false;
   try { const b = JSON.parse(res.body); return Array.isArray(b.projects); } catch { return false; }
 }
 async function waitForBoard(deps, state, tries = 40) {
   for (let i = 0; i < tries; i += 1) { if (await boardUp(deps, state)) return true; await deps.sleep(250); }
   return false;
+}
+
+export function validStopPid(pid) {
+  return Number.isInteger(pid) && pid > 1 && pid !== process.pid && pid !== process.ppid;
+}
+
+function pidAlive(deps, pid) {
+  if (!validStopPid(pid)) return false;
+  if (deps.alive) return deps.alive(pid);
+  try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
+}
+
+function isNodeLikeBinary(token) {
+  const t = String(token ?? '');
+  if (!t) return false;
+  if (t === process.execPath) return true;
+  const base = t.split(/[/\\]/).pop();
+  return base === 'node' || base === 'nodejs';
+}
+
+export function isSwarmWatchBoardCommand(command) {
+  const tokens = tokenizePsArgs(String(command ?? ''));
+  const swarmIdx = tokens.findIndex(t => t === 'swarm.mjs' || t.endsWith('/swarm.mjs') || t.endsWith('\\swarm.mjs'));
+  if (swarmIdx < 1 || !isNodeLikeBinary(tokens[swarmIdx - 1])) return false;
+  let i = swarmIdx + 1;
+  if (i < tokens.length && tokens[i] === '--root') {
+    i += 2;
+    if (i > tokens.length) return false;
+  }
+  if (i >= tokens.length) return false;
+  if (tokens[i] === 'watch') return true;
+  if (tokens[i] === 'remote' && i + 1 < tokens.length && tokens[i + 1] === 'serve') return true;
+  return false;
+}
+
+async function listenerOnPort(deps, port) {
+  if (!deps.listenerPids) return { ok: false };
+  const pids = await deps.listenerPids(port);
+  if (pids === null) return { ok: false };
+  return { ok: true, pids };
 }
 
 // Take everything down: the serve entry (only one that points at one of our ports), the board process, the token file. `clean` is false when the Tailscale entry could not be
@@ -157,14 +225,95 @@ async function takeDown(deps, state, { force = false } = {}) {
       else { clean = false; lines.push(`could not remove the Tailscale entry for ${key} (${(res.stderr || 'it is still there').trim().split('\n')[0]}); run: tailscale serve --https=${state.httpsPort} off`); }
     }
   }
-  if (state?.pid) {
+  const recordedPid = validStopPid(state?.pid) ? state.pid : null;
+  if (recordedPid) {
     const answers = state.port ? await boardUp(deps, state) : false;
-    if (answers || force) {
-      const killed = deps.kill(state.pid);
-      await deps.sleep(300);
-      if (!killed || (state.port && await boardUp(deps, state))) { clean = false; lines.push(`could not stop the board (process ${state.pid}); stop it by hand`); }
-      else lines.push('stopped the board');
-    } else lines.push('the board was not running');
+    const recordedAlive = pidAlive(deps, recordedPid);
+    if (!answers && !force) {
+      if (!recordedAlive) {
+        const stillUp = state.port ? await boardUp(deps, state) : false;
+        if (stillUp) {
+          clean = false;
+          lines.push('the board is still answering on the saved port; kept the saved settings');
+        } else lines.push(`the recorded board process ${recordedPid} was already gone`);
+      } else lines.push('the board was not running');
+    } else {
+      let stopPid = recordedPid;
+      let skipStop = false;
+      let verifiedCommand = null;
+      const keepSettings = (message) => {
+        clean = false;
+        lines.push(message);
+        skipStop = true;
+      };
+      if (state.port && answers && deps.listenerPids && deps.commandOf) {
+        const listen = await listenerOnPort(deps, state.port);
+        if (!listen.ok) {
+          if (!recordedAlive) keepSettings(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
+        } else if (listen.pids.length > 1) {
+          keepSettings(`port ${state.port} has multiple listeners (pids ${listen.pids.join(', ')}); not stopping anything`);
+        } else {
+          const listenerPid = listen.pids[0] ?? null;
+          const portHolderDiffers = listenerPid !== null && listenerPid !== recordedPid;
+          if (recordedAlive && portHolderDiffers) {
+            const listenerCmd = listenerPid ? await deps.commandOf(listenerPid) : '';
+            if (!listenerCmd) {
+              keepSettings(`port ${state.port} is held by process ${listenerPid} but its command line could not be read; not stopping the recorded process ${recordedPid}`);
+            } else if (!isSwarmWatchBoardCommand(listenerCmd)) {
+              keepSettings(`port ${state.port} is held by another program (process ${listenerPid}); not touching it`);
+            } else if (await boardUp(deps, state)) stopPid = listenerPid;
+          } else if (!recordedAlive) {
+            if (!listenerPid) {
+              keepSettings(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
+            } else {
+              const listenerCmd = await deps.commandOf(listenerPid);
+              if (!listenerCmd) {
+                keepSettings(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
+              } else if (!isSwarmWatchBoardCommand(listenerCmd) || !(await boardUp(deps, state))) {
+                keepSettings(`port ${state.port} is held by another program (process ${listenerPid}); not touching it`);
+              } else stopPid = listenerPid;
+            }
+          }
+        }
+      }
+      if (!skipStop && deps.commandOf) {
+        const cmd = await deps.commandOf(stopPid);
+        if (!cmd || !isSwarmWatchBoardCommand(cmd)) {
+          keepSettings(`process ${stopPid} is not a swarm board (${cmd ? 'unexpected command line' : 'command line unavailable'}); not stopping it`);
+        } else verifiedCommand = cmd;
+      }
+      if (!skipStop) {
+        const tryStop = async () => {
+          if (!validStopPid(stopPid)) {
+            clean = false;
+            lines.push(`could not stop the board (invalid process id ${stopPid}); stop it by hand`);
+            return;
+          }
+          if (deps.commandOf && verifiedCommand !== null) {
+            const again = await deps.commandOf(stopPid);
+            if (again !== verifiedCommand) {
+              clean = false;
+              lines.push(`process ${stopPid} changed before it could be stopped; kept the saved settings`);
+              return;
+            }
+          }
+          const killed = validStopPid(stopPid) ? deps.kill(stopPid) : false;
+          await deps.sleep(300);
+          if (!killed || (state.port && await boardUp(deps, state))) {
+            clean = false;
+            lines.push(`could not stop the board (process ${stopPid}); stop it by hand`);
+          } else lines.push('stopped the board');
+        };
+        if (!pidAlive(deps, stopPid) && !force) {
+          const stillUp = state.port ? await boardUp(deps, state) : false;
+          if (stillUp) {
+            clean = false;
+            lines.push('the board is still answering on the saved port; kept the saved settings');
+          } else if (stopPid === recordedPid) lines.push(`the recorded board process ${recordedPid} was already gone`);
+          else lines.push(`the board process ${stopPid} was already gone`);
+        } else await tryStop();
+      }
+    }
   } else lines.push('the board was not running');
   if (clean) { await fs.rm(remoteFile(deps.env), { force: true }); lines.push('deleted the board token'); }
   else lines.push('kept the saved settings so swarm remote off can be run again');
@@ -180,11 +329,11 @@ async function selfCheck(deps, state) {
   const publicIps = ips.filter(ip => !isTailnetAddress(ip));
   checks.push({ name: `${state.dns} resolves to tailnet addresses on this computer (${ips.join(', ') || 'no answer'})`, ok: ips.length > 0 && publicIps.length === 0, exposed: publicIps.length > 0 });
   if (publicIps.length) return checks;   // decided before any token is sent
-  const noLogin = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}` });
+  const noLogin = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}`, headers: { 'x-watch-token': state.token } });
   checks.push({ name: 'a request without your Tailscale login is refused, even with the token and a loopback Host (403)', ok: noLogin.status === 403 });
-  const good = await deps.reach(`${base}/api/board?t=${state.token}`);
+  const good = await deps.reach(`${base}/api/board`, { headers: { 'x-watch-token': state.token } });
   checks.push({ name: `the board answers over the tailnet at ${base}`, ok: good.status === 200 });
-  const bad = await deps.reach(`${base}/api/board?t=wrong`);
+  const bad = await deps.reach(`${base}/api/board`, { headers: { 'x-watch-token': 'wrong' } });
   checks.push({ name: 'a wrong token is refused (403)', ok: bad.status === 403 });
   return checks;
 }
@@ -348,7 +497,7 @@ export async function serveRemote(env = process.env) {
   return 0;
 }
 
-export async function runRemoteCommand(args, { deps = realDeps(), tty = Boolean(process.stdout.isTTY) } = {}) {
+export async function runRemoteCommand(args, { deps = completeRealDeps(), tty = Boolean(process.stdout.isTTY) } = {}) {
   const [sub, ...rest] = args;
   if (rest.length) return out(REMOTE_USAGE, 2);
   if (sub === 'on') return remoteOn(deps, { tty });

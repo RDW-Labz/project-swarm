@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t6-perf-script",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Add tools/watch-perf.mjs to the repo: the Command Center performance harness used to produce the train 6 before/after numbers, so the mini can run it after updating. It must be dependency-free except the repo's playwright devDependency (import { chromium } from 'playwright').\n\nUsage: `node tools/watch-perf.mjs URL [--out FILE] [--profile desktop|phone] [--server-pid PID] [--idle SECONDS] [--wait-ms MS]`.\n\nBehavior: open the URL with Chromium (headless), desktop 1440x900 or phone 390x844 with a 1.6 Mbps/100 ms 4G throttle for phone; wait for [data-project-id]; measure time-to-usable (navigation start to the selector plus two rAFs); click the first project node and measure Hive->Cockpit (to .cc-cockpit-shell plus two rAFs); navigate/back to Hive and measure; capture encoded bytes per request grouped (total/api/html/js/css/fonts) for each segment; capture Cache-Control for js/css/fonts; sleep --idle seconds (default 45) and measure page CPU from CDP Performance TaskDuration delta and server CPU from `ps -o time= -p PID` cumulative CPU delta (if --server-pid given); count API requests and bytes during idle; collect page console errors; write the JSON to --out (default stdout) and print a short human summary. Exit 1 on navigation/timeout errors. No browser dependency beyond playwright; do not hard-code the machine's token or paths; accept the full URL with ?t=.\n\nAlso add a `perf:cc` npm script in package.json: `node tools/watch-perf.mjs`.\n\nVerify: node --check tools/watch-perf.mjs; node --import ./tests/_isolate-config.mjs --test tests/command-center-perf-budget.test.mjs tests/command-center-boot.test.mjs -> all pass. Do not run the harness against a live server in the job (no browser in the worker). Report the file/usage and counts.",
+      "context": ["package.json"],
+      "outputs": ["tools/watch-perf.mjs", "package.json"],
+      "timeoutMs": 1800000
+    }
+  ],
+  "checks": [ { "name": "t6-perf-script", "argv": ["node", "--check", "tools/watch-perf.mjs"] } ]
+}

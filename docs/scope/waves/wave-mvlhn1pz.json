@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "concurrency": 30,
+  "jobs": [
+    {
+      "id": "T-0227",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Ticket T-0227: Define SQLite events table DDL and event row shape for the per-machine event store\nR-040 The event store answers the board.\n  - One SQLite `events` table per machine; importers load existing ndjson and markdown; new events dual-publish until `event_store=primary` (flag off by default).\n  - `swarm board` and Swarm Watch % done, open tickets, and spend today match today's file-based numbers on project-swarm within 1 ticket and $0.01 spend.\n  - On Node 20, `event_store` stays off and event-store tests skip with a logged reason citing missing `node:sqlite` (requires Node 22.13+).\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Creating the store on Node 22.13+ makes one events table per machine file\n- AC2: On Node 20 the store reports event_store off with a logged reason citing missing node:sqlite\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- Every build ticket must pass the project typecheck and lint (and build when cheap) before it is done; a failure goes back to the worker with the errors. [lint, quality-gate, tests-not-run, typecheck]\n- Keep a worker's own failure reason next to the job record, and never let a later generic message stand in for a blocked envelope. [build, redaction, secrets, worker-output]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/event-store-schema.mjs"
+      ],
+      "acceptance": [
+        "Creating the store on Node 22.13+ makes one events table per machine file",
+        "On Node 20 the store reports event_store off with a logged reason citing missing node:sqlite"
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}

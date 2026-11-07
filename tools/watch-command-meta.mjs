@@ -1,18 +1,47 @@
 // SPDX-License-Identifier: Apache-2.0
 
+/** Meta for `swarm scope` subcommands (paired with SCOPE_SUBCOMMANDS in scope-commands.mjs). */
+export const SCOPE_SUBCOMMAND_META = {
+  gate: {
+    what: 'Lists ticket-manager scope gate findings or chains duplicate file owners with dependsOn.',
+    when: 'When scope approve warns about the ticket-manager gate and you need the full finding list.',
+    example: 'swarm scope gate --list',
+    cost: 'local',
+    approval: false,
+  },
+};
+
+export const TUNNEL_USAGE = `Usage: swarm tunnel add NAME --host user@host --key PATH --local-port N --remote-port M [--remote-host 127.0.0.1]
+       swarm tunnel status [NAME]
+       swarm tunnel remove NAME
+  add     Install a launchd SSH tunnel (KeepAlive, auto-reconnect) for a local lane endpoint.
+  status  launchd state, pid, local port probe, log tail, and GET /v1/models for matching endpoints.
+  remove  bootout and delete the LaunchAgent plist only.
+macOS only. Keys stay on disk as paths; nothing secret is written into the plist.
+`;
+
+export const FORGET_USAGE = `Usage: swarm forget PATH... [--dry-run] [--missing] [--scratch] [--yes]
+       --dry-run  List what would be forgotten without changing the registry.
+       --missing  Forget every registered project whose folder no longer exists.
+       --scratch  Forget every registered scratch or test checkout.
+       --yes      Confirm bulk --missing or --scratch when more than three match.
+registry only: no project files were touched
+`;
+
 export const COMMAND_META = {
   doctor: { what: 'Checks that each model provider is set up and answering.', when: 'Before a first run, or when a provider starts failing.', example: 'swarm doctor claude --probe-local', cost: 'local', approval: false },
   validate: { what: 'Checks a job manifest for missing fields and bad values.', when: 'After writing or editing a manifest, before running it.', example: 'swarm validate jobs/fix-login.json --evidence', cost: 'free', approval: false },
   preflight: { what: 'Dry-checks a manifest and reports cost and risks before any run.', when: 'Right before running a manifest you have not run yet.', example: 'swarm preflight jobs/fix-login.json', cost: 'local', approval: false },
   board: { what: 'Shows the active project runs in one table.', when: 'When you want to see what is running right now.', example: 'swarm board', cost: 'free', approval: false },
   orphans: { what: 'Lists scratch directories that have no run state behind them.', when: 'When disk use grows or after a crashed run.', example: 'swarm orphans', cost: 'free', approval: false },
+  gc: { what: 'Dry-run or remove finished run worktrees, orphan dirs, and old run folders.', when: 'When disk use grows or after many swarm runs.', example: 'swarm gc --older-than 7', cost: 'free', approval: false },
   run: { what: 'Runs a job manifest, starting the model jobs it lists.', when: 'When a validated manifest is ready and you accept the cost.', example: 'swarm run jobs/fix-login.json --jobs 4 --evidence', cost: 'spends', approval: true },
   status: { what: 'Shows the status of one run: jobs done, running and failed.', when: 'To check progress on a run you started.', example: 'swarm status 20250311-login', cost: 'free', approval: false },
   monitor: { what: 'Follows a run live in the terminal or the monitor view.', when: 'While a run is in progress and you want live updates.', example: 'swarm monitor 20250311-login --view', cost: 'free', approval: false },
   wait: { what: 'Blocks until a run finishes, then exits with its result.', when: 'In a script that needs to wait for a run before the next step.', example: 'swarm wait 20250311-login --timeout 3600', cost: 'free', approval: false },
   inspect: { what: 'Shows full details for one run, including each job and its result.', when: 'When a run finished with failures and you need the details.', example: 'swarm inspect 20250311-login --results', cost: 'free', approval: false },
   rollup: { what: 'Summarizes the results of a run in a short report.', when: 'After a run ends, to see what landed and what did not.', example: 'swarm rollup 20250311-login --text --top 5', cost: 'free', approval: false },
-  integrate: { what: 'Merges completed job outputs into the working branch, with checks.', when: 'After a run completes and you are ready to land its changes.', example: 'swarm integrate 20250311-login --queue', cost: 'local', approval: true },
+  integrate: { what: 'Merges completed job outputs into the working branch, with checks; on swarm/* branches it commits verified output (pass --no-commit to leave the tree dirty).', when: 'After a run completes and you are ready to land its changes.', example: 'swarm integrate 20250311-login --queue', cost: 'local', approval: true },
   mutants: { what: 'Runs mutation checks to see whether the tests catch planted bugs.', when: 'When you want proof that the tests would catch a real regression.', example: 'swarm mutants --mutants-file mutants.json --dry-run', cost: 'local', approval: false },
   env: { what: 'Shows the swarm environment: paths, versions and settings.', when: 'When something behaves differently on one machine.', example: 'swarm env --print', cost: 'free', approval: false },
   redcheck: { what: 'Checks whether a failing test also fails on a baseline commit.', when: 'When a test is red and you need to know if it was already broken.', example: 'swarm redcheck 20250311-login --base main --test test/login.test.js', cost: 'local', approval: false },
@@ -24,6 +53,7 @@ export const COMMAND_META = {
   brain: { what: 'Shows local brain status, stats or runs a test call.', when: 'To check the local brain is up or see how it has been used.', example: 'swarm brain --markdown', cost: 'local', approval: false },
   budget: { what: 'Sets or shows the project daily spend limit and ceiling.', when: 'When you need to raise or inspect the billed daily cap before more paid runs.', example: 'swarm budget show', cost: 'local', approval: false },
   gpu: { what: 'Manages a rented GPU session: models, up, down, status and bake-off. Never rents by itself.', when: 'When you want to run a local model on rented hardware.', example: 'swarm gpu up --target lambda --model qwen-32b --hourly-usd 1.2 --max-usd 20 --yes', cost: 'spends', approval: true },
+  tunnel: { what: 'Managed SSH tunnels for local lane endpoints (launchd, auto-reconnect).', when: 'When dev2 or another remote inference host must stay reachable without a manual ssh -N.', example: 'swarm tunnel add dev2 --host user@dev2 --key ~/.ssh/swarm --local-port 18001 --remote-port 8000', cost: 'local', approval: false },
   init: { what: 'Sets up a project: profile, base check and repo map.', when: 'Once, when you first point the swarm at a project.', example: 'swarm init --check --json', cost: 'local', approval: false },
   map: { what: 'Builds or refreshes the repo map the agents read.', when: 'After large changes to the code so agents see the new layout.', example: 'swarm map --json', cost: 'local', approval: false },
   scale: { what: 'Runs stub jobs to measure how many jobs the machine handles.', when: 'When you are sizing concurrency for a new machine.', example: 'swarm scale --jobs 50 --concurrency 8', cost: 'local', approval: false },
@@ -37,7 +67,9 @@ export const COMMAND_META = {
   'check-pins': { what: 'Checks that pinned project dependencies are current and safe.', when: 'Before a release, or when a dependency update is due.', example: 'swarm check-pins --root . --json', cost: 'local', approval: false },
   sweep: { what: 'Scans a list of goals for prior art, using a model, within a budget.', when: 'When you want to know if other projects already solved your goals.', example: 'swarm sweep --goals goals.txt --max-usd 5 --top 3', cost: 'spends', approval: true },
   version: { what: 'Shows the installed swarm version.', when: 'When you report a bug or check for updates.', example: 'swarm version --check', cost: 'free', approval: false },
-  update: { what: 'Updates the shared swarm installation and optionally the projects.', when: 'When a new release is out and you want it installed.', example: 'swarm update --projects --yes', cost: 'local', approval: false },
+  update: { what: 'Updates the shared swarm installation and optionally the projects; --when-idle waits for a wave gap instead of refusing.', when: 'When a new release is out and you want it installed.', example: 'swarm update --when-idle', cost: 'local', approval: false },
+  pin: { what: 'Pins a registered project to a specific swarm release (or lists pins).', when: 'When one project must stay on an older swarm while the install updates.', example: 'swarm pin marketing 1.47.0', cost: 'local', approval: false },
+  unpin: { what: 'Removes the version pin so the next update can bump the project pointer.', when: 'When a pinned project is ready to track the shared install again.', example: 'swarm unpin marketing', cost: 'local', approval: false },
   squash: { what: 'Squashes the commits of a branch into one.', when: 'Before opening a PR, to keep history clean.', example: 'swarm squash --branch feature/login --base main', cost: 'local', approval: false },
   'clean-branch': { what: 'Removes unwanted changes from a branch.', when: 'When a branch picked up files that should not be in the PR.', example: 'swarm clean-branch --from main --exclude secrets.env', cost: 'local', approval: false },
   scope: { what: 'Manages the scope file: writes a template, checks it, splits it into tickets, syncs.', when: 'When a project starts or the scope changes.', example: 'swarm scope --check docs/scope.md', cost: 'local', approval: false },
@@ -66,6 +98,7 @@ export const COMMAND_META = {
   backlog: { what: 'Queues goals to start when a run is waiting on quota or review.', when: 'When you have goals lined up and nothing is running.', example: 'swarm backlog --paths goals/ --max-usd 10', cost: 'spends', approval: true },
   autopilot: { what: 'Drives the project forward with no model, one step at a time.', when: 'When you want routine steps done while you are away.', example: 'swarm autopilot --once --max-steps 3', cost: 'local', approval: false },
   completion: { what: 'Prints the zsh completion script.', when: 'Once, when you install shell completion.', example: 'swarm completion > ~/.zfunc/_swarm', cost: 'free', approval: false },
+  forget: { what: 'Removes projects from the machine registry only; folders and pointers are untouched.', when: 'When the board lists idle scratch or gone checkouts you no longer want tracked.', example: 'swarm forget --scratch --yes', cost: 'free', approval: false },
   help: { what: 'Shows command usage.', when: 'When you forget a command or flag.', example: 'swarm help ship', cost: 'free', approval: false }
 };
 
@@ -119,6 +152,7 @@ export function contextCommands(snapshot, plan) {
   }
   if (plan && plan.present) {
     out.push({ label: 'List tickets', command: 'swarm tickets' });
+    out.push({ label: 'List scope gate findings', command: 'swarm scope gate --list' });
     if (runId) {
       out.push({ label: 'Sync scope after integration', command: `swarm scope sync ${runId} --integrated` });
     }

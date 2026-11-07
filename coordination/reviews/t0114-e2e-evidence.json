@@ -1,0 +1,9 @@
+{
+  "failures": [
+    {
+      "test": "production remote board lists inbox decisions through ownerItemsFromBoardInbox and enforces board-safe rules",
+      "file": "tests/board-owner-routes.test.mjs",
+      "output": "not ok 12 - production remote board lists inbox decisions through ownerItemsFromBoardInbox and enforces board-safe rules\n  ---\n  duration_ms: 218.208708\n  location: '/private/tmp/claude-501/-Users-prime-Documents-repos-projects-project-swarm-1/9f988fe4-8451-4ec8-b97f-f2a94b672954/scratchpad/sor/tests/board-owner-routes.test.mjs:466:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    prepare safe-accent\n    \n    404 !== 200\n    \n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: 200\n  actual: 404\n  operator: 'strictEqual'\n  stack: |-\n    approveItem (file:///private/tmp/claude-501/-Users-prime-Documents-repos-projects-project-swarm-1/9f988fe4-8451-4ec8-b97f-f2a94b672954/scratchpad/sor/tests/board-owner-routes.test.mjs:518:12)\n    process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    async TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-prime-Documents-repos-projects-project-swarm-1/9f988fe4-8451-4ec8-b97f-f2a94b672954/scratchpad/sor/tests/board-owner-routes.test.mjs:534:3)\n    async Test.run (node:internal/test_runner/test:797:9)\n    async Test.processPendingSubtests (node:internal/test_runner/test:526:7)\n  ...\n"
+    }
+  ]
+}

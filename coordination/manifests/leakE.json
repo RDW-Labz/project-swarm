@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "leakE",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/swarm/core-41.mjs",
+    "tests/cursor-process-group.test.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tests/cursor-process-group.test.mjs",
+    "tests/server-restart.test.mjs"
+   ],
+   "prompt": "Fix two review findings. 1 MEDIUM tools/swarm/core-41.mjs waitForChildClose returns { error: null } at once whenever child.exitCode != null, but on the real path the leader has always exited by the time the group kill finishes, so the timeout error never fires and a descendant that escaped into its own session and still holds stdio keeps the job hanging: base the check on the CLOSE event, not on exit: set a closed flag in execute's close listener (and pass the flag or a promise to waitForChildClose), wait up to 500 ms for close, and when close has not happened return the timeout error indicator so finish destroys the streams and resolves. Add a test in tests/cursor-process-group.test.mjs with a fake child that sets exitCode, emits exit but NEVER emits close: finish must destroy the streams and the job must resolve (no hang); and a test where close arrives in time and the streams are not destroyed. 2 LOW tests/server-restart.test.mjs: the fake server's parent-gone check (ppid becomes 1) makes a restarted detached server shut itself down about a second after its parent exits, which can make slow health fetches in the restart tests flaky: enable the parent check only when the env var TEST_PARENT_POLL_MS is set (default off); keep the 120 second lifetime and the sentinel file; only the parent-gone test sets the variable. Keep every existing test passing (tests/cursor*.test.mjs, tests/server-restart*.test.mjs, tests/lanes*.test.mjs).",
+   "ignoreTests": [
+    "tests/helpers/swarm-source.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ]
+  }
+ ]
+}

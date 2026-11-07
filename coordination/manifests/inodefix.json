@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "inodefix",
+   "agent": "auto",
+   "tier": "cheap",
+   "prompt": "main is red on CI: tests/auto-approve.test.mjs 'post-write verification engages kill switch when inode changes' (about line 672) fails on Linux runners because the test replaces the file with fs.rm followed by fs.writeFile, and Linux filesystems often reuse the freed inode number, so the inode does not change and the verification correctly sees nothing wrong. Make the test deterministic: create the replacement under a temporary name in the same folder first (so the old inode is still allocated), then fs.rename it over the original path, and assert before the verification that the inode numbers differ (stat both, fail the test with a clear message if they are equal). Check the other tests in that file for the same rm-then-write pattern and fix them the same way. Test-only change; do not touch production code.",
+   "context": [
+    "tests/auto-approve.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/auto-approve.test.mjs"
+   ],
+   "timeoutMs": 900000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "single test file edit"
+  }
+ ]
+}

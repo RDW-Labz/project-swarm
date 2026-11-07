@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-stress-ctrlc",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Train 5, item 1b: tools/stress-tests.mjs must stop the current round on Ctrl-C.\n\nToday each round runs in a detached process group and only the TIMEOUT path kills the group. Add SIGINT and SIGTERM handling for the stress runner itself:\n- Track the active round child. On SIGINT/SIGTERM, kill the current round's process group (process.kill(-child.pid, 'SIGKILL'), fallback child.kill('SIGKILL')), print a clear line like 'stress round <i>/<N>: interrupted by <SIGINT|SIGTERM>; killed the round process group', and exit 130 for SIGINT / 143 for SIGTERM (after the kill, no waiting on the child).\n- If no round is active, exit with the same code immediately.\n- Keep the timeout path, fail-fast, tails, round lines and env overrides unchanged. Clear the tracked child when a round finishes.\n- For testing, allow an env override STRESS_TEST_COMMAND (a JSON array argv) to replace the default node --test command for a round; default stays exactly as today. This is test-only plumbing, do not use it in the normal path.\n- Add tests/stress-interrupt.test.mjs: spawn tools/stress-tests.mjs with STRESS_TEST_COMMAND set to a long sleep/hang (e.g. [\"node\",\"-e\",\"console.log(process.pid);setInterval(()=>{},1000)\"]) and STRESS_ROUNDS=1; wait until the fake round's pid is printed; send SIGINT; assert the runner exits 130 within a few seconds, prints the interrupted line, and the fake round pid (and its group) is dead. Add the same check for SIGTERM -> 143 if cheap. Then a normal STRESS_ROUNDS=1 STRESS_CONCURRENCY=4 npm run test:stress must still pass.\nVerify: node --import ./tests/_isolate-config.mjs --test tests/stress-interrupt.test.mjs; STRESS_ROUNDS=1 STRESS_CONCURRENCY=4 npm run test:stress. Report counts and any orphan check.",
+      "context": [
+        "tools/stress-tests.mjs"
+      ],
+      "outputs": [
+        "tools/stress-tests.mjs",
+        "tests/stress-interrupt.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; the focused stress interrupt test runs here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t5-stress-ctrlc",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/stress-interrupt.test.mjs"
+      ]
+    }
+  ]
+}

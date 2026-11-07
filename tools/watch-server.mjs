@@ -1,39 +1,357 @@
 // SPDX-License-Identifier: Apache-2.0
 import http from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import os from 'node:os';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { diffSnapshots, createThrottle } from './watch-delta.mjs';
+import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
 import { screenshotPath } from './watch-gallery.mjs';
+import { listProjects, projectsFile } from './projects.mjs';
+import { projectFamilyRoots, createBoardInputDetector } from './board-data.mjs';
+import { runDetail, RUN_ID } from './board-run.mjs';
+import { listPeers } from './board-peers.mjs';
+import { commandCenterEnabled } from './command-center-flag.mjs';
+import { buildCommandCenterSnapshot, buildProjectCockpit, patchCommandCenterSnapshot } from './command-center-snapshot.mjs';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.webp': 'image/webp',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
 };
 
 const SECURITY = {
   'Content-Security-Policy': `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
-  'Cache-Control': 'no-store',
+  'Cache-Control': 'no-cache',
+  Vary: 'Accept-Encoding',
 };
 
 const IDLE_FINISHED_MS = 10000;
+export const LIVE_FAMILY_WINDOW_MS = 10 * 60 * 1000;
+
+/** Bound the one-second detector; full snapshots still read the complete family. */
+export async function selectLiveFamilyRoots(root, {
+  env = process.env,
+  extraRoots = [],
+  now = Date.now,
+  windowMs = LIVE_FAMILY_WINDOW_MS,
+  familyRoots = null,
+} = {}) {
+  const roots = familyRoots ?? await projectFamilyRoots(root, { env, extraRoots });
+  const own = await realpath(root).catch(() => path.resolve(root));
+  const candidates = [...new Set([own, ...roots])];
+  const cutoff = now() - windowMs;
+  async function recent(file) {
+    try { return (await stat(file)).mtimeMs >= cutoff; }
+    catch { return false; }
+  }
+  const keep = await Promise.all(candidates.map(async member => {
+    if (member === own) return true;
+    const base = path.join(member, '.swarm');
+    const runs = path.join(base, 'runs');
+    const entries = await readdir(runs, { withFileTypes: true }).catch(() => []);
+    const newest = entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort().at(-1);
+    const files = [runs, path.join(base, 'project'), path.join(base, 'inbox'), path.join(base, 'orchestrator/events.ndjson')];
+    if (newest) files.push(path.join(runs, newest), path.join(runs, newest, 'state.json'));
+    return (await Promise.all(files.map(recent))).some(Boolean);
+  }));
+  return candidates.filter((_, index) => keep[index]);
+}
+
+export const WATCH_CORE_PATHS = Object.freeze(['/', '/api/snapshot', '/events']);
+
+export function watchBoardRoutePaths({ remote = false } = {}) {
+  return Object.freeze([
+    '/board',
+    '/api/board',
+    '/api/project',
+    '/api/live',
+    '/api/history',
+    '/history.csv',
+    ...(remote ? [] : ['/open/run']),
+    '/project',
+    '/run',
+    '/api/run',
+  ]);
+}
+
+export const WATCH_NAV_PATHS = Object.freeze(['/api/nav', '/nav/board', '/nav/project']);
+
+/** HTML pages that existed before Command Center; same URLs still serve the same assets (R-067). */
+export const WATCH_CLASSIC_PAGE_PATHS = Object.freeze(['/', '/project', '/run']);
+
+const COMMAND_CENTER_PROJECT = /^\/command-center\/project\/([^/]+)$/;
+
+export function watchCommandCenterRoutePaths() {
+  return Object.freeze(['/command-center']);
+}
+
+/** Command Center shell pages (Hive and Project Cockpit); not part of pre-upgrade WATCH_ROUTES. */
+export const WATCH_COMMAND_CENTER_PATHS = Object.freeze([
+  ...watchCommandCenterRoutePaths(),
+]);
+
+/**
+ * Parse a Command Center browser path. Project ids must be a single path segment (no slashes).
+ * @returns {{ view: 'hive' } | { view: 'project', projectId: string } | null}
+ */
+export function parseCommandCenterPath(pathname) {
+  if (pathname === '/command-center') return { view: 'hive' };
+  const match = COMMAND_CENTER_PROJECT.exec(pathname);
+  if (!match) return null;
+  const projectId = decodeURIComponent(match[1]);
+  if (!projectId || projectId.includes('/') || projectId.includes('\\') || projectId.includes('..')) return null;
+  return { view: 'project', projectId };
+}
+
+export function isWatchClassicPagePath(pathname) {
+  return WATCH_CLASSIC_PAGE_PATHS.includes(pathname);
+}
+
+/** Every GET path the board Watch server served before Command Center (non-remote, with nav). Built from the same arrays as the router. */
+export const WATCH_ROUTES = Object.freeze([
+  ...WATCH_CORE_PATHS,
+  ...watchBoardRoutePaths({ remote: false }),
+  ...WATCH_NAV_PATHS,
+]);
 const MAX_STREAMS = 8;
-const MAX_SLOW_WRITES = 2;
+export const MAX_STREAM_BUFFER_BYTES = 1024 * 1024;
+const MAX_STREAM_PAUSED_MS = 60000;
+const PEER_RUN_TIMEOUT_MS = 3000;
+const PEER_RUN_MAX_BYTES = 5 * 1024 * 1024;
+
+export function formatRunLocationMessage(location) {
+  const machine = location?.machine ?? 'another machine';
+  const pathPart = location?.path ? ` at ${location.path}` : '';
+  const boardPart = location?.boardUrl ? ` (board: ${location.boardUrl})` : '';
+  return `Run lives on ${machine}${pathPart}${boardPart}`;
+}
+
+async function readPeerRunBody(response) {
+  const text = typeof response?.text === 'function' ? await response.text() : '';
+  if (Buffer.byteLength(text, 'utf8') > PEER_RUN_MAX_BYTES) throw new Error('body-too-large');
+  return text;
+}
+
+export async function fetchPeerRunApi(peer, projectId, runId, compare, fetchImpl = globalThis.fetch) {
+  if (!peer || typeof peer.url !== 'string' || typeof peer.token !== 'string') return null;
+  const url = new URL('/api/run', peer.url);
+  url.searchParams.set('id', String(projectId ?? ''));
+  url.searchParams.set('run', String(runId ?? ''));
+  if (compare) url.searchParams.set('compare', String(compare));
+  const controller = new AbortController();
+  let timeout;
+  try {
+    const response = await Promise.race([
+      fetchImpl(url, { method: 'GET', headers: { 'x-watch-token': peer.token }, redirect: 'error', signal: controller.signal }),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error('timeout'));
+        }, PEER_RUN_TIMEOUT_MS);
+      }),
+    ]);
+    const status = Number(response?.status);
+    const text = await readPeerRunBody(response);
+    if (status === 404) {
+      try {
+        const body = JSON.parse(text);
+        if (body && typeof body === 'object' && body.runLocation) return { runLocation: body.runLocation, message: body.message };
+      } catch { /* plain not found */ }
+      return null;
+    }
+    if (!response?.ok || status >= 400) return null;
+    let detail;
+    try { detail = JSON.parse(text); } catch { return null; }
+    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null;
+    const loc = detail.runLocation && typeof detail.runLocation === 'object' ? detail.runLocation : null;
+    return {
+      detail,
+      machine: loc?.machine ?? null,
+      path: loc?.path ?? null,
+    };
+  } catch {
+    return null;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+export async function resolveBoardRun({
+  board,
+  projectId,
+  runId,
+  compare = null,
+  remote = false,
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const id = String(projectId ?? '');
+  const run = String(runId ?? '');
+  if (!RUN_ID.test(run)) return { ok: false };
+
+  const direct = await board.run(id, run, compare ? String(compare) : null);
+  if (direct) return { ok: true, detail: direct };
+
+  const projects = await listProjects({ file: projectsFile(env) }).catch(() => []);
+  const extraRoots = projects.map(p => p.root);
+  const project = projects.find(p => p.id === id) ?? null;
+
+  const locateOnRoot = async (row, root) => {
+    const found = await runDetail({ ...row, root }, run);
+    if (!found) return null;
+    const resolvedRoot = path.resolve(root);
+    const registered = projects.find(p => path.resolve(p.root) === resolvedRoot);
+    const location = {
+      machine: os.hostname(),
+      path: resolvedRoot,
+      local: true,
+      projectId: registered?.id ?? row.id,
+      alternateProjectId: registered && registered.id !== id ? registered.id : undefined,
+    };
+    return { detail: { ...found, runLocation: location }, location };
+  };
+
+  if (project && !compare) {
+    const family = await projectFamilyRoots(project.root, { env, extraRoots });
+    for (const root of family) {
+      if (path.resolve(root) === path.resolve(project.root)) continue;
+      const hit = await locateOnRoot(project, root);
+      if (hit) return { ok: true, ...hit };
+    }
+  }
+
+  let peers = [];
+  try { peers = await listPeers(env); } catch { peers = []; }
+  for (const peer of peers) {
+    const hit = await fetchPeerRunApi(peer, id, run, compare ? String(compare) : null, fetchImpl);
+    if (hit?.detail) {
+      const location = {
+        machine: hit.machine ?? peer.name,
+        path: hit.path ?? null,
+        boardUrl: peer.url,
+        peer: peer.name,
+        remote: true,
+      };
+      return {
+        ok: true,
+        detail: { ...hit.detail, runLocation: location, remoteBoard: true, openRun: !remote },
+        location,
+        peer,
+      };
+    }
+    if (hit?.runLocation) return { ok: false, location: hit.runLocation, message: hit.message };
+  }
+
+  if (!compare) {
+    for (const row of projects) {
+      if (project && row.id === project.id) continue;
+      const family = await projectFamilyRoots(row.root, { env, extraRoots });
+      for (const root of family) {
+        const hit = await locateOnRoot(row, root);
+        if (hit) return { ok: true, ...hit, location: { ...hit.location, alternateProjectId: row.id } };
+      }
+    }
+  }
+
+  return { ok: false };
+}
 
 function safeEqual(a, b) {
   const x = Buffer.from(String(a), 'utf8');
   const y = Buffer.from(String(b), 'utf8');
-  if (x.length !== y.length) return false;
-  return timingSafeEqual(x, y);
+  const size = Math.max(x.length, y.length);
+  const xx = Buffer.alloc(size);
+  const yy = Buffer.alloc(size);
+  x.copy(xx);
+  y.copy(yy);
+  return timingSafeEqual(xx, yy) && x.length === y.length;
 }
 
-function send(res, method, status, headers, body) {
-  res.writeHead(status, { ...SECURITY, ...headers });
-  res.end(method === 'HEAD' ? undefined : body);
+const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const COOKIE_VALUE = /^[!#$%&'()*+\-.\/0-9:<=>?@A-Z[\\\]^_`a-z{|}~]*$/;
+
+function watchCookie(header, expectedName) {
+  if (typeof header !== 'string' || header.length === 0) return null;
+  const pairs = [];
+  for (const raw of header.split(';')) {
+    const part = raw.trim();
+    const at = part.indexOf('=');
+    if (!part || at <= 0 || !COOKIE_NAME.test(part.slice(0, at).trim())) return null;
+    const name = part.slice(0, at).trim();
+    const value = part.slice(at + 1).trim();
+    if (!COOKIE_VALUE.test(value)) return null;
+    pairs.push([name, value]);
+  }
+  const matches = pairs.filter(([name]) => name === expectedName);
+  return matches.length === 1 ? matches[0][1] : null;
+}
+
+const COMPRESSIBLE = /^(?:text\/(?!event-stream)|application\/(?:json|javascript)|image\/svg\+xml)/;
+
+function acceptsGzip(header = '') {
+  const encodings = String(header).toLowerCase().split(',').map(part => {
+    const [name, ...params] = part.trim().split(';');
+    const quality = params.find(p => p.trim().startsWith('q='));
+    return [name, quality ? Number(quality.trim().slice(2)) : 1];
+  });
+  const explicit = encodings.find(([name]) => name === 'gzip');
+  return (explicit || encodings.find(([name]) => name === '*') || ['', 0])[1] > 0;
+}
+
+function representation(body, type) {
+  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  return {
+    body: bytes,
+    etag: `"${createHash('sha256').update(bytes).digest('hex')}"`,
+    gzip: COMPRESSIBLE.test(type) && bytes.length ? gzipSync(bytes) : null,
+  };
+}
+
+export function watchAssetCacheControl(name) {
+  if (name.startsWith('vendor/') || /\.(?:woff2?|ttf|otf)$/.test(name)) return 'public, max-age=31536000, immutable';
+  return /\.(?:m?js|css)$/.test(name) ? 'public, max-age=300, must-revalidate' : 'no-cache';
+}
+
+function send(res, method, status, headers, body, encoded = null) {
+  const out = { ...SECURITY, ...headers };
+  const req = res.req;
+  let bytes = body;
+  if (status === 200 && COMPRESSIBLE.test(out['Content-Type'] || '') && acceptsGzip(req?.headers['accept-encoding'])) {
+    bytes = encoded?.gzip ?? gzipSync(body);
+    out['Content-Encoding'] = 'gzip';
+    // Strong validators identify the selected wire representation.
+    if (out.ETag) out.ETag = out.ETag.slice(0, -1) + '-gzip"';
+  }
+  if (status === 200 && out.ETag && (method === 'GET' || method === 'HEAD')) {
+    const match = req?.headers['if-none-match'];
+    const since = req?.headers['if-modified-since'];
+    const unchanged = match !== undefined
+      ? String(match).split(',').some(tag => tag.trim() === '*' || tag.trim().replace(/^W\//, '') === out.ETag)
+      : since && out['Last-Modified'] && Number.isFinite(Date.parse(since)) && Date.parse(since) >= Date.parse(out['Last-Modified']);
+    if (unchanged) {
+      delete out['Content-Length'];
+      res.writeHead(304, out);
+      return res.end();
+    }
+  }
+  if (bytes != null && status !== 304) out['Content-Length'] = Buffer.byteLength(bytes);
+  res.writeHead(status, out);
+  res.end(method === 'HEAD' || status === 304 ? undefined : bytes);
 }
 
 function sendText(res, method, status, msg) {
@@ -44,8 +362,181 @@ function sendJson(res, method, obj) {
   send(res, method, 200, { 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify(obj));
 }
 
+function sendJsonStatus(res, method, status, obj) {
+  send(res, method, status, { 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify(obj));
+}
+
+const OWNER_BODY_LIMIT = 8 * 1024;
+
+function ownerRouteOf(pathname) {
+  if (pathname === '/api/owner/audit') return { route: 'audit' };
+  const match = /^\/api\/owner\/actions\/([^/]+)\/(prepare|decision)$/.exec(pathname);
+  if (!match) return null;
+  return { route: match[2] === 'prepare' ? 'prepare' : 'decision', itemId: match[1] };
+}
+
+function agentSessionOf(req) {
+  const marker = req.headers['x-swarm-agent-session'];
+  return marker !== undefined && marker !== null && String(marker).length > 0;
+}
+
+async function readJsonBody(req, limit = OWNER_BODY_LIMIT) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) return { error: 'too-large' };
+    chunks.push(chunk);
+  }
+  const text = Buffer.concat(chunks).toString('utf8').trim();
+  if (!text) return { value: {} };
+  try {
+    const value = JSON.parse(text);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'invalid' };
+    return { value };
+  } catch {
+    return { error: 'invalid' };
+  }
+}
+
 function sse(event, data) {
   return 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
+}
+
+export function createWatchStreamManager({ getRunSnapshot, now = Date.now, onDrop = () => {}, onClose = () => {} }) {
+  const streams = new Set();
+  let latestSnapshot = null;
+
+  function dropStream(stream, end = false) {
+    if (!streams.delete(stream)) return;
+    onDrop(stream);
+    if (end) {
+      try {
+        stream.res.end();
+      } catch {
+        // already closed
+      }
+    }
+  }
+
+  function writableLength(stream) {
+    return Number.isFinite(stream.res.writableLength) ? stream.res.writableLength : 0;
+  }
+
+  function shouldDrop(stream) {
+    return writableLength(stream) > MAX_STREAM_BUFFER_BYTES
+      || (stream.paused && now() - stream.pausedAt > MAX_STREAM_PAUSED_MS);
+  }
+
+  function pause(stream) {
+    if (!stream.paused) {
+      stream.paused = true;
+      stream.pausedAt = now();
+    }
+  }
+
+  function write(stream, chunk) {
+    try {
+      const ok = stream.res.write(chunk);
+      if (!ok) pause(stream);
+      return ok;
+    } catch {
+      dropStream(stream, true);
+      return false;
+    }
+  }
+
+  function open(res, run) {
+    latestSnapshot = run;
+    const stream = {
+      res,
+      prev: run,
+      paused: false,
+      pausedAt: null,
+      throttle: createThrottle(250, now),
+    };
+    streams.add(stream);
+    res.on('close', () => {
+      dropStream(stream);
+      onClose();
+    });
+    res.on('drain', () => {
+      if (!streams.has(stream) || !stream.paused) return;
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        return;
+      }
+      const next = latestSnapshot;
+      const ok = write(stream, sse('snapshot', next));
+      stream.prev = next;
+      if (ok) {
+        stream.paused = false;
+        stream.pausedAt = null;
+      }
+    });
+    try {
+      write(stream, sse('snapshot', run));
+    } catch {
+      dropStream(stream, true);
+    }
+    return stream;
+  }
+
+  function writeHeartbeats() {
+    const line = ': ping\n\n' + sse('ping', {});
+    for (const stream of [...streams]) {
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        continue;
+      }
+      if (stream.paused && writableLength(stream) >= MAX_STREAM_BUFFER_BYTES) continue;
+      write(stream, line);
+    }
+  }
+
+  async function pushUpdates() {
+    const next = (await getRunSnapshot()) ?? null;
+    latestSnapshot = next;
+    for (const stream of [...streams]) {
+      if (stream.paused) {
+        if (shouldDrop(stream)) dropStream(stream, true);
+        continue;
+      }
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        continue;
+      }
+      if (JSON.stringify(stream.prev) === JSON.stringify(next)) continue;
+      if (!stream.throttle.shouldSend()) continue;
+      const line = (stream.prev === null || next === null)
+        ? sse('snapshot', next)
+        : sse('delta', diffSnapshots(stream.prev, next));
+      if (write(stream, line)) {
+        stream.prev = next;
+      }
+    }
+  }
+
+  function close() {
+    for (const stream of [...streams]) {
+      try {
+        stream.res.end();
+      } catch {
+        // already closed
+      }
+    }
+    streams.clear();
+  }
+
+  return {
+    open,
+    writeHeartbeats,
+    pushUpdates,
+    close,
+    get size() {
+      return streams.size;
+    },
+  };
 }
 
 export function createWatchServer(opts) {
@@ -59,27 +550,46 @@ export function createWatchServer(opts) {
     board,
     nav,
     indexName = 'index.html',
+    commandCenterPage = 'command-center.html',
     commandList,
     contextCommands,
     assetDir,
     deltaFile,
     idleMs = 1800000,
     now = Date.now,
+    heartbeatMs = 10000,
+    setIntervalFn = setInterval,
+    clearIntervalFn = clearInterval,
     // A fixed port and token, for a board that stays up between restarts (swarm remote). Without them: a free port and a fresh token every start.
     port: wantedPort = 0,
     token: fixedToken,
     // swarm remote: the board is also reached through `tailscale serve`, which proxies from the tailnet to this loopback port. `hosts` are the names it is
     // reached by and `login` is the tailnet login allowed to use it (Tailscale sets that header on what it proxies). Nothing else is ever listened on.
     remote,
+    ownerActions,
+    env = process.env,
+    commandCenter = commandCenterEnabled(env),
+    snapshotMaxStaleMs = 300000,
   } = opts;
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
-  const streams = new Set();
+  // One board and Hive representation, independent of project ids or query keys.
+  // Cockpit responses are derived on demand and never retained in a map.
+  let commandCenterCache = null;
+  let snapshotPending = null;
+  let changesSinceFullRebuild = false;
+  const snapshotTtlMs = 60000;
+  const ccStreams = new Set();
+  const inputDetector = createBoardInputDetector({ env });
+  let inputProjects = [];
+  const dirtyProjects = new Set();
+  let changesPending = null;
   let server = null;
   let port = 0;
   let url = null;
   let timer = null;
+  let heartbeatTimer = null;
   let ticking = false;
   let closed = false;
   let streamEverClosed = false;
@@ -87,6 +597,45 @@ export function createWatchServer(opts) {
   const done = new Promise((resolve) => { resolveDone = resolve; });
   let lastActivity = now();
   let noStreamSince = now();
+  async function publicRunSnapshot() {
+    const snap = await getRunSnapshot();
+    return snap == null ? null : stripMoney(snap);
+  }
+
+  const streamManager = createWatchStreamManager({
+    getRunSnapshot: publicRunSnapshot,
+    now,
+    onDrop: () => { streamEverClosed = true; },
+    onClose: () => {
+      lastActivity = now();
+      if (streamManager.size === 0) noStreamSince = now();
+    },
+  });
+
+  async function loadVendorAssets(vendorRoot, keyPrefix) {
+    let entries;
+    try {
+      entries = await readdir(vendorRoot, { withFileTypes: true });
+    } catch (err) {
+      if (err?.code === 'ENOENT') return;
+      throw err;
+    }
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      if (entry.isSymbolicLink()) continue;
+      const key = `${keyPrefix}/${entry.name}`;
+      const full = path.join(vendorRoot, entry.name);
+      if (entry.isDirectory()) {
+        await loadVendorAssets(full, key);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (entry.name === 'VENDOR.json') continue;
+      if (entry.name === 'LICENSE' || entry.name.startsWith('LICENSE-')) continue;
+      const ext = path.extname(entry.name);
+      if (!Object.hasOwn(TYPES, ext)) continue;
+      assets.set(key, await loadAsset(full, key, TYPES[ext]));
+    }
+  }
 
   async function loadAssets() {
     assets.clear();
@@ -95,25 +644,152 @@ export function createWatchServer(opts) {
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name);
       if (!Object.hasOwn(TYPES, ext)) continue;
-      const body = await readFile(path.join(assetDir, entry.name));
-      assets.set(entry.name, { type: TYPES[ext], body });
+      assets.set(entry.name, await loadAsset(path.join(assetDir, entry.name), entry.name, TYPES[ext]));
     }
-    const delta = await readFile(deltaFile);
-    assets.set('watch-delta.mjs', { type: TYPES['.js'], body: delta });
+    await loadVendorAssets(path.join(assetDir, 'vendor'), 'vendor');
+    assets.set('watch-delta.mjs', await loadAsset(deltaFile, 'watch-delta.mjs', TYPES['.js']));
   }
 
-  function sendAsset(res, method, name) {
-    const a = Object.hasOwn(Object.fromEntries(assets), name) ? assets.get(name) : undefined;
+  async function loadAsset(file, name, type) {
+    const [body, info] = await Promise.all([readFile(file), stat(file)]);
+    const cacheControl = watchAssetCacheControl(name);
+    return { ...representation(body, type), type, lastModified: info.mtime.toUTCString(), cacheControl };
+  }
+
+  function sendAsset(res, method, name, headers = {}) {
+    const a = assets.get(name);
     if (!a) return sendText(res, method, 404, 'not found');
-    send(res, method, 200, { 'Content-Type': a.type, 'Content-Length': a.body.length }, a.body);
+    send(res, method, 200, {
+      'Content-Type': a.type, ETag: a.etag, 'Last-Modified': a.lastModified,
+      'Cache-Control': a.cacheControl, ...headers,
+    }, a.body, a);
+  }
+
+  function rebuildCommandCenterSnapshot() {
+    if (snapshotPending) return snapshotPending;
+    snapshotPending = new Promise(resolve => setImmediate(resolve)).then(async () => {
+      if (changesPending) await changesPending.catch(() => {});
+      const snapshot = await board.snapshot({ local: false, redact: true });
+      const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+      const model = buildCommandCenterSnapshot(payload);
+      const entry = {
+        payload,
+        model,
+        encoded: representation(JSON.stringify(model), 'application/json'),
+        at: now(),
+      };
+      const localProjects = (payload.projects ?? []).filter(p => p.root && (!p.machine || p.machine === os.hostname()));
+      const extraRoots = localProjects.map(p => p.root);
+      inputProjects = (await Promise.all(localProjects.map(async p => {
+        const roots = await selectLiveFamilyRoots(p.root, { env, extraRoots });
+        return roots.map(root => ({ id: p.id, root }));
+      }))).flat();
+      const currentIds = new Set((payload.projects ?? []).map(p => p.id));
+      for (const id of dirtyProjects) if (!currentIds.has(id)) dirtyProjects.delete(id);
+      for (const id of await inputDetector.scan(inputProjects)) {
+        dirtyProjects.add(id);
+        changesSinceFullRebuild = true;
+      }
+      // The catch-up scan belongs to this snapshot; later detector ticks re-arm refresh.
+      changesSinceFullRebuild = false;
+      // A build finishing after shutdown must not keep the snapshot alive.
+      if (!closed) commandCenterCache = entry;
+      return entry;
+    }).finally(() => { snapshotPending = null; });
+    return snapshotPending;
+  }
+
+  function writeCommandCenterEvent(res, chunk) {
+    // Bound slow readers rather than letting an abandoned tab retain a queue.
+    if (res.writableLength > MAX_STREAM_BUFFER_BYTES) { ccStreams.delete(res); res.end(); return; }
+    try { res.write(chunk); } catch { ccStreams.delete(res); res.destroy(); }
+  }
+
+  function updateCommandCenterChanges() {
+    if (changesPending) return changesPending;
+    changesPending = (async () => {
+      if (!commandCenterCache || snapshotPending || closed) return;
+      for (const id of await inputDetector.scan(inputProjects)) {
+        dirtyProjects.add(id);
+        changesSinceFullRebuild = true;
+      }
+      if (!dirtyProjects.size) return;
+      const ids = [...dirtyProjects];
+      const entry = commandCenterCache;
+      const rows = await Promise.all(ids.map(async id => {
+        const detail = await board.project(id);
+        if (!detail) throw new Error('project unavailable');
+        const old = entry.payload.projects.find(p => p.id === id);
+        // The classic project API carries ticket rows plus a separate summary.
+        return { ...old, ...detail, tickets: Array.isArray(detail.tickets) ? detail.ticketCounts ?? old.tickets : detail.tickets ?? old.tickets };
+      }));
+      if (closed || commandCenterCache !== entry) return;
+      for (const row of rows) {
+        const index = entry.payload.projects.findIndex(p => p.id === row.id);
+        entry.payload.projects[index] = stripMoney(row);
+      }
+      const agents = entry.payload.machine?.agents;
+      if (agents) agents.total = entry.payload.projects.reduce((total, p) => total + (p.agents?.total ?? 0), 0);
+      entry.payload.at = new Date(now()).toISOString();
+      patchCommandCenterSnapshot(entry.model, entry.payload, ids);
+      entry.encoded = representation(JSON.stringify(entry.model), 'application/json');
+      for (const id of ids) dirtyProjects.delete(id);
+      const event = sse('cc-change', { kind: 'cc-change', projects: ids, at: entry.payload.at });
+      for (const res of ccStreams) writeCommandCenterEvent(res, event);
+    })().finally(() => { changesPending = null; });
+    return changesPending;
+  }
+
+  function openCommandCenterEvents(res, method) {
+    const headers = { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' };
+    if (method === 'HEAD') return send(res, method, 200, headers, '');
+    if (closed) return sendText(res, method, 503, 'shutting down');
+    if (ccStreams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
+    res.writeHead(200, headers);
+    res.socket?.setTimeout(0);
+    res.socket?.setKeepAlive(true);
+    ccStreams.add(res);
+    res.on('close', () => { ccStreams.delete(res); lastActivity = now(); });
+    writeCommandCenterEvent(res, ': connected\n\n');
+  }
+
+  async function commandCenterResponse(pathname, q) {
+    // Preserve the explicit local-only view without retaining another snapshot
+    // or allowing query strings to grow cache keys. Normal dashboard requests
+    // always share the single default board below.
+    if (q.local === '1') {
+      const snapshot = await board.snapshot({ ...q, local: true, redact: true });
+      const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+      const result = pathname.endsWith('/project')
+        ? buildProjectCockpit(payload, String(q.id ?? '')) : buildCommandCenterSnapshot(payload);
+      return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
+    }
+    let entry = commandCenterCache;
+    if (!entry) {
+      // Startup warming and all cold requests share the same build.
+      entry = await rebuildCommandCenterSnapshot();
+    } else if (now() < entry.at || now() - entry.at >= snapshotTtlMs) {
+      // Keep the previous snapshot available, including its validators, while
+      // a single refresh runs. Idle inputs get a deeper refresh at the backstop.
+      // A failure leaves the cached entry and its validators available.
+      if (!snapshotPending && (changesSinceFullRebuild || now() - entry.at >= snapshotMaxStaleMs)) {
+        void rebuildCommandCenterSnapshot().catch(() => {});
+      }
+    }
+    if (changesPending) await changesPending.catch(() => {});
+    if (!pathname.endsWith('/project')) return entry;
+    const id = String(q.id ?? '');
+    const cockpit = buildProjectCockpit(entry.payload, id);
+    const result = cockpit && { ...cockpit, card: entry.model.projects.find(p => p.id === id), stats: entry.model.stats, hive: entry.model.hive, at: entry.model.at };
+    return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
   }
 
   async function payload() {
-    const run = (await getRunSnapshot()) ?? null;
-    const plan = (await getPlanSnapshot()) ?? { present: false };
+    const run = await publicRunSnapshot();
+    const plan = stripMoney((await getPlanSnapshot()) ?? { present: false });
     const gallery = (await getGallery()) ?? { schema: 1, screens: [] };
     const ctx = await contextCommands(run, plan);
-    return { run, plan, gallery, commands: commandList, contextCommands: ctx };
+    return stripMoney({ run, plan, gallery, commands: commandList, contextCommands: ctx });
   }
 
   async function sendShot(res, method, id, kind) {
@@ -123,61 +799,88 @@ export function createWatchServer(opts) {
     send(res, method, 200, { 'Content-Type': 'image/png', 'Content-Length': body.length }, body);
   }
 
-  function dropStream(s) {
-    streams.delete(s);
-    streamEverClosed = true;
-  }
-
   async function openEvents(res, method) {
     if (method === 'HEAD') {
       return send(res, method, 200, { 'Content-Type': 'text/event-stream; charset=utf-8' }, '');
     }
     if (closed) return sendText(res, method, 503, 'shutting down');
-    const run = (await getRunSnapshot()) ?? null;
-    if (streams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
+    const run = await publicRunSnapshot();
+    if (streamManager.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
     res.writeHead(200, { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8' });
-    res.write(sse('snapshot', run));
-    const stream = { res, prev: run, throttle: createThrottle(250, now), slow: 0 };
-    streams.add(stream);
-    res.on('close', () => {
-      dropStream(stream);
-      lastActivity = now();
-      if (streams.size === 0) noStreamSince = now();
-    });
+    if (res.socket) {
+      res.socket.setTimeout(0);
+      res.socket.setKeepAlive(true);
+    }
+    streamManager.open(res, run);
   }
 
-  async function pushUpdates() {
-    const next = (await getRunSnapshot()) ?? null;
-    for (const s of [...streams]) {
-      if (JSON.stringify(s.prev) === JSON.stringify(next)) continue;
-      if (!s.throttle.shouldSend()) continue;
-      try {
-        const line = (s.prev === null || next === null)
-          ? sse('snapshot', next)
-          : sse('delta', diffSnapshots(s.prev, next));
-        const ok = s.res.write(line);
-        s.prev = next;
-        s.slow = ok ? 0 : s.slow + 1;
-        if (s.slow >= MAX_SLOW_WRITES) {
-          dropStream(s);
-          try {
-            s.res.end();
-          } catch {
-            // already closed
-          }
-        }
-      } catch {
-        dropStream(s);
+  function tailnetVerifiedForOwner(req, host, localHost) {
+    if (!remote || localHost) return false;
+    if (req.headers['tailscale-funnel-request'] !== undefined) return false;
+    const login = req.headers['tailscale-user-login'];
+    const named = remote.hosts.includes(String(host).toLowerCase());
+    if (!named || typeof login !== 'string' || login.toLowerCase() !== String(remote.login ?? '').toLowerCase()) return false;
+    return true;
+  }
+
+  async function handleOwner(req, res, method, u, ownerRoute) {
+    if (!remote) return sendText(res, method, 404, 'not found');
+    const host = req.headers.host;
+    const localHost = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+    if (remote) {
+      const login = req.headers['tailscale-user-login'];
+      const named = remote.hosts.includes(String(host).toLowerCase());
+      if (!named || req.headers['tailscale-funnel-request'] !== undefined || typeof login !== 'string' || login.toLowerCase() !== String(remote.login ?? '').toLowerCase()) {
+        return sendJsonStatus(res, method, 401, { error: 'not-signed-in', message: 'a Tailscale owner identity is required' });
       }
     }
+    const queryToken = u.searchParams.get('t');
+    const headerToken = req.headers['x-watch-token'];
+    const headerOk = typeof headerToken === 'string' && safeEqual(headerToken, token);
+    const tokenOk = headerOk;
+    const ownerReq = {
+      tokenOk,
+      tokenInQuery: typeof queryToken === 'string',
+      local: u.searchParams.get('local') === '1',
+      agentSession: agentSessionOf(req),
+      tailnetVerified: tailnetVerifiedForOwner(req, host, localHost),
+      headers: req.headers,
+    };
+    if (ownerRoute.route === 'audit') {
+      if (method !== 'GET' && method !== 'HEAD') {
+        return send(res, method, 405, { Allow: 'GET, HEAD', 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'method-not-allowed' }));
+      }
+      const out = await ownerActions.audit(ownerReq);
+      return sendJsonStatus(res, method, out.status, out.body);
+    }
+    if (method !== 'POST') {
+      return send(res, method, 405, { Allow: 'POST', 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'method-not-allowed' }));
+    }
+    const bodyRead = await readJsonBody(req);
+    if (bodyRead.error === 'too-large') {
+      return sendJsonStatus(res, method, 413, { error: 'payload-too-large', message: 'request body exceeds 8 KB' });
+    }
+    if (bodyRead.error === 'invalid') {
+      return sendJsonStatus(res, method, 400, { error: 'invalid-body' });
+    }
+    const out = ownerRoute.route === 'prepare'
+      ? await ownerActions.prepare(ownerRoute.itemId, ownerReq, bodyRead.value)
+      : await ownerActions.decide(ownerRoute.itemId, bodyRead.value, ownerReq);
+    return sendJsonStatus(res, method, out.status, out.body);
   }
 
   async function handle(req, res) {
     const method = req.method;
+    if (!server) return sendText(res, method, 421, 'misdirected request');
+    const u = new URL(req.url || '/', 'http://127.0.0.1');
+    const ownerRoute = ownerRouteOf(u.pathname);
+    if (ownerRoute) {
+      if (!ownerActions) return sendText(res, method, 404, 'not found');
+      return handleOwner(req, res, method, u, ownerRoute);
+    }
     if (method !== 'GET' && method !== 'HEAD') {
       return send(res, method, 405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' }, 'method not allowed');
     }
-    if (!server) return sendText(res, method, 421, 'misdirected request');
     const host = req.headers.host;
     const local = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
     if (remote) {
@@ -189,8 +892,14 @@ export function createWatchServer(opts) {
     } else if (!local) {
       return sendText(res, method, 421, 'misdirected request');
     }
-    const u = new URL(req.url || '/', 'http://127.0.0.1');
     const pathname = u.pathname;
+    if (pathname === '/api/health') {
+      if (remote || !local) return sendText(res, method, 421, 'misdirected request');
+      const hostName = String(host ?? '').split(':')[0];
+      if (hostName !== '127.0.0.1' && hostName !== 'localhost') return sendText(res, method, 421, 'misdirected request');
+      const info = await versionInfo();
+      return sendJson(res, method, { ok: true, version: info.version, pid: process.pid });
+    }
     if (pathname.startsWith('/assets/')) {
       lastActivity = now();
       return sendAsset(res, method, pathname.slice('/assets/'.length));
@@ -198,22 +907,45 @@ export function createWatchServer(opts) {
     const parts = pathname.split('/');
     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
+    const commandCenterPath = commandCenter && board ? parseCommandCenterPath(pathname) : null;
+    const isCommandCenter = commandCenterPath !== null;
+    const isCommandCenterApi = commandCenter && board && (pathname === '/api/command-center' || pathname === '/api/command-center/project' || pathname === '/api/command-center/events');
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
-    const boardRoutes = board ? ['/api/board', '/api/project', '/api/live', '/api/history', '/history.csv', ...(remote ? [] : ['/open/run']), '/project', '/run', '/api/run'] : [];
+    const boardRoutes = board ? watchBoardRoutePaths({ remote }).filter(pathname => pathname !== '/board') : [];
     const isBoardRoute = boardRoutes.includes(pathname);
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav) return sendText(res, method, 404, 'not found');
-    const q = u.searchParams.get('t');
-    const h = req.headers['x-watch-token'];
-    const ok = (typeof q === 'string' && safeEqual(q, token)) || (typeof h === 'string' && safeEqual(h, token));
+    if (pathname !== '/' && pathname !== '/classic' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav && !isCommandCenter && !isCommandCenterApi) return sendText(res, method, 404, 'not found');
+    const isHtmlPage = (pathname === '/' || pathname === '/classic' || (isBoardRoute && (pathname === '/project' || pathname === '/run'))) || isCommandCenter;
+    const queryToken = u.searchParams.get('t');
+    const headerToken = req.headers['x-watch-token'];
+    const cookieName = `swarm_watch_${port}`;
+    const cookieToken = watchCookie(req.headers.cookie, cookieName);
+    const headerOk = typeof headerToken === 'string' && safeEqual(headerToken, token);
+    const cookieOk = typeof cookieToken === 'string' && safeEqual(cookieToken, token);
+    const queryOk = isHtmlPage && typeof queryToken === 'string' && safeEqual(queryToken, token);
+    const ok = headerOk || cookieOk || queryOk;
     if (!ok) {
       return sendText(res, method, 403, 'forbidden');
     }
     lastActivity = now();
-    if (pathname === '/') return sendAsset(res, method, indexName);
+    const pagePrivacyCache = isHtmlPage && (pathname === '/classic' || isWatchClassicPagePath(pathname))
+      ? { 'Cache-Control': 'no-store' }
+      : {};
+    const pageHeaders = {
+      ...pagePrivacyCache,
+      ...(queryOk ? {
+        'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
+      } : {}),
+    };
+    if (pathname === '/classic') return sendAsset(res, method, indexName, pageHeaders);
+    if (pathname === '/') {
+      if (commandCenter && board) return sendAsset(res, method, commandCenterPage, pageHeaders);
+      return sendAsset(res, method, indexName, pageHeaders);
+    }
+    if (isCommandCenter) return sendAsset(res, method, commandCenterPage, pageHeaders);
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);
     if (isBoard) return sendJson(res, method, (await getBoard()) ?? { runs: [] });
@@ -224,23 +956,74 @@ export function createWatchServer(opts) {
       if (!target) return sendText(res, method, 404, 'not found');
       return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
     }
+    if (isCommandCenterApi) {
+      if (pathname === '/api/command-center/events') return openCommandCenterEvents(res, method);
+      const q = Object.fromEntries(u.searchParams);
+      delete q.t;
+      const { encoded } = await commandCenterResponse(pathname, q);
+      if (!encoded) return sendText(res, method, 404, 'not found');
+      return send(res, method, 200, {
+        'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache', ETag: encoded.etag,
+      }, encoded.body, encoded);
+    }
     if (isBoardRoute) {
       const q = Object.fromEntries(u.searchParams);
-      if (pathname === '/project') return sendAsset(res, method, 'project.html');
-      if (pathname === '/run') return sendAsset(res, method, 'run.html');
-      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, { ...detail, openRun: !remote }) : sendText(res, method, 404, 'not found'); }
+      delete q.t;
+      if (pathname === '/project') return sendAsset(res, method, 'project.html', pageHeaders);
+      if (pathname === '/run') return sendAsset(res, method, 'run.html', pageHeaders);
+      if (pathname === '/api/run') {
+        const resolved = await resolveBoardRun({
+          board,
+          projectId: String(q.id ?? ''),
+          runId: String(q.run ?? ''),
+          compare: q.compare ? String(q.compare) : null,
+          remote,
+          env,
+        });
+        if (resolved.ok === true && resolved.detail) {
+          const openRun = resolved.detail.openRun ?? !remote;
+          return sendJson(res, method, stripMoney({ ...resolved.detail, openRun }));
+        }
+        if (resolved.location) {
+          return sendJsonStatus(res, method, 404, {
+            error: 'run-not-found',
+            message: resolved.message ?? formatRunLocationMessage(resolved.location),
+            runLocation: resolved.location,
+          });
+        }
+        return sendText(res, method, 404, 'not found');
+      }
       // `openRun`: the "Watch" links start a run's own page on this computer, which the remote board never does (it links to the run inspector instead). `server`: the version this
       // process runs, the one now installed, and whether they differ (it was started before the last swarm update).
       if (pathname === '/api/board') {
         const localOnly = q.local === '1';
-        return sendJson(res, method, { ...(await board.snapshot({ ...q, local: localOnly })), openRun: !remote, server: await versionInfo() });
+        return sendJson(res, method, { ...(await board.snapshot({ ...q, local: localOnly, redact: true })), openRun: !remote, server: await versionInfo() });
       }
       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/live') { const live = await board.live(String(q.id ?? '')); return live ? sendJson(res, method, live) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/history') return sendJson(res, method, await board.history(q));
       if (pathname === '/history.csv') return send(res, method, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="swarm-history.csv"' }, await board.historyCsv(q));
       // /open/run?id=PROJECT&run=RUN: starts the run's own Watch server (or reuses it) and sends the browser to it. The target address carries that server's own token.
-      const target = await board.openRun(String(q.id ?? ''), String(q.run ?? ''));
+      const openId = String(q.id ?? '');
+      const openRunId = String(q.run ?? '');
+      let target = await board.openRun(openId, openRunId);
+      if (!target) {
+        const resolved = await resolveBoardRun({ board, projectId: openId, runId: openRunId, remote, env });
+        if (resolved.ok === true) {
+          const altId = resolved.location?.alternateProjectId ?? resolved.location?.projectId;
+          if (altId && altId !== openId) target = await board.openRun(String(altId), openRunId);
+          else if (resolved.peer?.url) {
+            const peerUrl = new URL('/open/run', resolved.peer.url);
+            peerUrl.searchParams.set('id', openId);
+            peerUrl.searchParams.set('run', openRunId);
+            peerUrl.searchParams.set('t', resolved.peer.token);
+            target = peerUrl.href;
+          }
+        }
+        if (!target && resolved.location) {
+          return sendText(res, method, 404, resolved.message ?? formatRunLocationMessage(resolved.location));
+        }
+      }
       if (!target) return sendText(res, method, 404, 'not found');
       return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
     }
@@ -254,16 +1037,16 @@ export function createWatchServer(opts) {
   async function close() {
     if (closed && !server) return;
     closed = true;
-    if (timer) clearInterval(timer);
+    if (timer) clearIntervalFn(timer);
     timer = null;
-    for (const s of [...streams]) {
-      try {
-        s.res.end();
-      } catch {
-        // already closed
-      }
-    }
-    streams.clear();
+    if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
+    heartbeatTimer = null;
+    streamManager.close();
+    for (const res of ccStreams) res.end();
+    ccStreams.clear();
+    inputProjects = [];
+    dirtyProjects.clear();
+    commandCenterCache = null;
     if (server && server.listening) {
       await new Promise((resolve) => {
         server.close(() => resolve());
@@ -277,14 +1060,17 @@ export function createWatchServer(opts) {
     if (ticking || closed) return;
     ticking = true;
     try {
+      if (commandCenter && board) await updateCommandCenterChanges();
       const t = now();
-      if (streams.size > 0) {
-        await pushUpdates();
+      if (ccStreams.size > 0) lastActivity = t;
+      if (streamManager.size > 0) {
+        await streamManager.pushUpdates();
       } else {
         if (t - lastActivity >= idleMs) {
           await close();
           return;
         }
+        if (!streamEverClosed) return;
         const run = (await getRunSnapshot()) ?? null;
         const finished = !!run && (run.status === 'complete' || run.status === 'failed');
         if (finished && streamEverClosed && t - noStreamSince >= IDLE_FINISHED_MS) {
@@ -307,6 +1093,8 @@ export function createWatchServer(opts) {
         else res.end();
       });
     });
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(wantedPort, '127.0.0.1', () => resolve());
@@ -317,10 +1105,18 @@ export function createWatchServer(opts) {
     streamEverClosed = false;
     lastActivity = now();
     noStreamSince = now();
-    timer = setInterval(() => {
+    timer = setIntervalFn(() => {
       tick();
     }, 1000);
     if (timer && typeof timer.unref === 'function') timer.unref();
+    heartbeatTimer = setIntervalFn(() => {
+      streamManager.writeHeartbeats();
+      for (const res of ccStreams) writeCommandCenterEvent(res, ': ping\n\n');
+    }, Math.max(1, heartbeatMs));
+    if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+    // Warm once without delaying listen or retrying in an idle loop. A cold
+    // request can join this attempt; a later request can retry a failed build.
+    if (commandCenter && board) void rebuildCommandCenterSnapshot().catch(() => {});
     return { url, port };
   }
 

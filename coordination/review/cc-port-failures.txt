@@ -1,0 +1,6 @@
+not ok 8 - hive node click opens cockpit for that card project id
+  location: '/Users/bean/.project-swarm-scratch/ccmount2/tests/command-center-nav.test.mjs:246:1'
+  error: 'cockpit breadcrumb visible'
+not ok 9 - cockpit breadcrumb click returns to hive with node cards visible
+  location: '/Users/bean/.project-swarm-scratch/ccmount2/tests/command-center-nav.test.mjs:280:1'
+  error: 'breadcrumb nav-block'

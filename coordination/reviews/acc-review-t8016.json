@@ -1,0 +1,23 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8016",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": false,
+          "evidence": "tools/watch-assets/index.html:53 ($0.00 / $5 in kSpend); tools/watch-server.mjs:280-283,402 (run Watch serves index.html); tools/watch-assets/run-kpis.js:114-118 (hides spend KPI after JS only); tools/watch-cli.mjs:430-443,545-562,watch-server.mjs:315-320 (stripMoney on /api/board, /api/project, /api/live, /api/run, /api/snapshot, /events); tools/watch-assets/orchestrator-view.js:70 (tokens only)",
+          "gap": "Per-run Watch page HTML still ships literal dollar placeholders before/without JS; APIs in scope are redacted but the run Watch shell is not money-free."
+        },
+        {
+          "n": 2,
+          "met": false,
+          "evidence": "tests/board-no-money.test.mjs:169-224 (every board Watch route — indexName board.html, skips run index.html); tests/board-no-money.test.mjs:249-257 (JS-only SOURCE_FORBIDDEN scan); tests/board-no-money.test.mjs:260-305 (run API and per-run Watch payloads strip money from snapshots and SSE)",
+          "gap": "No test fetches GET / with index.html or scans HTML for DOLLAR_IN_TEXT; run Watch static money would not fail CI."
+        }
+      ]
+    }
+  ]
+}

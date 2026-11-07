@@ -1,0 +1,52 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "apwide2",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Two existing tests still assert the old autopilot rule after the wide-wave change: 'startScope spawns detached swarm go --scope and unrefs' in tests/autopilot-ready-deps.test.mjs (the spawned argv now also carries --max-jobs N and, when allowed, --skip-skeleton) and 'autopilot batches under-filled waves and logs the Events note' in tests/wave-batch.test.mjs (autopilot now starts every startable ticket up to the free slots on every pass, so there is no under-filled trigger; keep the Events note about batching when more than one ticket is started in a pass, if the production code still writes it). Update those two tests to the new behaviour without weakening other assertions (still detached, unref, no live run or busy marker or cap room means no start). Test-only changes unless the production code lost the Events note: then restore the note ('batched N tickets into one wave') for passes that start more than one ticket.",
+   "context": [
+    "tools/autopilot.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/wave-batch.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/wave-batch.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/autopilot-blocker-resolved.test.mjs",
+    "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-ledger-only.test.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-no-outputs.test.mjs",
+    "tests/autopilot-policy-pass.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot.test.mjs",
+    "tests/b7-review-fixes.test.mjs",
+    "tests/brain-commands.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/generated-state.test.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/safety-commands.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs"
+   ],
+   "ignoreTestsReason": "autopilot tests in context; full suite before merge"
+  }
+ ]
+}

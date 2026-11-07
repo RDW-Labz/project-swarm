@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkRollup, assertMergeable, parsePrArgument, runMerge } from '../tools/merge-guard.mjs';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  checkRollup,
+  assertMergeable,
+  parsePrArgument,
+  releaseReviewGate,
+  runMerge,
+} from '../tools/merge-guard.mjs';
 
 const T1 = '2024-01-01T00:00:00Z';
 const T2 = '2024-01-02T00:00:00Z';
@@ -49,14 +59,46 @@ function makeExec(routes) {
 
 const PROTECTION = 'gh api repos/octo/repo/branches/main/protection/required_status_checks';
 const REMOTE = 'git remote get-url origin';
+const WORKTREE = 'git worktree list --porcelain';
+const REMOTE_DELETE_FEAT = 'gh api -X DELETE repos/octo/repo/git/refs/heads/feat';
+
+function encodeRefPath(refName) {
+  return String(refName).split('/').map((seg) => encodeURIComponent(seg)).join('/');
+}
+
+function remoteDeleteKey(headBranch) {
+  return `gh api -X DELETE repos/octo/repo/git/refs/heads/${encodeRefPath(headBranch)}`;
+}
+
+function worktreePorcelain(root, branch = 'refs/heads/main') {
+  return `worktree ${root}\nbranch ${branch}\n\n`;
+}
+
+function prListKey(baseBranch) {
+  return `gh pr list --repo octo/repo --base ${baseBranch} --state open --json number`;
+}
+
+const PR_VIEW_FIELDS =
+  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
 
 const KEY = {
   repo: 'gh repo view --json defaultBranchRef,nameWithOwner',
-  view: 'gh pr view 123 --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup',
   after: 'gh pr view 123 --json state',
-  list: 'gh pr list --repo octo/repo --base feat --state open --json number',
-  merge: 'gh pr merge 123 --squash --delete-branch --match-head-commit abc123',
 };
+
+function prViewKey(fields = PR_VIEW_FIELDS) {
+  return `gh pr view 123 --json ${fields}`;
+}
+
+function mergeKey(headOid, deleteBranch = true) {
+  const parts = ['gh', 'pr', 'merge', '123', '--squash'];
+  if (deleteBranch) parts.push('--delete-branch');
+  parts.push('--match-head-commit', headOid);
+  return parts.join(' ');
+}
+
+const HEAD_SHA = 'abcdef1234567890abcdef1234567890abcdef12';
+const OTHER_SHA = 'fedcba0987654321fedcba0987654321fedcba09';
 
 function prView(over = {}) {
   return {
@@ -66,25 +108,41 @@ function prView(over = {}) {
     headRefName: 'feat',
     headRefOid: 'abc123',
     statusCheckRollup: GREEN,
+    isCrossRepository: false,
+    title: 'Fix the widget',
+    body: '',
     ...over,
   };
 }
 
-function routes(o = {}) {
-  return {
+function routes(o = {}, root = '/repo') {
+  const headBranch = o.view?.headRefName ?? 'feat';
+  const headOid = o.view?.headRefOid ?? 'abc123';
+  const deleteKey = remoteDeleteKey(headBranch);
+  const viewKey = prViewKey();
+  const mergeRoute = mergeKey(headOid, true);
+  const mergeKeepLocalRoute = mergeKey(headOid, false);
+  const base = {
     [KEY.repo]: json({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'octo/repo' }),
-    [KEY.view]: o.rawView ?? json(prView(o.view)),
-    [KEY.list]: json(o.list ?? []),
-    [KEY.merge]: o.merge ?? ok(''),
+    [viewKey]: o.rawView ?? json(prView(o.view)),
+    [prListKey(headBranch)]: json(o.list ?? []),
+    [mergeRoute]: o.merge ?? ok(''),
     [KEY.after]: json(o.after ?? { state: 'MERGED' }),
     [PROTECTION]: o.protection ?? fail('404 Not Found'),
     [REMOTE]: ok(o.remote ?? 'git@github.com:octo/repo.git\n'),
+    [WORKTREE]: o.worktree ?? ok(worktreePorcelain(root)),
+    [deleteKey]: o.remoteDelete ?? ok(''),
     'git rev-parse --is-inside-work-tree': ok('true\n'),
     'git status --porcelain': ok(o.porcelain ?? ''),
     'git fetch origin': ok(''),
     'git checkout main --': ok(''),
     'git pull --ff-only origin main': ok(''),
   };
+  if (o.keepLocalHeadBranch) {
+    base[mergeKeepLocalRoute] = o.merge ?? ok('');
+    delete base[mergeRoute];
+  }
+  return base;
 }
 
 function mergeCalls(calls) {
@@ -453,4 +511,346 @@ test('runMerge: a dirty work tree skips the local update without failing the mer
   assert.equal(r.status, 'merged');
   assert.ok(String(r.localUpdate).startsWith('skipped:'));
   assert.equal(calls.some((c) => c.command === 'git' && c.args[0] === 'pull'), false);
+});
+
+test('runMerge: unparsable worktree list keeps local branch and deletes remote ref with encoded path', async () => {
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: ok('not-a-worktree-block\n\n'),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
+
+  const merges = mergeCalls(calls);
+  assert.equal(merges.length, 1);
+  assert.deepEqual(merges[0].args, [
+    'pr', 'merge', '123', '--squash', '--match-head-commit', 'abc123',
+  ]);
+  assert.ok(!merges[0].args.includes('--delete-branch'));
+
+  const prViews = calls.filter((c) => c.command === 'gh' && c.args[0] === 'pr' && c.args[1] === 'view');
+  assert.ok(prViews.some((c) => c.args.includes('--json') && c.args.includes(PR_VIEW_FIELDS)));
+
+  const deletes = calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[1] === '-X' && c.args[2] === 'DELETE');
+  assert.equal(deletes.length, 1);
+  assert.deepEqual(deletes[0].args, [
+    'api', '-X', 'DELETE', 'repos/octo/repo/git/refs/heads/feat',
+  ]);
+});
+
+test('runMerge: failing worktree list keeps local branch and deletes remote ref', async () => {
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: fail('worktree list failed'),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
+  assert.equal(mergeCalls(calls).length, 1);
+  assert.ok(!mergeCalls(calls)[0].args.includes('--delete-branch'));
+  assert.equal(
+    calls.filter(
+      (c) => c.command === 'gh' && c.args[0] === 'api' && c.args[2] === 'DELETE' && c.args[3] === 'repos/octo/repo/git/refs/heads/feat',
+    ).length,
+    1,
+  );
+});
+
+test('runMerge: head branch checked out in a state-holding worktree keeps local branch', async () => {
+  const wtPath = '/repo/.swarm/worktrees/wt-1';
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: ok(worktreePorcelain('/repo', 'refs/heads/main') + worktreePorcelain(wtPath, 'refs/heads/feat')),
+  }));
+  const holdsSwarmState = async (path) => path === wtPath;
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP, holdsSwarmState });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
+  assert.deepEqual(mergeCalls(calls)[0].args, [
+    'pr', 'merge', '123', '--squash', '--match-head-commit', 'abc123',
+  ]);
+  assert.equal(
+    calls.filter(
+      (c) => c.command === 'gh' && c.args[0] === 'api' && c.args[2] === 'DELETE' && c.args[3] === 'repos/octo/repo/git/refs/heads/feat',
+    ).length,
+    1,
+  );
+});
+
+test('runMerge: cross-repository PR keeps local branch without remote ref delete', async () => {
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: fail('worktree list failed'),
+    view: { isCrossRepository: true },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
+  assert.ok(!mergeCalls(calls)[0].args.includes('--delete-branch'));
+  assert.equal(
+    calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[1] === '-X').length,
+    0,
+  );
+});
+
+test('runMerge: missing isCrossRepository skips remote ref delete when local branch is kept', async () => {
+  const view = prView();
+  delete view.isCrossRepository;
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: fail('worktree list failed'),
+    rawView: json(view),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
+  assert.equal(
+    calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[1] === '-X').length,
+    0,
+  );
+});
+
+test('runMerge: remote delete encodes each ref segment separately', async () => {
+  const slashBranch = 'feat/with/slash';
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: ok('not-a-worktree-block\n\n'),
+    view: { headRefName: slashBranch },
+    list: [],
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  const deletes = calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[2] === 'DELETE');
+  assert.equal(deletes.length, 1);
+  assert.equal(deletes[0].args[3], `repos/octo/repo/git/refs/heads/${encodeRefPath(slashBranch)}`);
+});
+
+const RESULT_PATH = 'coordination/review/train5-review.json';
+const RECORD_PATH = 'coordination/review/train5-review-run.json';
+const MARKER = '<!-- swarm-review: ' + RESULT_PATH + ' -->';
+const FENCE = '`'.repeat(3);
+const LONG_FENCE = '`'.repeat(4);
+const contentsKey = (file, head = HEAD_SHA) => 'gh api repos/octo/repo/contents/' + file + '?ref=' + head;
+const commitKey = (head = HEAD_SHA) => 'gh api repos/octo/repo/commits/' + head;
+const compareKey = (parent = OTHER_SHA, head = HEAD_SHA) => 'gh api repos/octo/repo/compare/' + parent + '...' + head;
+const contentResponse = (bytes) => json({ encoding: 'base64', content: Buffer.from(bytes).toString('base64') });
+const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+async function releaseFixture(t, o = {}) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-merge-review-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const result = o.resultBytes ?? JSON.stringify({ verdict: 'pass', head: OTHER_SHA, ...o.result });
+  const record = {
+    version: 1, runId: 'review-5', jobId: 'review', agent: 'claude', model: 'claude-opus-4-6',
+    head: OTHER_SHA, status: 'complete', resultFile: RESULT_PATH, resultHash: hash(result),
+    manifest: '.swarm/runs/review-5/manifest.json', finishedAt: T1,
+    stateFile: '.swarm/runs/review-5/state.json', ...o.record,
+  };
+  const state = {
+    status: 'complete', baseCommit: OTHER_SHA,
+    jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' }],
+    ...o.state,
+  };
+  const defaultManifestJob = (recordValue, runOpts = {}) => ({
+    id: recordValue?.jobId ?? 'review', agent: 'claude', model: 'claude-opus-4-6',
+    resultFile: RESULT_PATH, outputs: [RESULT_PATH], ...o.manifestJob, ...runOpts.manifestJob,
+  });
+  const defaultManifest = (recordValue, runOpts = {}) =>
+    runOpts.manifest ?? o.manifest ?? { jobs: [defaultManifestJob(recordValue, runOpts)] };
+  const writeRun = async (id, recordValue, stateValue, recordBytes, stateBytes, runOpts = {}) => {
+    const dir = path.join(root, '.swarm/runs', id);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'review-record.json'), recordBytes ?? JSON.stringify(recordValue));
+    if (stateValue !== undefined) await fs.writeFile(path.join(dir, 'state.json'), stateBytes ?? JSON.stringify(stateValue));
+    if (!runOpts.noManifest) {
+      await fs.writeFile(
+        path.join(dir, 'manifest.json'),
+        runOpts.manifestBytes ?? JSON.stringify(defaultManifest(recordValue, runOpts)),
+      );
+    }
+  };
+  // A newer unrelated sibling must never supply the selected review or its hash.
+  await writeRun('sibling', {
+    ...record, runId: 'sibling', head: HEAD_SHA, resultFile: 'coordination/review/other-review.json',
+    resultHash: '0'.repeat(64), finishedAt: T2, stateFile: '.swarm/runs/sibling/state.json',
+  }, { ...state, baseCommit: HEAD_SHA });
+  if (!o.noRecord) {
+    await writeRun(
+      'review-5', record, o.noState ? undefined : state, o.recordBytes, o.stateBytes,
+      { noManifest: o.noManifest, manifest: o.manifest, manifestBytes: o.manifestBytes, manifestJob: o.manifestJob },
+    );
+  }
+  for (const sibling of o.siblings ?? []) {
+    const id = sibling.id;
+    await writeRun(id, {
+      ...record, runId: id, manifest: '.swarm/runs/' + id + '/manifest.json',
+      stateFile: '.swarm/runs/' + id + '/state.json', ...sibling.record,
+    }, { ...state, ...sibling.state }, undefined, undefined, sibling);
+  }
+  const view = { title: '1.0.0: x', headRefOid: HEAD_SHA, body: MARKER, ...o.view };
+  const head = view.headRefOid;
+  const rs = routes({ view }, root);
+  rs[commitKey(head)] = o.commitResponse ?? json({ parents: [{ sha: OTHER_SHA }] });
+  rs[compareKey(OTHER_SHA, head)] = o.compareResponse ?? json({ files: [{ filename: RESULT_PATH, status: 'added' }] });
+  rs[contentsKey(RESULT_PATH, head)] = o.resultResponse ?? contentResponse(result);
+  // A legacy committed record is available, but must never be trusted or fetched.
+  rs[contentsKey(RECORD_PATH, head)] = contentResponse(JSON.stringify({ ...record, verdict: 'pass' }));
+  return { root, ...makeExec(rs) };
+}
+
+async function checkRelease(t, o = {}, reason) {
+  const { root, exec, calls } = await releaseFixture(t, o);
+  const r = await runMerge(root, ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, reason ? 'refused' : 'merged', JSON.stringify(r));
+  if (reason) assert.ok(r.reasons.includes(reason), JSON.stringify(r));
+  assert.equal(mergeCalls(calls).length, reason ? 0 : 1, 'refusals must precede gh pr merge');
+  assert.equal(calls.some((c) => [c.command, ...c.args].join(' ') === contentsKey(RECORD_PATH)), false);
+  return { r, calls };
+}
+
+test('releaseReviewGate: non-release title is not required', async () => {
+  const r = await releaseReviewGate({ title: 'Fix the widget', body: '', headRefOid: HEAD_SHA });
+  assert.deepEqual(r, { required: false, ok: true });
+});
+
+test('runMerge: local completed Opus review and metadata-only result commit merge', async (t) => {
+  const { calls } = await checkRelease(t);
+  for (const key of [contentsKey(RESULT_PATH), commitKey(), compareKey()]) {
+    assert.ok(calls.some((c) => [c.command, ...c.args].join(' ') === key), key);
+  }
+});
+
+for (const title of ['v1.168.0 - ship', '  V1.168.0 - ship', ' Release 1.2.3', 'release 1.2.3']) {
+  test('runMerge: release title ' + JSON.stringify(title) + ' requires a selector', async (t) => {
+    await checkRelease(t, { view: { title, body: '' } }, 'marker-missing');
+  });
+}
+
+for (const [name, options, reason] of [
+  ['missing selector', { view: { body: 'pass' } }, 'marker-missing'],
+  ['null body', { view: { body: null } }, 'marker-missing'],
+  ['multiline selector', { view: { body: '<!-- swarm-review:\n' + RESULT_PATH + ' -->' } }, 'marker-missing'],
+  ['inline selector', { view: { body: 'Ship it. ' + MARKER } }, 'marker-missing'],
+  ['typed JSON verdict', { noRecord: true, view: { body: [FENCE + 'json', JSON.stringify({ verdict: 'pass', head: HEAD_SHA }), FENCE].join('\n') } }, 'marker-missing'],
+  ['legacy committed record selector', { noRecord: true, view: { body: '<!-- swarm-review-run: ' + RECORD_PATH + ' -->' } }, 'marker-missing'],
+  ['committed record without local run', { noRecord: true }, 'review-run-record-missing'],
+  ['typed JSON alongside selector without local run', { noRecord: true, view: { body: [MARKER, FENCE + 'json', '{"verdict":"pass"}', FENCE].join('\n') } }, 'review-run-record-missing'],
+  ['malformed local record', { recordBytes: '{bad' }, 'review-run-record-missing'],
+  ['null local record', { recordBytes: 'null' }, 'review-run-record-missing'],
+  ['record for another head', { record: { head: HEAD_SHA } }, 'review-run-record-missing'],
+  ['record for another result', { record: { resultFile: 'coordination/review/another-review.json' } }, 'review-run-record-missing'],
+  ['non-Opus model', { record: { model: 'sonnet' } }, 'review-run-model-not-opus'],
+  ['missing model', { record: { model: null } }, 'review-run-model-not-opus'],
+  ['wrong agent', { record: { agent: 'codex' } }, 'review-run-model-not-opus'],
+  ['incomplete record', { record: { status: 'running' } }, 'review-run-state-mismatch'],
+  ['wrong record version', { record: { version: 2 } }, 'review-run-state-mismatch'],
+  ['invalid finish time', { record: { finishedAt: 'later' } }, 'review-run-state-mismatch'],
+  ['missing state', { noState: true }, 'review-run-state-mismatch'],
+  ['malformed state', { stateBytes: '{bad' }, 'review-run-state-mismatch'],
+  ['incomplete state', { state: { status: 'running' } }, 'review-run-state-mismatch'],
+  ['state for another head', { state: { baseCommit: HEAD_SHA } }, 'review-run-state-mismatch'],
+  ['missing jobs', { state: { jobs: null } }, 'review-run-state-mismatch'],
+  ['no matching job', { state: { jobs: [{ id: 'other', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' }] } }, 'review-run-state-mismatch'],
+  ['incomplete job', { state: { jobs: [{ id: 'review', status: 'running', agent: 'claude', model: 'claude-opus-4-6' }] } }, 'review-run-state-mismatch'],
+  ['different job agent', { state: { jobs: [{ id: 'review', status: 'complete', agent: 'codex', model: 'claude-opus-4-6' }] } }, 'review-run-state-mismatch'],
+  ['different job model', { state: { jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: 'other-opus' }] } }, 'review-run-state-mismatch'],
+  ['unsafe state path', { record: { stateFile: '../state.json' } }, 'review-run-state-mismatch'],
+  ['another run state path', { record: { stateFile: '.swarm/runs/sibling/state.json' } }, 'review-run-state-mismatch'],
+  ['mismatched run id', { record: { runId: 'sibling' } }, 'review-run-state-mismatch'],
+  ['missing manifest', { noManifest: true }, 'review-run-state-mismatch'],
+  ['malformed manifest', { manifestBytes: '{bad' }, 'review-run-state-mismatch'],
+  ['manifest job missing', { manifest: { jobs: [] } }, 'review-run-state-mismatch'],
+  ['manifest job id mismatch', { manifestJob: { id: 'other' } }, 'review-run-state-mismatch'],
+  ['manifest job not a review', { manifest: { jobs: [{ id: 'review', agent: 'claude', model: 'claude-opus-4-6', type: 'build' }] } }, 'review-run-state-mismatch'],
+  ['manifest resultFile mismatch', { manifestJob: { resultFile: 'coordination/review/other-review.json', outputs: ['coordination/review/other-review.json'] } }, 'review-run-state-mismatch'],
+  ['manifest outputs missing result file', { manifestJob: { outputs: ['src/example.mjs'] } }, 'review-run-state-mismatch'],
+  ['manifest extra outputs', { manifestJob: { outputs: [RESULT_PATH, 'src/example.mjs'] } }, 'review-run-state-mismatch'],
+  ['unsafe manifest path', { record: { manifest: '../manifest.json' } }, 'review-run-state-mismatch'],
+  ['another run manifest path', { record: { manifest: '.swarm/runs/sibling/manifest.json' } }, 'review-run-state-mismatch'],
+  ['code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: 'src/code.mjs' }] }) }, 'result-not-metadata-commit'],
+  ['committed record in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: RECORD_PATH }] }) }, 'result-not-metadata-commit'],
+  ['renamed code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH, previous_filename: 'src/code.mjs', status: 'renamed' }] }) }, 'result-not-metadata-commit'],
+  ['wrong result in compare', { compareResponse: json({ files: [{ filename: 'coordination/review/other-review.json' }] }) }, 'result-not-metadata-commit'],
+  ['deleted result', { compareResponse: json({ files: [{ filename: RESULT_PATH, status: 'removed' }] }) }, 'result-not-metadata-commit'],
+  ['missing changed files', { compareResponse: json({ files: [] }) }, 'result-not-metadata-commit'],
+  ['malformed commit', { commitResponse: ok('{bad') }, 'result-not-metadata-commit'],
+  ['multiple parents', { commitResponse: json({ parents: [{ sha: OTHER_SHA }, { sha: HEAD_SHA }] }) }, 'result-not-metadata-commit'],
+  ['no parents', { commitResponse: json({ parents: [] }) }, 'result-not-metadata-commit'],
+  ['short parent SHA', { commitResponse: json({ parents: [{ sha: 'abc123' }] }) }, 'result-not-metadata-commit'],
+  ['short PR head', { view: { headRefOid: 'abc123' } }, 'result-not-metadata-commit'],
+  ['commit fetch failure', { commitResponse: fail() }, 'result-not-metadata-commit'],
+  ['compare fetch failure', { compareResponse: fail() }, 'result-not-metadata-commit'],
+  ['compare parse failure', { compareResponse: ok('{bad') }, 'result-not-metadata-commit'],
+  ['wrong hash', { record: { resultHash: '0'.repeat(64) } }, 'result-hash-mismatch'],
+  ['malformed hash', { record: { resultHash: 'xyz' } }, 'result-hash-mismatch'],
+  ['result fetch failure', { resultResponse: fail() }, 'result-hash-mismatch'],
+  ['invalid base64', { resultResponse: json({ encoding: 'base64', content: '!!!!' }) }, 'result-hash-mismatch'],
+  ['wrong contents encoding', { resultResponse: json({ encoding: 'utf8', content: '{}' }) }, 'result-hash-mismatch'],
+  ['result verdict fail', { result: { verdict: 'fail' } }, 'result-verdict'],
+  ['uppercase result verdict', { result: { verdict: 'PASS' } }, 'result-verdict'],
+  ['result head mismatch', { result: { head: HEAD_SHA } }, 'result-head-mismatch'],
+  ['result short head', { result: { head: OTHER_SHA.slice(0, 7) } }, 'result-head-mismatch'],
+  ['result null head', { result: { head: null } }, 'result-head-mismatch'],
+  ['malformed result', { resultBytes: '{bad json' }, 'result-verdict'],
+  ['null result', { resultBytes: 'null' }, 'result-verdict'],
+]) {
+  test('runMerge: release refuses ' + name + ' before merging', async (t) => { await checkRelease(t, options, reason); });
+}
+
+for (const file of ['../train5-review.json', '/coordination/review/train5-review.json', 'coordination/review/../train5-review.json', 'coordination/review/%2e%2e/train5-review.json', 'coordination/review/train5-review-run.json', 'coordination/review/x\\train5-review.json', 'coordination/review/.json']) {
+  test('runMerge: unsafe selector path ' + file + ' refuses', async (t) => {
+    await checkRelease(t, { view: { body: '<!-- swarm-review: ' + file + ' -->' } }, 'selector-malformed');
+  });
+}
+
+test('runMerge: result head may be absent and bytes are hashed without normalization', async (t) => {
+  await checkRelease(t, { resultBytes: '{\r\n  "verdict": "pass"\r\n}\r\n' });
+});
+
+test('runMerge: selectors work anywhere in the body outside fenced blocks', async (t) => {
+  await checkRelease(t, { view: { body: MARKER + '\n## Reviews\nnone' } });
+});
+
+for (const fence of [FENCE, '~~~~', '    ' + LONG_FENCE, '  ~~~~~']) {
+  test('runMerge: ' + JSON.stringify(fence) + ' fences hide fake selectors', async (t) => {
+    const body = [fence + 'markdown', MARKER, fence, fence + 'text', '<!-- swarm-review: bad -->', fence, MARKER].join('\r\n');
+    await checkRelease(t, { view: { body } });
+    await checkRelease(t, { view: { body: [fence, MARKER, fence].join('\r\n') } }, 'marker-missing');
+  });
+}
+
+test('runMerge: shorter or different fence delimiter does not close a fence', async (t) => {
+  await checkRelease(t, { view: { body: [LONG_FENCE, FENCE, '~~~', MARKER, LONG_FENCE].join('\n') } }, 'marker-missing');
+});
+
+test('runMerge: duplicate selectors refuse', async (t) => {
+  await checkRelease(t, { view: { body: MARKER + '\n' + MARKER } }, 'selector-malformed');
+});
+
+test('runMerge: latest matching completed run supplies the hash', async (t) => {
+  await checkRelease(t, { record: { resultHash: '0'.repeat(64) }, siblings: [
+    { id: 'newer', record: { finishedAt: T2, resultHash: hash(JSON.stringify({ verdict: 'pass', head: OTHER_SHA })) } },
+  ] });
+  await checkRelease(t, { siblings: [
+    { id: 'newer', record: { finishedAt: T2, resultHash: '0'.repeat(64) } },
+  ] }, 'result-hash-mismatch');
+});
+
+test('runMerge: job maps may include unrelated incomplete jobs', async (t) => {
+  await checkRelease(t, { state: { jobs: {
+    review: { id: 'review', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' },
+    other: { id: 'other', status: 'running', agent: 'codex', model: 'other' },
+  } } });
+});
+
+test('runMerge: completed job actualModel can match the runner record', async (t) => {
+  await checkRelease(t, { state: { jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: null, actualModel: 'claude-opus-4-6' }] } });
+});
+
+test('runMerge: non-release title merges without review API calls', async () => {
+  const { exec, calls } = makeExec(routes());
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(calls.some((c) => c.args[1]?.match(/\/(contents|commits|compare)\//)), false);
 });

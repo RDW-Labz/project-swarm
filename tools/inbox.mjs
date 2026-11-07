@@ -117,10 +117,12 @@ function journalItems(root, events, ms) {
       kind: 'decision',
       project: root,
       title: sanitizeText(event.text ?? String(event.id)),
+      text: sanitizeText(event.text ?? String(event.id)),
       steps: [],
       unblocks: 0,
       since: event.ts ?? new Date(ms).toISOString(),
     };
+    if (event.boardSafe === true) item.boardSafe = true;
     if (Array.isArray(event.options)) item.choices = event.options.map(option => String(option));
     if (event.choice !== undefined) item.default = String(event.choice);
     items.push(item);

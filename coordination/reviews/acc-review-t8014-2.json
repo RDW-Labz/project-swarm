@@ -1,0 +1,23 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8014",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/watch-assets/project.js:34 L.renderWatchProjectCard(pageMode); tools/watch-assets/board.js:277-281,284 same L.renderWatchProjectCard and percentBoard; tools/watch-assets/board-lib.js:226-232 percentBoard, 312-487 card rows/labels/watchNum titles; test displayed numbers match disk oracles on project page and overview (BoardLib DOM pct); test project page and board scripts avoid forbidden wording",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tests/board-accuracy-page.test.mjs assertCardMatchesOracle + ledger oracleBoardPercent + git familyRoots/readRuns + lanes.json oracles in test displayed numbers match disk oracles on project page and overview; tests/build-progress-untracked-filter.test.mjs untracked link/count; tools/board-data.mjs:576-633,976-994 shared buildWatchCard for overview and projectDetail",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

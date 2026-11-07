@@ -10,6 +10,7 @@ import {
   normalizePolicyProjectPath,
 } from '../tools/policy.mjs';
 import { runPolicyPass } from '../tools/policy-run.mjs';
+import { readSwarmSource } from './helpers/swarm-source.mjs';
 
 const rules = () => effectiveRulesFromOverrides([]);
 
@@ -152,6 +153,6 @@ test('round4-4: cap allowance day uses US Central not UTC', async () => {
   });
   assert.equal(r.decided.length, 1);
 
-  const swarmSrc = fs.readFileSync(path.join(process.cwd(), 'tools/swarm.mjs'), 'utf8');
+  const swarmSrc = await readSwarmSource();
   assert.match(swarmSrc, /centralDayKey\(\(\) => ms\)/);
 });

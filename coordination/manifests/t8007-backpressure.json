@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8007-backpressure",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/watch-server.mjs",
+        "tests/board-live-chip.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/board-live.test.mjs"
+      ],
+      "prompt": "Follow-up on T-8007 in tools/watch-server.mjs createWatchStreamManager: the last change removed the slow-consumer protection (MAX_SLOW_WRITES drop), so a stuck client can make the server buffer without limit. Restore protection without the old flapping: when res.write() returns false, mark the stream paused and skip delta/snapshot writes for it until its 'drain' event (then send ONE fresh snapshot of the latest data and resume; heartbeats are tiny and keep going while paused only if res.writableLength is under the cap); drop the stream (end it, count it as closed) only when res.writableLength exceeds MAX_STREAM_BUFFER_BYTES = 1 MiB (export the constant) or it has been paused longer than 60 s by injected now. Tests in tests/board-live-chip.test.mjs with a fake res (EventEmitter with write returning false, writableLength settable, emit('drain')): two false writes keep the stream open and pause deltas; drain resumes with one snapshot; a buffer over the cap drops it; paused over 60 s drops it. Do NOT touch any other file except tests/board-live-chip.test.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/board-live-chip.test.mjs tests/watch-server.test.mjs tests/board-live.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests only use this file for unrelated behavior; the coordinator runs the FULL suite.",
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/remote.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

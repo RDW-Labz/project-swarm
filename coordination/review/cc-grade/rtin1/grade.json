@@ -1,0 +1,124 @@
+{
+  "round": "tin1",
+  "hive": {
+    "scores": {
+      "fidelity": 3.9,
+      "polish": 4.1,
+      "motion": 4.2,
+      "data": 4.0,
+      "phone": 4.2
+    },
+    "overall": 4.0,
+    "fixes": [
+      {
+        "problem": "Bottom three panels are not the target's dense, equal-height blocks: session log lines wrap to 2-3 lines so the left panel is very tall, while the middle and right panels have a large empty band between their top content and the footer stats.",
+        "where": "Below the fold, all three bottom panels (hive-full.png)",
+        "file": "tools/watch-assets/hive-panels.js + tools/watch-assets/cc-hive.css",
+        "change": "Render each log entry on one line (white-space:nowrap; overflow:hidden; text-overflow:ellipsis; title truncated to ~40 chars), cap the list at ~14 entries, and give the panel grid align-items:stretch with each panel as a flex column where the footer stat group uses margin-top:auto; fill the middle panel with the per-state bar group directly under the big number so there is no empty band."
+      },
+      {
+        "problem": "Session log category column is a single word ('review') in a single colour; the target shows a mix of categories (code/sys/opus/safety/route/ctx/control) each in its lane colour.",
+        "where": "Bottom-left panel, first column of the session log",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Derive the category from the ticket's state or lane (done / ready / review / blocked / building) and pick the most recent events across all states rather than only review items; colour the label with the matching --lane-* variable."
+      },
+      {
+        "problem": "Mini bar chart under the log is sparse (about 14 thin bars, most just dots); the target is a dense, full-width multi-colour bar field labelled 'forks per second'.",
+        "where": "Bottom-left panel, below the prompt line",
+        "file": "tools/watch-assets/hive-panels.js + tools/watch-assets/cc-hive.css",
+        "change": "Bucket the ledger into ~48 columns (e.g. per project x per state, or per day), draw bars as a flex row with flex:1 and gap:2px filling the panel width, height scaled to the max bucket with a 3px minimum, colour per state; keep the caption below."
+      },
+      {
+        "problem": "Step chart in the right panel is nearly flat (one plateau) where the target shows a jagged latency trace with glow across the full panel width.",
+        "where": "Bottom-right panel, between the bars and the per-project list",
+        "file": "tools/watch-assets/hive-panels.js + tools/watch-assets/cc-hive.css",
+        "change": "Build the step polyline from a time series with ~30 buckets (done tickets per day or per run from the ledger), normalise to the chart height with a visible baseline, use stroke #ff4d8d 1.5px and filter:drop-shadow(0 0 4px rgba(255,77,141,.8)) on the svg path."
+      },
+      {
+        "problem": "The ring's arc label is partly hidden by the top node's particle stream ('ONE LEDGER' is covered), whereas in the target the arc text sits clear of the streams.",
+        "where": "Top of the ring, under node 01",
+        "file": "tools/watch-assets/cc-hive-mount.js + tools/watch-assets/cc-hive.css",
+        "change": "Raise the arc-text layer above the particle canvas (z-index) and push the textPath radius outwards by ~12px, adding a dark text-shadow halo (0 0 6px #07040c) so streams pass behind the letters."
+      },
+      {
+        "problem": "Particle streams are thinner and dimmer than the target's dense, colour-matched flares that bloom where they meet the ring.",
+        "where": "Between each node card and the ring",
+        "file": "tools/watch-assets/cc-hive-mount.js",
+        "change": "Increase particles per stream (~2x) with 2-4px radii drawn with a radial-gradient glow in the lane colour, curve the path into the ring tangentially, and add a brighter additive flare sprite at the ring contact point whose alpha pulses."
+      },
+      {
+        "problem": "Header carries extra TOUR and '...' controls to the right of LIVE; the target ends the header with the LIVE chip alone.",
+        "where": "Top right of the header",
+        "file": "tools/watch-assets/cc-hive.css + tools/watch-assets/cc-hive-mount.js",
+        "change": "Keep LIVE as the right terminus and move TOUR and the overflow button into the footer control row (next to PAUSE MOTION / SOURCES) or into a smaller muted cluster at 10px that does not compete with the stat counters."
+      },
+      {
+        "problem": "The 'read from Bean.local' line and 'no per-lane job counts in the board data' read like debug notes; the target has only presentation copy under the big number.",
+        "where": "Middle bottom panel under the big number and under the state bars",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Replace the host line with 'projects on the board' sub-copy styled like the target ('route · context · ...' row listing the project states), and move the 'no per-lane' explanation to the footer data line."
+      }
+    ]
+  },
+  "cockpit": {
+    "scores": {
+      "fidelity": 4.1,
+      "polish": 4.0,
+      "motion": 3.5,
+      "data": 4.0,
+      "phone": 4.0
+    },
+    "overall": 4.0,
+    "fixes": [
+      {
+        "problem": "Almost nothing moves between frames: only the dotted-path dots and two orbit dots shift. The target implies a live scan with the robot, orbit, progress bars and LIVE state all animating.",
+        "where": "Robot stage, render stream cards, header LIVE chip",
+        "file": "tools/watch-assets/cc-cockpit.css + tools/watch-assets/cc-cockpit-mount.js",
+        "change": "Add keyframes: robot bob (translateY 0/-6px over 3s ease-in-out) with a glow pulse on its drop-shadow, orbit ellipse slow rotate, a shimmer gradient sweeping each render-stream progress bar (background-position animation 2s), a pulsing LIVE dot and ON chip (opacity 1/.5 1.2s), and a 4s scan highlight travelling across the segmented stage rule."
+      },
+      {
+        "problem": "Right column shows 9 numbered rows plus a '+388 more' tile where the target has ten rows in each column.",
+        "where": "Right ticket column, last slot",
+        "file": "tools/watch-assets/cockpit-lists.js + tools/watch-assets/cc-cockpit.css",
+        "change": "Render rows 11-20 in the right column and move the overflow count tile to its own full-width row under the NEXT UP card (or into the TICKET STACK footer) so both columns are symmetric."
+      },
+      {
+        "problem": "Headline is a bold grotesk rather than the target's tall condensed display face; it reads shorter and wider than 'TO TURN YOUR OPUS 5.5...'.",
+        "where": "Top-left headline and orange subhead",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Use a condensed display stack (font-stretch:condensed or a condensed webfont already in the asset set), font-size ~72px, line-height .9, letter-spacing -.01em, with the subhead at ~28px same family in the orange var; keep the uppercase."
+      },
+      {
+        "problem": "Stage label row above the segmented rule overflows and is cut with an ellipsis ('/ S1...'), and stages are ordered lexically (S1, S10, S11, S2...) rather than numerically; the footer stack list shows the same scrambled order.",
+        "where": "Stage rule label row and TICKET STACK sub-line",
+        "file": "tools/watch-assets/cockpit-lists.js + tools/watch-assets/cc-cockpit.css",
+        "change": "Sort stages by numeric suffix; show only the stage id per segment in the label row (counts in the segment title attribute) at 10px so it fits, and align the status cluster right without truncation; on phone allow flex-wrap."
+      },
+      {
+        "problem": "All four render-stream cards use the same green top rule and full bars; the target gives each card its category colour.",
+        "where": "2x2 render stream grid below the loop strip",
+        "file": "tools/watch-assets/cockpit-view.js + tools/watch-assets/cc-cockpit.css",
+        "change": "Set the card's top border, tag and progress bar colour from the ticket's stage/lane colour variable (same palette as the index chips), and size the bar by stage progress rather than always 100%."
+      },
+      {
+        "problem": "A floating '?' button sits over the ticket list (left middle on desktop, overlapping row 04 on phone); the target has no such control.",
+        "where": "Left edge of the viewport",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Pin the help button to the bottom-right corner with env(safe-area-inset) padding and smaller size, or fold it into the breadcrumb '...' overflow menu."
+      },
+      {
+        "problem": "Ticket rows show a play triangle at top-right where the target shows a check mark in the category colour; only the active row should carry the ON chip.",
+        "where": "Every ticket row, top-right corner",
+        "file": "tools/watch-assets/cockpit-lists.js + tools/watch-assets/cc-cockpit.css",
+        "change": "Render a check glyph coloured by the row's lane variable for done/merged rows and a muted check outline for pending rows; keep the triangle only as the hover affordance."
+      },
+      {
+        "problem": "On phone the breadcrumb stats wrap onto two lines and the stage label row clips off the right edge, pushing the robot below the first screen.",
+        "where": "Phone header area",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "At max-width 480px collapse the breadcrumb stats to a single scrollable mono line with a right mask-image fade, reduce headline to 44px, and stack the stage rule labels as a wrapping chip row so the orchestrator box and robot land above the fold."
+      }
+    ]
+  },
+  "notes": "Both pages carry the target composition convincingly, with the Hive ring and the Cockpit robot stage the strongest parts; the biggest gaps are the Hive's bottom panel density and the Cockpit's near-static motion. Cross-page data disagrees for project-swarm (Hive card shows 408 tickets and 8 need you, Cockpit shows 407 and 5), which should be reconciled from one ledger read."
+}

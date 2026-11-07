@@ -1,0 +1,71 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omode8",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "The last change (see git log HEAD, commit 'wip omode7') fixed the security review findings but now 38 existing tests fail (run: node --import ./tests/_isolate-config.mjs --test on tests/handbuild-guard.test.mjs, tests/handbuild-allowlist.test.mjs, tests/handbuild-hardening.test.mjs, tests/handbuild-hardening2.test.mjs, tests/guard-free-text.test.mjs, tests/guard-readonly-forms.test.mjs, tests/handbuild-switch.test.mjs, tests/handbuild-reason-words.test.mjs, tests/orchestrator-mode.test.mjs). Cause: fixtures run in temp git repos with no .swarm and the new rule 'missing or mismatched project dir counts as orchestrator mode ON when a .git root is found' (and the test-only flag) now turns the strict allowlist on for ordinary hand-build tests. Fix the code, not the tests: orchestrator mode must still be ON for a real swarm project (a .swarm directory at the root, found from CLAUDE_PROJECT_DIR or from cwd walking up), and a mismatch or missing CLAUDE_PROJECT_DIR inside a real swarm project must not turn it off; but a plain git repo without .swarm is ordinary hand-build mode, as the tests expect. Keep all 8 review fixes and tests/orchestrator-mode-review2.test.mjs passing. Do not edit existing tests except to give a fixture a .swarm directory where the test is about orchestrator mode itself.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/handbuild-guard.mjs",
+    "tools/orchestrator-hook.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-mode-fail-closed.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/_isolate-config.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-allowlist.test.mjs",
+    "tests/handbuild-hardening.test.mjs",
+    "tests/handbuild-hardening2.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/handbuild-switch.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs"
+   ],
+   "outputs": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/handbuild-guard.mjs",
+    "tools/orchestrator-hook.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/git-hooks.test.mjs",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/handbuild-vercel-merge.test.mjs",
+    "tests/hook-path-stable.test.mjs",
+    "tests/hooks-repoint-all.test.mjs",
+    "tests/orchestrator-lane.test.mjs",
+    "tests/phase10b-init.test.mjs",
+    "tests/policy-commit-window.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/registry-round3.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/scratch-strict-broad.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-produced-hash.test.mjs"
+   ],
+   "ignoreTestsReason": "guard tests in context cover it; full suite before merge"
+  }
+ ]
+}

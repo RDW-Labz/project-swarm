@@ -1,0 +1,65 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ommanifestguard",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Goal g-e96a1d8a (security, HIGH). With orchestrator mode on, the orchestrator session's shell guard (orchestratorModeCommandAllowed in tools/shell-writes.mjs, which for swarm commands calls omSwarmSubcommandAllowed then swarmSubcommandAlwaysAllowed in tools/orchestrator-allow.mjs) checks only the argv of 'swarm run MANIFEST'. The orchestrator may write a manifest under coordination/manifests/ or .swarm/manifests/ whose checks, setup, preChecks or mutantCheck carry an arbitrary argv, then run it: those commands run as the owner outside the worker sandbox. Fix it in the guard by reading the manifest file.\n\n1. NEW module tools/om-manifest-guard.mjs, synchronous (the guard is synchronous; use fs.readFileSync), exporting omRunManifestVetted(root, manifestArg) -> {ok: boolean, reason: string}. It resolves manifestArg relative to root (refuse absolute paths, .. segments, and any path whose realpath leaves root's realpath). If no file exists at that path, return ok:true (the argument is a run id, not a manifest; the runner handles it). If the file exists but cannot be read or parsed as JSON, return ok:false. Collect every command argv the manifest would run: top-level checks[].argv, setup (array of argv arrays or objects with argv), preChecks[].argv, mutantCheck (an argv array or {argv}), and the same four fields on each jobs[] entry. Any job with shell: true, or model ending in -shell (sonnet-shell, opus-shell), is refused outright (reason names the job id). Any other field or shape you do not recognise for those keys is refused (fail closed). Each collected argv must equal, element by element, one vetted argv: every checks[].argv in coordination/checks.json at root, plus profile.verify.command and each entry of profile.verify.setup from root/.project-swarm.json (pointer.profile). Missing vetted files simply give an empty vetted list. A manifest with no such fields and no shell jobs is ok:true. Reasons must name the field and say the argv is not a vetted command from coordination/checks.json or the profile verify command.\n2. In tools/shell-writes.mjs, in omSwarmSubcommandAllowed, after swarmSubcommandAlwaysAllowed(sub, rest) returns true: when sub is 'run' or 'go', every positional argument (non-flag words, skipping flag values the same way orchestrator-allow's omSwarmRunLikePositionals does; if you cannot reuse it, treat any word not starting with - as a candidate) must pass omRunManifestVetted(ctx.root, word); otherwise return false. ctx.root missing means deny for run/go with a positional that ends in .json. Keep every other behavior of that function unchanged; edit nothing else in shell-writes.mjs.\n3. NEW tests in tests/om-manifest-guard.test.mjs (first import: import './_isolate-config.mjs';) with a temp project dir: a manifest in coordination/manifests/ with a custom checks argv (e.g. [\"sh\",\"-c\",\"touch src/x\"]) is refused by omRunManifestVetted and by orchestratorModeCommandAllowed('swarm run coordination/manifests/m.json', {root, cwd: root}) (set up the temp project so orchestrator mode applies the way existing tests in tests/orchestrator-allow.test.mjs or the shell-writes tests do; read them for the fixture pattern); the same argv listed in coordination/checks.json is allowed; profile verify.command is allowed; a plain job manifest with no commands is allowed; setup, preChecks, mutantCheck and job-level checks each refused when unvetted; shell:true job and model sonnet-shell refused; a root-level evil.json run as 'swarm run evil.json' is read and refused; a bare run id with no file passes; invalid JSON refused; a symlink manifest pointing outside root refused. Do not edit tools/swarm.mjs, tools/orchestrator-allow.mjs, or any file not in outputs. tests/orchestrator-mode.test.mjs is in context for the orchestrator-mode fixture pattern. The other shell-writes tests are left out of context because existing behavior must not change; the coordinator runs all of them as checks, so any change outside the new run/go manifest check will fail.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs",
+    "tests/orchestrator-mode.test.mjs"
+   ],
+   "outputs": [
+    "tools/om-manifest-guard.mjs",
+    "tools/shell-writes.mjs",
+    "tests/om-manifest-guard.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/auto-approve.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "name": "om-manifest-guard",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/om-manifest-guard.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/auto-approve.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs"
+   ]
+  }
+ ]
+}

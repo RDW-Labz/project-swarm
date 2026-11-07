@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t3-loopback-env",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Fix one test-only environment coupling in tests/shell-loopback.test.mjs. Do not change product code or any other file.\n\nFailing test: 'generated profile: the project root .git is unreadable without rootGit, readable with it; git rev-parse still resolves the job worktree' (around line 215). It runs git inside a real sandbox-exec profile. The test process HOME is the isolated test home (tests/_isolate-config.mjs sets it under the OS tmp dir). Under `swarm ship`'s ci-local runner the environment is minimal and TMPDIR is unset, so the isolated home lands under /tmp. The sandbox profile correctly denies /tmp reads, so `git rev-parse --show-toplevel` dies with `fatal: unable to access '/tmp/swarm-test-home-.../.gitconfig': Operation not permitted` before it can resolve the worktree. Real CI sets a per-user TMPDIR, which is why CI passes.\n\nFix: make the sandboxed git probe independent of the runner's HOME/TMPDIR. In that test, pass `GIT_CONFIG_GLOBAL: '/dev/null'` (plus the existing process env) to the sandboxed `execFileAsync` calls that run git (`before` and `after`), so git never reads the process home's .gitconfig. Keep every assertion exactly as-is: the test must still prove rootGit is blocked without the grant, allowed with it, and that git resolves the job worktree. No skips, no retries, no relaxed assertions.\n\nVerify with the ci-local shape that reproduces the failure (TMPDIR unset, minimal env):\n  env -i PATH=\"$PATH\" HOME=\"$HOME\" node --import ./tests/_isolate-config.mjs --test tests/shell-loopback.test.mjs\nAll tests in the file must pass. Also run it normally: node --import ./tests/_isolate-config.mjs --test tests/shell-loopback.test.mjs. Report both commands and the counts.",
+      "context": [
+        "tests/shell-loopback.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/shell-loopback.test.mjs"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}

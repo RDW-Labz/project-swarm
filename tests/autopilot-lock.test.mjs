@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { acquireAutopilotLock } from '../tools/autopilot-lock.mjs';
+import { acquireAutopilotLock, readLockOwner } from '../tools/autopilot-lock.mjs';
 
 const exec = promisify(execFile);
 const swarm = path.join(path.dirname(fileURLToPath(import.meta.url)), '../tools/swarm.mjs');
@@ -51,6 +51,28 @@ test('a release never removes a lock that another process took over; a symlinked
   await fs.writeFile(path.join(root, 'elsewhere'), 'x');
   await fs.symlink(path.join(root, 'elsewhere'), lockFile(root));
   await assert.rejects(acquireAutopilotLock(root, { pid: 9 }));
+});
+
+test('readLockOwner returns parsed owner, null when missing or malformed, and never mutates the lock', async t => {
+  const root = await tmp(t);
+  assert.equal(await readLockOwner(root), null);
+
+  const release = await acquireAutopilotLock(root, { pid: 31, isAlive: () => true });
+  const owner = await readLockOwner(root);
+  assert.equal(owner.pid, 31);
+  assert.ok(typeof owner.startedAt === 'string');
+  const before = await fs.readFile(lockFile(root), 'utf8');
+  const statBefore = await fs.stat(lockFile(root));
+  assert.deepEqual(await readLockOwner(root), owner);
+  assert.equal(await fs.readFile(lockFile(root), 'utf8'), before);
+  assert.equal((await fs.stat(lockFile(root))).mtimeMs, statBefore.mtimeMs);
+  await assert.rejects(acquireAutopilotLock(root, { pid: 32, isAlive: () => true }), /autopilot-running: pid 31/);
+  await release();
+
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  await fs.writeFile(lockFile(root), 'not-json');
+  assert.equal(await readLockOwner(root), null);
+  assert.equal(await fs.readFile(lockFile(root), 'utf8'), 'not-json');
 });
 
 test('swarm autopilot refuses to start while a live process holds the lock, and cleans up after itself', async t => {

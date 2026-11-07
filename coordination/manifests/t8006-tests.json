@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8006-tests",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/remote.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "contracts/watch-s4-ops.json",
+        "tools/watch-server.mjs",
+        "tools/remote.mjs",
+        "tools/watch-assets/board-lib.js",
+        "tools/watch-assets/nav.js",
+        "tools/watch-assets/project.js",
+        "tools/watch-assets/board.js"
+      ],
+      "prompt": "T-8006 changed the Swarm Watch auth design on purpose (see tests/watch-token-urls.test.mjs and contracts/watch-s4-ops.json): the t query token is accepted ONLY on the HTML page routes ('/', '/project', '/run'), where the server sets an HttpOnly SameSite=Strict cookie swarm_watch (Secure over HTTPS) and sends Referrer-Policy no-referrer and Cache-Control no-store; every other route (/api/*, /events, /job/*, /shot/*, /history.csv, /board, /api/snapshot, /open/run, /nav/*) needs the x-watch-token header or the swarm_watch cookie and ignores ?t=. Pages read t once via BoardLib.watchToken(), store it in sessionStorage, strip it from the address bar with history.replaceState, and build links and fetch URLs WITHOUT t (links rely on the cookie). tools/remote.mjs calls the local server with the header; the owner-facing remote address and QR keep ?t= (it is the page load). These existing tests fail because they still use the old design: tests/watch-leftovers.test.mjs, tests/watch-review-fixes.test.mjs, tests/watch-server.test.mjs, tests/watch-ui.test.mjs, tests/board-inbox.test.mjs, tests/board-live-chip.test.mjs, tests/board-live.test.mjs, tests/board-nav.test.mjs, tests/board-page.test.mjs, tests/remote.test.mjs. Update them to the new design: send the token as the x-watch-token header (or the cookie) on non-page routes, keep every security assertion (wrong token refused, read-only, host checks, remote login checks, rotate invalidates the old token, etc.), and replace assertions that links CONTAIN the token with assertions that they do NOT and that the page strips t. In tests/board-nav.test.mjs the test 'the nav script and the project page use plain links with the token (no history tricks)' asserted the old design: rewrite it to assert the new one (no t= in links, BoardLib.watchToken used). /nav/* 302 targets may still carry the board's own token (an initial page load). IMPORTANT: if a failure is NOT about how the token is passed (a real behavior regression in tools/watch-server.mjs, tools/remote.mjs or the board scripts), do not weaken the test: list it in your notes as 'REAL BUG: <test> <why>' and leave that assertion failing. Edit only the listed test files. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/watch-leftovers.test.mjs tests/watch-review-fixes.test.mjs tests/watch-server.test.mjs tests/watch-ui.test.mjs tests/board-inbox.test.mjs tests/board-live-chip.test.mjs tests/board-live.test.mjs tests/board-nav.test.mjs tests/board-page.test.mjs tests/remote.test.mjs tests/watch-token-urls.test.mjs`."
+    }
+  ]
+}

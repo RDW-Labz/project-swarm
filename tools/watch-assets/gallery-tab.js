@@ -54,7 +54,7 @@ function commandRow(text) {
 }
 
 function shotUrl(id, kind) {
-  return '/shot/' + encodeURIComponent(id) + '/' + kind + '?t=' + encodeURIComponent(SW.token || '');
+  return '/shot/' + encodeURIComponent(id) + '/' + kind;
 }
 
 function shotFigure(screen, kind, label, has) {

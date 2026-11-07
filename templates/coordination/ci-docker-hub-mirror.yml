@@ -1,0 +1,137 @@
+# Copy to .github/workflows/ci-docker-hub-mirror.yml in the target project.
+# Pulls Docker Hub service images through a registry mirror with retries and caches tarballs.
+# Optional: set repository variable MIRROR or pass workflow input mirror (default mirror.gcr.io).
+# Optional: set secrets.DOCKERHUB_USERNAME and secrets.DOCKERHUB_TOKEN only if you authenticate
+# to Docker Hub for higher rate limits; this template never embeds credentials.
+name: CI Docker Hub mirror cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      mirror:
+        description: Registry mirror host for Docker Hub pulls
+        required: false
+        default: mirror.gcr.io
+      image_list:
+        description: Newline-separated images (overrides IMAGE_LIST env when non-empty)
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  MIRROR: ${{ github.event.inputs.mirror != '' && github.event.inputs.mirror || 'mirror.gcr.io' }}
+
+jobs:
+  mirror-and-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image list
+        id: resolve
+        shell: bash
+        env:
+          IMAGE_LIST: ${{ vars.IMAGE_LIST }}
+          INPUT_LIST: ${{ github.event.inputs.image_list }}
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-image-cache/tars
+          list="${INPUT_LIST:-}"
+          if [ -z "$list" ] && [ -n "${IMAGE_LIST:-}" ]; then
+            list="$IMAGE_LIST"
+          fi
+          if [ -z "$list" ] && [ -f docker-compose.yml ]; then
+            list="$(grep -E '^[[:space:]]*image:' docker-compose.yml | sed -E 's/^[[:space:]]*image:[[:space:]]*//' | tr -d '\"' || true)"
+          fi
+          if [ -z "$list" ]; then
+            echo "Set workflow input image_list, repository variable IMAGE_LIST, or docker-compose.yml image: lines." >&2
+            exit 1
+          fi
+          printf '%s\n' "$list" | sed '/^[[:space:]]*$/d' | sort -u > .ci-image-cache/images.txt
+          echo "count=$(wc -l < .ci-image-cache/images.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Compute cache key (images + digests file when present)
+        id: cachekey
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(sha256sum .ci-image-cache/images.txt | awk '{print $1}')"
+          if [ -f .ci-image-cache/digests.txt ]; then
+            base="${base}-$(sha256sum .ci-image-cache/digests.txt | awk '{print $1}')"
+          fi
+          echo "key=docker-hub-mirror-${base}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: .ci-image-cache/tars
+          key: ${{ steps.cachekey.outputs.key }}
+          restore-keys: |
+            docker-hub-mirror-
+
+      - name: Pull images through mirror (with backoff)
+        shell: bash
+        env:
+          MIRROR: ${{ env.MIRROR }}
+          # Uncomment and set repository secrets if authenticated Hub pulls are required:
+          # DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          # DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pull_with_retry() {
+            local image="$1"
+            local attempt=1
+            local delay=5
+            local max_attempts=5
+            while [ "$attempt" -le "$max_attempts" ]; do
+              if docker pull "$image"; then
+                return 0
+              fi
+              echo "pull failed for $image (attempt $attempt/$max_attempts); sleeping ${delay}s" >&2
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+
+          if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin docker.io
+          fi
+
+          : > .ci-image-cache/digests.txt
+          while IFS= read -r img; do
+            [ -z "$img" ] && continue
+            mirrored="$img"
+            case "$img" in
+              ghcr.io/*|quay.io/*|gcr.io/*) mirrored="$img" ;;
+              docker.io/*)
+                path="${img#docker.io/}"
+                case "$path" in
+                  library/*) mirrored="${MIRROR}/${path}" ;;
+                  */*) mirrored="${MIRROR}/${path}" ;;
+                  *) mirrored="${MIRROR}/library/${path}" ;;
+                esac
+                ;;
+              */*)
+                case "$img" in
+                  *.*/*|*:*/*) mirrored="${MIRROR}/${img}" ;;
+                  *) mirrored="${MIRROR}/${img}" ;;
+                esac
+                ;;
+              *) mirrored="${MIRROR}/library/${img}" ;;
+            esac
+            safe="$(echo "$mirrored" | tr '/:@' '___')"
+            tar_path=".ci-image-cache/tars/${safe}.tar"
+            if [ -f "$tar_path" ]; then
+              echo "cache hit $mirrored"
+              continue
+            fi
+            pull_with_retry "$mirrored"
+            digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$mirrored" 2>/dev/null || true)"
+            if [ -n "$digest" ]; then
+              echo "$digest" >> .ci-image-cache/digests.txt
+            fi
+            docker save -o "$tar_path" "$mirrored"
+          done < .ci-image-cache/images.txt
+          sort -u .ci-image-cache/digests.txt -o .ci-image-cache/digests.txt

@@ -1,0 +1,474 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Swarm burst runner control API",
+    "version": "1.0.0",
+    "description": "Contract for cloud CPU burst runners that register with the swarm service, send periodic heartbeats, return leases, and submit completed CPU job output. Local runners remain preferred; this API is used only for opted-in burst work."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The machine-local swarm service control plane"
+    }
+  ],
+  "tags": [
+    {
+      "name": "runners",
+      "description": "Runner registration and liveness"
+    },
+    {
+      "name": "leases",
+      "description": "Lease lifecycle and CPU result delivery"
+    }
+  ],
+  "x-tickets": {
+    "POST /api/burst/runners/register": ["T-0401"],
+    "POST /api/burst/runners/{runnerId}/heartbeat": ["T-0401"],
+    "POST /api/burst/leases/{leaseId}/return": ["T-0401"],
+    "POST /api/burst/leases/{leaseId}/cpu-results": ["T-0401"]
+  },
+  "paths": {
+    "/api/burst/runners/register": {
+      "post": {
+        "tags": ["runners"],
+        "operationId": "registerBurstRunner",
+        "summary": "Register a burst runner with the control plane",
+        "description": "Claims a runner id (or confirms an existing registration) and advertises capabilities. A duplicate registration with conflicting capabilities returns 409.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RunnerRegistrationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Runner registered",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RunnerRegistrationResponse" }
+              }
+            }
+          },
+          "200": {
+            "description": "Runner already registered with matching capabilities",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RunnerRegistrationResponse" }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/burst/runners/{runnerId}/heartbeat": {
+      "post": {
+        "tags": ["runners"],
+        "operationId": "burstRunnerHeartbeat",
+        "summary": "Periodic liveness and lease refresh",
+        "description": "Extends active leases when the fencing token matches. Missed heartbeats cause leases to return to the local queue.",
+        "parameters": [
+          { "$ref": "#/components/parameters/RunnerId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RunnerHeartbeatRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Heartbeat accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RunnerHeartbeatResponse" }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/burst/leases/{leaseId}/return": {
+      "post": {
+        "tags": ["leases"],
+        "operationId": "returnBurstLease",
+        "summary": "Release a claimed unit of work without CPU output",
+        "description": "Returns a lease to the pool when the runner cannot complete work (shutdown, preemption, or explicit release). Idempotent when the same runner repeats the same return.",
+        "parameters": [
+          { "$ref": "#/components/parameters/LeaseId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LeaseReturnRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lease returned",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LeaseReturnResponse" }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/burst/leases/{leaseId}/cpu-results": {
+      "post": {
+        "tags": ["leases"],
+        "operationId": "submitBurstCpuResults",
+        "summary": "Submit completed CPU job output for a lease",
+        "description": "Records stdout, stderr, exit status, and artifact references for a finished burst CPU job. Duplicate submission for the same lease returns 409.",
+        "parameters": [
+          { "$ref": "#/components/parameters/LeaseId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CpuResultSubmissionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Results recorded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CpuResultSubmissionResponse" }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "RunnerId": {
+        "name": "runnerId",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/RunnerId" }
+      },
+      "LeaseId": {
+        "name": "leaseId",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/LeaseId" }
+      }
+    },
+    "schemas": {
+      "RunnerId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Stable burst runner identifier assigned at registration."
+      },
+      "LeaseId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Identifier for one claimed ticket lease."
+      },
+      "TicketId": {
+        "type": "string",
+        "pattern": "^T-[0-9]{4}$",
+        "description": "Swarm ticket id bound to the lease."
+      },
+      "FencingToken": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Monotonic token that must match the current lease claim."
+      },
+      "RunnerKind": {
+        "type": "string",
+        "enum": ["cpu", "gpu"]
+      },
+      "RunnerStatus": {
+        "type": "string",
+        "enum": ["idle", "busy", "draining", "offline"]
+      },
+      "LeaseReturnReason": {
+        "type": "string",
+        "enum": ["completed", "failed", "expired", "released", "preempted"]
+      },
+      "RunnerCapabilities": {
+        "type": "object",
+        "required": ["kind", "maxConcurrentJobs"],
+        "properties": {
+          "kind": { "$ref": "#/components/schemas/RunnerKind" },
+          "maxConcurrentJobs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Optional selector labels (region, instance type, etc.)."
+          },
+          "swarmVersion": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Swarm release the runner agent was built against."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunnerRegistrationRequest": {
+        "type": "object",
+        "required": ["runnerId", "capabilities", "registeredAt"],
+        "properties": {
+          "runnerId": { "$ref": "#/components/schemas/RunnerId" },
+          "capabilities": { "$ref": "#/components/schemas/RunnerCapabilities" },
+          "registeredAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Client-observed registration time (ISO 8601)."
+          },
+          "machineId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional cloud instance or host fingerprint."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunnerRegistrationResponse": {
+        "type": "object",
+        "required": [
+          "runnerId",
+          "capabilities",
+          "registeredAt",
+          "heartbeatIntervalSeconds",
+          "fencingToken"
+        ],
+        "properties": {
+          "runnerId": { "$ref": "#/components/schemas/RunnerId" },
+          "capabilities": { "$ref": "#/components/schemas/RunnerCapabilities" },
+          "registeredAt": { "type": "string", "format": "date-time" },
+          "heartbeatIntervalSeconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 120,
+            "description": "Server-requested heartbeat period in seconds."
+          },
+          "fencingToken": { "$ref": "#/components/schemas/FencingToken" }
+        },
+        "additionalProperties": false
+      },
+      "RunnerHeartbeatRequest": {
+        "type": "object",
+        "required": ["runnerId", "fencingToken", "observedAt", "status"],
+        "properties": {
+          "runnerId": { "$ref": "#/components/schemas/RunnerId" },
+          "fencingToken": { "$ref": "#/components/schemas/FencingToken" },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Client timestamp for this heartbeat."
+          },
+          "status": { "$ref": "#/components/schemas/RunnerStatus" },
+          "activeLeaseIds": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/LeaseId" },
+            "description": "Leases the runner believes it still holds."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunnerHeartbeatResponse": {
+        "type": "object",
+        "required": ["runnerId", "acknowledgedAt", "nextHeartbeatBy", "fencingToken"],
+        "properties": {
+          "runnerId": { "$ref": "#/components/schemas/RunnerId" },
+          "acknowledgedAt": { "type": "string", "format": "date-time" },
+          "nextHeartbeatBy": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Deadline by which the next heartbeat must arrive."
+          },
+          "fencingToken": { "$ref": "#/components/schemas/FencingToken" },
+          "revokedLeaseIds": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/LeaseId" },
+            "description": "Leases the server has reclaimed (expired or stolen)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LeaseReturnRequest": {
+        "type": "object",
+        "required": ["leaseId", "runnerId", "fencingToken", "reason", "returnedAt"],
+        "properties": {
+          "leaseId": { "$ref": "#/components/schemas/LeaseId" },
+          "runnerId": { "$ref": "#/components/schemas/RunnerId" },
+          "fencingToken": { "$ref": "#/components/schemas/FencingToken" },
+          "ticketId": { "$ref": "#/components/schemas/TicketId" },
+          "reason": { "$ref": "#/components/schemas/LeaseReturnReason" },
+          "returnedAt": { "type": "string", "format": "date-time" },
+          "message": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Optional human-readable detail for logs."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LeaseReturnResponse": {
+        "type": "object",
+        "required": ["leaseId", "ticketId", "reason", "returnedAt", "released"],
+        "properties": {
+          "leaseId": { "$ref": "#/components/schemas/LeaseId" },
+          "ticketId": { "$ref": "#/components/schemas/TicketId" },
+          "reason": { "$ref": "#/components/schemas/LeaseReturnReason" },
+          "returnedAt": { "type": "string", "format": "date-time" },
+          "released": {
+            "type": "boolean",
+            "description": "True when the ticket returned to the ready queue."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CpuResultArtifact": {
+        "type": "object",
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Relative path within the job workspace."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "CpuResultPayload": {
+        "type": "object",
+        "required": ["exitCode", "completedAt"],
+        "properties": {
+          "exitCode": {
+            "type": "integer",
+            "description": "Process exit code from the CPU job."
+          },
+          "stdout": {
+            "type": "string",
+            "maxLength": 1048576,
+            "description": "Captured standard output (truncated server-side if larger)."
+          },
+          "stderr": {
+            "type": "string",
+            "maxLength": 1048576,
+            "description": "Captured standard error (truncated server-side if larger)."
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "artifacts": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/CpuResultArtifact" }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CpuResultSubmissionRequest": {
+        "type": "object",
+        "required": ["leaseId", "runnerId", "fencingToken", "ticketId", "result"],
+        "properties": {
+          "leaseId": { "$ref": "#/components/schemas/LeaseId" },
+          "runnerId": { "$ref": "#/components/schemas/RunnerId" },
+          "fencingToken": { "$ref": "#/components/schemas/FencingToken" },
+          "ticketId": { "$ref": "#/components/schemas/TicketId" },
+          "result": { "$ref": "#/components/schemas/CpuResultPayload" }
+        },
+        "additionalProperties": false
+      },
+      "CpuResultSubmissionResponse": {
+        "type": "object",
+        "required": ["leaseId", "ticketId", "accepted", "recordedAt"],
+        "properties": {
+          "leaseId": { "$ref": "#/components/schemas/LeaseId" },
+          "ticketId": { "$ref": "#/components/schemas/TicketId" },
+          "accepted": {
+            "type": "boolean",
+            "description": "False when results were stored but flagged for replay."
+          },
+          "recordedAt": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error", "message"],
+        "properties": {
+          "error": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Machine-readable error code."
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Human-readable explanation."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "responses": {
+      "Conflict": {
+        "description": "The request conflicts with current runner or lease state (duplicate registration, stale fencing token, or lease already closed).",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The runner or lease was not found.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      }
+    }
+  }
+}

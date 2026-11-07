@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "reviewtrain2delta2",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner rule: Opus round-3 delta review of train 2 blocker fix",
+   "prompt": "Round-3 delta review of release train 2 of Project Swarm (security, money). Round 2 (your delta review, coordination/review/train2-delta-review.json in context) closed all 3 round-1 blockers and found 1 NEW blocker: cd targets resolved lexically, and options such as -P silently skipped, in tools/shell-writes.mjs. coordination/review/train2-delta2.diff is the diff from round 2's head 509ea75c to the new head. Changes: (A) tools/shell-writes.mjs: one shared component-wise resolver (omResolvePath) now used by both redirect targets (omWriteTargetRel) and cd targets (omResolveCd, omCdTargetOk, omCdRootTarget). It lstats each component, follows symlinked components physically, refuses '..' after a symlinked component, and sets local.cwd to the physical path. Every cd option (any arg starting with '-', including -P, -L, -e, -@, --) is refused. A redirect leaf that is a symlink, or a regular file with nlink > 1, is refused. (B) Round-2 follow-ups: tools/api-adapters.mjs selfHosted = !isHostedLambdaInference(env), so only loopback origins count as self-hosted and tests/adapters.test.mjs is updated to match. tools/swarm.mjs: a '-lane-paused' error at admission holds the job (heldReason lane-paused, nothing sent) instead of failing it, recheckResumeSpend re-checks lane-paused jobs too, and pickJobRoute failures on resume become resume-over-cap. Not changed (deferred follow-ups): executeApi paid sends outside the runner with no reservation, and a combined resume pre-check across held jobs.\nPass bar (owner): confirm the round-2 blocker is CLOSED (say how, with a line) or still open, including your exploits `cd -P docs/plans/L/.. && echo > project/daily-limit.json` and plain `cd docs/plans/L/..` through a symlink into .swarm/. Find NEW blockers introduced by these changes: a guard or cap bypass, money spent past a cap or on a paused lane, a key reaching a paused lane, a held job resuming without fresh checks, a crash or hang on a normal path, or a regression that blocks ordinary orchestrator commands such as `cd <worktree> && node tools/x.mjs 2>&1 | tail`. Everything else is a follow-up.\nWrite ONLY coordination/review/train2-delta2-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"round2\":[{\"blocker\":1,\"status\":\"closed\"|\"open\",\"evidence\":\"\"}],\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail if the round-2 blocker is open or blockers is non-empty.",
+   "context": [
+    "coordination/review/train2-delta2.diff",
+    "coordination/review/train2-delta-review.json",
+    "tools/shell-writes.mjs",
+    "tools/api-adapters.mjs",
+    "tools/swarm.mjs",
+    "tools/paid-lane-pause.mjs",
+    "tools/spend.mjs"
+   ],
+   "outputs": [
+    "coordination/review/train2-delta2-review.json"
+   ],
+   "resultFile": "coordination/review/train2-delta2-review.json",
+   "timeoutMs": 2400000
+  }
+ ]
+}

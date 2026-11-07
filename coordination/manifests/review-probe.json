@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-probe",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "local lane probe reads the Keychain key for an opt-in keyed verification",
+   "type": "review",
+   "prompt": "Static security review of coordination/review/probefix.diff (tools/local-lane.mjs local lane probe: 401 and 403 now count as reachable-but-auth-required instead of unreachable; an opt-in swarm doctor local --probe-local --verify-key reads the Keychain key at call time and sends it to the configured baseUrl). Promises: the plain probe never sends a key; the keyed verification sends the key only to the configured endpoint baseUrl (never a URL from a manifest, an argument or a redirect), uses redirect error, never prints, logs or records the key or the Authorization header (also in error text and in thrown messages), rejects non-loopback http, reports only a boolean and the HTTP status; 401, 403 and 404 treated as reachable cannot make a dead or hostile endpoint look healthy in a way that sends sensitive jobs somewhere unintended (check the router's sensitive rules for local endpoints: sensitive jobs only on loopback); a probe response body is cancelled and never parsed into output. Verdict PASS or FAIL with ranked findings, no exploit commands.",
+   "context": [
+    "coordination/review/probefix.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}

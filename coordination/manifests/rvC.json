@@ -1,0 +1,32 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rvC",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/needs-you-triage.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tests/needs-you-triage.test.mjs"
+   ],
+   "outputs": [
+    "tools/needs-you-triage.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tests/needs-you-triage.test.mjs"
+   ],
+   "prompt": "Fix Opus review findings in the Needs-you triage loop (tools/needs-you-triage.mjs and its production wiring), tests added to tests/needs-you-triage.test.mjs (fakes only). 1 HIGH classification must fail toward the owner: invert the default. An item is 'fixable' ONLY when its kind and subtype are on an explicit allowlist (split-park, integrate, integrate-checkout, and ci-failure whose cause is a known test failure) AND its text contains none of the risky words (case-insensitive, word fragments included): spend, cap, budget, billing, bill, payment, invoice, price, cost, money, dollar, key, token, secret, credential, password, login, auth, permission, deploy, production, prod, live site, merge to main, release, subscription, quota, security, scan, leak. Anything else (unknown kinds, non-object items, missing text, ci-failure about secrets or security scans) is 'owner'. The ci-failure, integrate and split-park kinds are not exempt from the keyword check. 2 HIGH nothing is wired in production: wire real handlers and addGoal in tools/autopilot-ready-deps.mjs (the production deps object; do not edit tools/swarm.mjs): handlers for split-park (retry the split ingest or repair for the run named by the item through the existing scope commands, never by executing item text), integrate and integrate-checkout (retry integration of the named run when the checkout check passes), ci-failure with a known cause; addGoal writes a backlog goal through the existing backlog function. If no handler exists for an item's kind, SKIP triage for that item (leave it open, count nothing); close an item only after the handler succeeded or after addGoal returned an id (never claim a goal was opened when it was not). 7 MEDIUM run classification BEFORE the one-hour no-reopen rule, and never auto-close an owner-class item through that rule or any other. 8 MEDIUM the swarm-fix goal text must use the project's basename (or a short hash), never the absolute path; run sanitizeText over the whole goal; keep only the last error line (truncated to 300 chars) and the attempt count; never include item text beyond a sanitised 200-char summary; if the project-swarm root cannot be found, do NOT write the goal into the app repo: leave the item open as a fixable-but-stuck item and log it once (no double SWARM-FIX prefix). 10 LOW build the handlers map with Object.create(null) and a Object.hasOwn check plus an allowlist of kinds, so kinds such as constructor or toString never match. 11 LOW protect the attempt state with a lock (a lockfile with an owner pid and a stale timeout) and fail the triage pass (do nothing) when the state file exists but cannot be parsed, instead of silently resetting counts. 12 LOW markDone must close the human inbox item (the inbox done or resolve path used by swarm resolve), not the backlog function. Tests: owner for each risky word and for unknown kinds, fixable only for allowlisted clean items, the production deps provide handlers (a fake item is handled through them), no goal is claimed without an id, reopen rule never closes an owner item, goal text has no absolute path or secrets, corrupt state fails the pass, lock excludes a concurrent pass, prototype-name kinds are owner. Keep every existing test passing (tests/needs-you-triage.test.mjs, tests/autopilot-*.test.mjs, tests/inbox*.test.mjs).",
+   "ignoreTests": [
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}

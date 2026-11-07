@@ -1,0 +1,68 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseA",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Two fixes for the claude shell pause (tools/claude-shell.mjs claudeShellPausedProblem and resolveWorkerKey). (1) tools/lanes.mjs: resolveLanes rejects the machine setting lanes.claude.shellPaused with lanes-invalid unknown field, which stops every run; accept shellPaused (must be true or false, validated like the paused field) in the claude lane fields. Test: resolveLanes with that setting true and false works, and a non-boolean value is refused. (2) tools/swarm/core-32.mjs line ~28 workerKeyGuard only reads the worker key to scan run output for leaks and must keep working while the lane is paused: split an internal exported readWorkerKey in tools/claude-shell.mjs with NO pause check (same env-then-keychain read, same shape check); keep resolveWorkerKey (with the pause check, calling readWorkerKey) for dispatch only; use readWorkerKey in workerKeyGuard. Test: with the anthropic lane paused, workerKeyGuard still resolves the key through an injected exec while resolveWorkerKey refuses. Build fake key values at run time (repeat a short string), no credential-looking literals, never read the real keychain (inject exec). STANDING TEST RULE: per-test timeout at most 60 s. New tests go in tests/claude-shell-paused-lanes.test.mjs.",
+   "context": [
+    "tools/claude-shell.mjs",
+    "tools/lanes.mjs",
+    "tools/swarm/core-32.mjs"
+   ],
+   "outputs": [
+    "tools/claude-shell.mjs",
+    "tools/lanes.mjs",
+    "tools/swarm/core-32.mjs",
+    "tests/claude-shell-paused-lanes.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/api-workers.test.mjs",
+    "tests/batch-b-eval.test.mjs",
+    "tests/board-accuracy-card.test.mjs",
+    "tests/board-accuracy-page.test.mjs",
+    "tests/claude-shell-paused.test.mjs",
+    "tests/claude-shell.test.mjs",
+    "tests/field-lesson-t81-adapters.test.mjs",
+    "tests/field-lessons-batch-e.test.mjs",
+    "tests/field-lessons-batch-f.test.mjs",
+    "tests/field-lessons-batch-g.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-q.test.mjs",
+    "tests/field-lessons-batch-t2.test.mjs",
+    "tests/field-lessons-batch-v.test.mjs",
+    "tests/field-lessons-batch-w.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/gpu.test.mjs",
+    "tests/helpers/board-accuracy-fixture.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/lane-pause-isolation.test.mjs",
+    "tests/lanes-timer-leak.test.mjs",
+    "tests/lanes.test.mjs",
+    "tests/leads-run.test.mjs",
+    "tests/local-lane-probe.test.mjs",
+    "tests/local-lane-review.test.mjs",
+    "tests/local-lane.test.mjs",
+    "tests/machine-share.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/shell-loopback.test.mjs",
+    "tests/shell-scratch.test.mjs",
+    "tests/shell-setup.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/state-guard.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/tunnel.test.mjs",
+    "tests/watch-ui.test.mjs",
+    "tests/worker-skills.test.mjs"
+   ]
+  }
+ ]
+}

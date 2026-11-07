@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: Apache-2.0
+// swarm-board: board and watch command surface. Currently re-exports from watch-cli.mjs; the board code has not been moved here yet (T-0023 is partial).
+
+export {
+  WATCH_USAGE,
+  findRunId,
+  jobReportLoader,
+  runSnapshotLoader,
+  makeRunServer,
+  shouldAutoWatch,
+  startWatchBackground,
+  boardFile,
+  safeEnvSubset,
+  serverMode,
+  argvForRemoteServe,
+  registryModeFields,
+  serverRecordVersion,
+  readBoardFile,
+  writeBoardFile,
+  boardProjectUrl,
+  ownedBoardDone,
+  closeOwnedBoard,
+  ensureBoard,
+  runNav,
+  stripMoney,
+  readOwnerAudit,
+  approveProposedTicketOnBoard,
+  boardOwnerApply,
+  createBoardApi,
+  startBoardServer,
+  runWatchCommand,
+  runGalleryCommand,
+} from './watch-cli.mjs';

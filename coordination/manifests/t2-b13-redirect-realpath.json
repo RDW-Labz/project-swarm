@@ -1,0 +1,60 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "b13redirect",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Train 2, bug B13 (guard, fails open). tools/shell-writes.mjs omWriteTargetRel (used by omWordsRedirectManifestArea to stop orchestrator shell redirects into coordination/manifests/ or .swarm/) resolves the ROOT's real path (fs.realpathSync.native(ctx.root)) but compares it with the TARGET's unresolved absolute path. When the project root sits behind a symlink (macOS /tmp -> /private/tmp, or any symlinked checkout) and the target is given as an absolute or cwd-relative path through the symlinked form, path.relative(rootReal, abs) starts with '..', the function returns null, and a redirect into the manifest area is NOT detected. Fix: resolve the target the same way as the root before comparing: realpath of the nearest existing ancestor of the target (the file itself may not exist yet), then re-append the missing tail; also resolve ctx.cwd through realpath before resolving a relative target. tools/orchestrator-allow.mjs already has projectRelOfAbs / orchestratorWriteAllowed doing this (read it; reuse an exported helper if one fits, otherwise implement the same nearest-existing-parent logic locally). Keep returning null for a target genuinely outside the root and for $-expanded words. Also make the '..' test per segment (rel === '..' or rel.startsWith('../')) so a real name like '..foo' is not treated as outside. Tests in NEW tests/om-redirect-realpath.test.mjs (first import: import './_isolate-config.mjs';): create a temp project, a symlink pointing to it, and call orchestratorModeCommandAllowed with ctx.root set to the SYMLINK path and the command `echo x > <real path>/coordination/manifests/a.json`, then with root = real path and the target through the symlink, then with a relative target and cwd given through the symlink: all must be refused (false). A redirect to a normal allowed path (e.g. docs/plans/x.md) is still allowed in the same setups. Use the orchestrator-mode fixture pattern from tests/orchestrator-mode.test.mjs. The ignored tests cover other guard behaviour, which must not change; the coordinator runs the main ones as checks.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-mode.test.mjs"
+   ],
+   "outputs": [
+    "tools/shell-writes.mjs",
+    "tests/om-redirect-realpath.test.mjs"
+   ],
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/auto-approve.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/om-manifest-guard.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "name": "redirect",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/om-redirect-realpath.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/om-manifest-guard.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,37 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseB",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Validate refusal for the claude shell pause. tools/swarm/core-31.mjs: a manifest that has any job in shell mode (find where shell presets are expanded, expandShellPreset near line 259, and where manifest validation can fail a job) must be refused when claudeShellPausedProblem(loadLocalConfig({ env })) from tools/claude-shell.mjs returns text; use that text in the refusal so a paused shell manifest fails at validate, before any run. A plain claude job must still validate while paused. Tests in tests/claude-shell-paused-validate.test.mjs: validate refuses a shell job while the anthropic lane is paused (isolated config), passes when not paused, passes a plain claude job while paused. Build fake key values at run time (repeat a short string), no credential-looking literals, never read the real keychain (inject exec). STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/swarm/core-31.mjs",
+    "tools/claude-shell.mjs",
+    "tools/local-config.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-31.mjs",
+    "tests/claude-shell-paused-validate.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/cache-context-normalize.test.mjs",
+    "tests/guard-backup-fixes3.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/ignore-tests-reason.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/run-cleanup.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ]
+  }
+ ]
+}

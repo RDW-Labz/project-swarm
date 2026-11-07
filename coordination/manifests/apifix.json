@@ -1,0 +1,48 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "apifix",
+   "agent": "auto",
+   "prompt": "Six existing tests fail after the API-worker routing change (they encode the OLD behavior; the owner's new behavior is: Anthropic machine-wide day cap $25 (was $20) in stop mode, lane 'codex' paused by default, new job-type route order with local, Haiku, Sonnet for hard builds and reviews, Opus only for security reviews, Cursor stays). Failing tests: in tests/job-types.test.mjs: 'presets are frozen and match the contract defaults', 'unknown types and forged internal routes refuse', 'validateProject returns skill warnings and the applied prompt before routing'; in tests/anthropic-lane.test.mjs: 'machine-wide total and day caps refuse before a request is sent'; in tests/lanes.test.mjs (or the lanes test that has them): 'defaults are complete, deeply frozen, and independently resolved' and 'config precedes manifest; lane and backoff fields merge independently'. Run each, read the assertion, and decide: if the failure is explained by the intended change above, update the test's expectation (keep the test's purpose, add a one-line comment 'owner decision 2026-10-22' next to the changed number/order/default); if a failure is NOT explained by the intended change, fix the code so the old behavior holds and report it in your final summary. Do not delete or skip a test. Then run tests/job-types.test.mjs tests/anthropic-lane.test.mjs tests/lanes.test.mjs tests/lanes-rule.test.mjs tests/lanes-run.test.mjs tests/router.test.mjs tests/router-ready.test.mjs tests/spend.test.mjs tests/spend-run.test.mjs tests/api-workers.test.mjs and every tests/batch-*.test.mjs: all must pass.",
+   "context": [
+    "tools/job-types.mjs",
+    "tools/anthropic.mjs",
+    "tools/lanes.mjs",
+    "tools/router.mjs",
+    "tests/job-types.test.mjs",
+    "tests/anthropic-lane.test.mjs",
+    "tests/lanes.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/job-types.mjs",
+    "tools/anthropic.mjs",
+    "tools/lanes.mjs",
+    "tests/job-types.test.mjs",
+    "tests/anthropic-lane.test.mjs",
+    "tests/lanes.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/batch-run.test.mjs",
+    "tests/board-accuracy-card.test.mjs",
+    "tests/board-accuracy-page.test.mjs",
+    "tests/gpu.test.mjs",
+    "tests/helpers/board-accuracy-fixture.mjs",
+    "tests/lanes-timer-leak.test.mjs",
+    "tests/leads-run.test.mjs",
+    "tests/machine-share.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/watch-ui.test.mjs"
+   ],
+   "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+  }
+ ]
+}

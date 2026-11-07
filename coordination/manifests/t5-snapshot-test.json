@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-snapshot-test",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "The Command Center snapshot no longer carries spendUsd (money is removed from browser output), but tests/command-center-snapshot.test.mjs still expects it, so 'buildCommandCenterSnapshot maps labelled stats and project cards' fails. Update ONLY that test: drop the spendUsd / Spend expectations for machine stats and project cards, assert instead that the snapshot body contains no 'usd', 'spend' or 'cost' fields, and keep every other assertion (projects, agents, needs-you, done, metres, sources) unchanged. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-snapshot.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report counts.",
+      "context": ["tests/command-center-snapshot.test.mjs", "tools/command-center-snapshot.mjs"],
+      "outputs": ["tests/command-center-snapshot.test.mjs"],
+      "timeoutMs": 1200000
+    }
+  ],
+  "checks": [
+    { "name": "t5-snapshot-test", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/command-center-snapshot.test.mjs", "tests/command-center-routes-flag.test.mjs"] }
+  ]
+}

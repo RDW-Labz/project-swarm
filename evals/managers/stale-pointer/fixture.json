@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "id": "stale-pointer",
+  "ticket": "T-0214",
+  "manager": "version",
+  "seededFailure": "stale-pointer",
+  "installVersion": "1.154.0",
+  "pointers": [
+    {
+      "project": "swarm-practice",
+      "pointerVersion": "1.152.0",
+      "releasesBehind": 2
+    }
+  ],
+  "expected": {
+    "codes": ["stale-pointer"]
+  }
+}

@@ -1,0 +1,55 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "jobs": [
+  {
+   "id": "ccfixhive",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/design/command-center-mockup/shared.css",
+    "docs/design/review-rubric.md",
+    "docs/design/command-center-mockup/hive.html"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css"
+   ],
+   "prompt": "Rework docs/design/command-center-mockup/hive.html (and shared.css for shared rules). Fixes in priority order: 1) phone at 390 px (stack the cards in a 2-column grid below the ring, wrap the stats row, no horizontal overflow, nothing overlapping the ring, 44 px targets). 2) cards: outlined glow border, 3 rows plus a progress bar, 4 to 5 times larger, placed clear of the ring; move the toolgate popover so it never covers card 01. 3) streams: 150+ particles per link with comet heads, additive blending, gradient trails along ring-to-card paths (30 fps canvas, off in reduced motion). 4) ring: a double ring with bloom shadow, orbiting spark particles, a large italic serif OPUS with a script 5.5 in the centre; the ring must not be cropped at desktop 1440x900. 5) typography: the display wordmark in a serif/script feel, calmer labels. 6) the bottom panels must be visible without breaking the layout (a compact strip is fine). Round 17 independent grader scores were Hive 2.8 and Cockpit 2.6 against a 4.5 target; fix the listed problems and judge your own result by opening the reference image and comparing. Keep: no external requests, ASCII only, reduced-motion still, labelled numbers (one page-level 'illustrative values' banner and footer note instead of a SAMPLE chip on every row; keep a chip only on numbers not in the target; label the compaction 14 lines and the 42 peak). ",
+   "ignoreTests": [
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/board.test.mjs",
+    "tests/field-lessons-batch-ai-runtime.test.mjs",
+    "tests/field-lessons-batch-f.test.mjs",
+    "tests/lesson-39-eval.test.mjs",
+    "tests/lesson-40-eval.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/scheduling.test.mjs",
+    "tests/scope-gate-list.test.mjs",
+    "tests/scope-integrity.test.mjs",
+    "tests/scope-ownership.test.mjs",
+    "tests/scope-split-repair-loop.test.mjs",
+    "tests/split-repair.test.mjs"
+   ]
+  },
+  {
+   "id": "ccfixcock",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/design/command-center-mockup/shared.css",
+    "docs/design/review-rubric.md",
+    "docs/design/command-center-mockup/cockpit.html"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/cockpit.html"
+   ],
+   "prompt": "Rework docs/design/command-center-mockup/cockpit.html. Fixes in priority order: 1) phone at 390 px: header, headline and the now-loading box fit the width, tabbed Cockpit, no horizontal overflow. 2) layout: two mirrored columns with a staircase indent, a central hero and the now-loading box, no empty middle gap; everything (loop strip, render stream, stack tiles) visible at 1440x900 or clearly reachable by one short scroll. 3) fix the row IDX overlap and name truncation, restore check marks (use an inline SVG check, not the letter v). 4) the mascot: a large block-pixel creature drawn in CSS or SVG (not ASCII) with an orbit ring and a floor shadow; keep the orbit ring off the text. 5) header typography: heavy condensed headline, larger meta line, a gap between LIVE SCAN and the count, tabular-nums, fix the run-together SAMPLEOFSAMPLE label. Round 17 independent grader scores were Hive 2.8 and Cockpit 2.6 against a 4.5 target; fix the listed problems and judge your own result by opening the reference image and comparing. Keep: no external requests, ASCII only, reduced-motion still, labelled numbers (one page-level 'illustrative values' banner and footer note instead of a SAMPLE chip on every row; keep a chip only on numbers not in the target; label the compaction 14 lines and the 42 peak). ",
+   "ignoreTests": []
+  }
+ ]
+}

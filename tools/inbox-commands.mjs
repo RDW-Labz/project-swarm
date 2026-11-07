@@ -2,17 +2,19 @@
 // `swarm inbox | done | decide | decision | backlog`: the owner's side of Phase 10c. Plain commands, no model.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { appendEvent, readJournal, sanitizeText, openItems } from './journal.mjs';
+import { appendEvent, readJournal, sanitizeText, openItems, integrateBlockerKindFromId, integrateBlockerResolutionEvent, integrateBlockerRunIdFromId } from './journal.mjs';
+import { isProtectedTopic } from './board-action-guard.mjs';
 import { collectInbox, formatInbox, markDone, decide } from './inbox.mjs';
 import { readStore, updateGroup, groupAsState } from './human-jobs.mjs';
 import { readBacklog, addGoal, removeGoal } from './backlog.mjs';
+import { supersededSplitParks } from './split-park-supersede.mjs';
 
 const USAGE = {
   inbox: 'Usage: swarm inbox [--json] [--all]\n',
   done: 'Usage: swarm done ID\n',
   decide: 'Usage: swarm decide ID CHOICE\n',
-  resolve: 'Usage: swarm resolve BLOCKER_ID   (closes a blocker you have dealt with; swarm inbox shows the ids)\n',
-  decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID]\n',
+  resolve: 'Usage: swarm resolve BLOCKER_ID | swarm resolve RUN_ID --handled\n',
+  decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID] [--board-safe]\n',
   backlog: 'Usage: swarm backlog | backlog add "GOAL" [--paths a/,b/] [--max-usd N] | backlog remove ID\n',
 };
 const bad = command => ({ stdout: USAGE[command], exitCode: 1 });
@@ -59,7 +61,7 @@ async function inboxRoots(root, installRoot, all) {
   try { const value = JSON.parse(await fs.readFile(path.join(installRoot, '.swarm-projects.json'), 'utf8')); registry = Array.isArray(value) ? value : []; } catch { registry = []; }
   for (const entry of registry) {
     if (typeof entry !== 'string' || !path.isAbsolute(entry) || roots.includes(entry)) continue;
-    try { await fs.access(path.join(entry, '.swarm')); roots.push(entry); } catch { /* not a swarm project */ }
+    try { await fs.access(path.join(entry, '.swarm')); roots.push(entry); } catch (error) { if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') console.error('[tools/inbox-commands.mjs] probe .swarm on registry entry:', error?.message ?? error); /* not a swarm project */ }
   }
   return roots;
 }
@@ -71,6 +73,27 @@ function flagValues(args, name) {
     if (args[index] === name) { if (index + 1 >= args.length) return null; values.push(args[index + 1]); index += 1; } else rest.push(args[index]);
   }
   return { values, rest };
+}
+
+function parseSupersededSplitsArgs(args) {
+  if (!args.length || args[0] !== '--superseded-splits') return null;
+  let stage;
+  let dryRun = false;
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--dry-run') { dryRun = true; continue; }
+    if (arg === '--json') { json = true; continue; }
+    if (arg === '--stage') {
+      if (index + 1 >= args.length) return { bad: true };
+      stage = args[index + 1];
+      if (!/^S\d+$/.test(stage)) return { bad: true };
+      index += 1;
+      continue;
+    }
+    return { bad: true };
+  }
+  return { stage, dryRun, json };
 }
 
 export async function runInboxCommand(root, command, args, { installRoot, now = Date.now } = {}) {
@@ -93,14 +116,77 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       return { stdout: out.changed ? `decided ${out.id}: ${out.choice}; added to backlog: ${out.goal}\n` : `decided ${out.id}: ${out.choice}\n`, exitCode: 0 };
     }
     if (command === 'resolve') {
+      const supersededArgs = parseSupersededSplitsArgs(args);
+      if (supersededArgs?.bad) return bad(command);
+      if (supersededArgs) {
+        const events = await readJournal(root, { limit: Infinity });
+        const { superseded, kept } = supersededSplitParks(events, { stage: supersededArgs.stage });
+        const openById = new Map(
+          openItems(events)
+            .filter(event => event.kind === 'blocker')
+            .map(event => [String(event.id), event]),
+        );
+        const resolved = [];
+        for (const row of superseded) {
+          const open = openById.get(row.id);
+          if (!open) continue;
+          const entry = {
+            kind: 'blocker',
+            id: row.id,
+            resolved: true,
+            text: sanitizeText(open.text ?? ''),
+            resolvedBy: 'superseded-splits',
+            supersededBy: row.newerRun,
+          };
+          if (!supersededArgs.dryRun) await appendEvent(root, entry, { now });
+          resolved.push(row);
+        }
+        const payload = { resolved, kept, dryRun: supersededArgs.dryRun };
+        if (supersededArgs.json) {
+          return { stdout: `${JSON.stringify(payload)}\n`, exitCode: 0 };
+        }
+        const verb = supersededArgs.dryRun ? 'would resolve' : 'resolved';
+        const lines = resolved.map(row => `${verb}: ${row.id} (superseded by ingest ${row.newerRun})`);
+        lines.push(`${verb} ${resolved.length} superseded split blockers; kept ${kept.length}`);
+        for (const row of kept) lines.push(`kept: ${row.id} (${row.reason})`);
+        return { stdout: `${lines.join('\n')}\n`, exitCode: 0 };
+      }
+      if (args.length === 2 && args[1] === '--handled') {
+        const runId = args[0];
+        if (!runId || runId.startsWith('-') || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) return bad(command);
+        const statePath = path.join(root, '.swarm', 'runs', runId, 'state.json');
+        let state;
+        try {
+          state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+        } catch {
+          return { stdout: `no run state for ${sanitizeText(runId)}\n`, exitCode: 1 };
+        }
+        state.handled = true;
+        state.handledAt = new Date(now()).toISOString();
+        await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+        await appendEvent(root, { kind: 'run', id: runId, status: state.status ?? 'failed', handled: true }, { now });
+        return { stdout: `handled: ${runId}\n`, exitCode: 0 };
+      }
       if (args.length !== 1 || args[0].startsWith('-')) return bad(command);
       const open = openItems(await readJournal(root, { limit: Infinity })).find(event => event.kind === 'blocker' && String(event.id) === args[0]);
       if (!open) return { stdout: `no open blocker ${sanitizeText(args[0])} in this project (swarm inbox lists them)\n`, exitCode: 1 };
-      await appendEvent(root, { kind: 'blocker', id: open.id, resolved: true, text: sanitizeText(open.text ?? '') }, { now });
+      const integrateKind = integrateBlockerKindFromId(open.id);
+      const integrateRun = integrateBlockerRunIdFromId(open.id);
+      const resolution = integrateKind && integrateRun
+        ? integrateBlockerResolutionEvent(open, {
+          integrateKind,
+          integrateRun,
+          integrateCause: open.integrateCause ?? open.text,
+          resolvedBy: 'owner',
+        })
+        : { kind: 'blocker', id: open.id, resolved: true, text: sanitizeText(open.text ?? '') };
+      await appendEvent(root, resolution, { now });
       return { stdout: `resolved: ${open.id}\n`, exitCode: 0 };
     }
     if (command === 'decision') {
-      const choice = flagValues(args, '--choice');
+      const boardSafe = args.includes('--board-safe');
+      const positional = args.filter(arg => arg !== '--board-safe');
+      const choice = flagValues(positional, '--choice');
       if (!choice || choice.values.length !== 1) return bad(command);
       const options = flagValues(choice.rest, '--option');
       const ids = options && flagValues(options.rest, '--id');
@@ -112,7 +198,21 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       choice.values[0] = sanitizeText(choice.values[0]);
       options.values = options.values.map(value => sanitizeText(value));
       const pool = [...new Set([choice.values[0], ...options.values])];
-      await appendEvent(root, { kind: 'decision', id, text, choice: choice.values[0], ...(options.values.length ? { options: pool } : {}), confirm: true }, { now });
+      if (boardSafe) {
+        const protectedFields = [text, id, choice.values[0], ...pool];
+        if (protectedFields.some(field => isProtectedTopic(field))) {
+          return { stdout: 'a decision about merge, deploy, spend, caps, keys or migrations can never be answered from the board; drop --board-safe\n', exitCode: 1 };
+        }
+      }
+      await appendEvent(root, {
+        kind: 'decision',
+        id,
+        text,
+        choice: choice.values[0],
+        ...(options.values.length ? { options: pool } : {}),
+        confirm: true,
+        ...(boardSafe ? { boardSafe: true } : {}),
+      }, { now });
       return { stdout: `decision recorded: ${id}; confirm with: swarm decide ${id} ${choice.values[0]}\n`, exitCode: 0 };
     }
     if (command === 'backlog') {

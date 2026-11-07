@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-locallane",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "a lane that reads an API key from the macOS Keychain and sends it to a configurable URL",
+   "type": "review",
+   "prompt": "Static security review of coordination/review/locallane.diff (the local lane: tools/local-lane.mjs, tools/api-adapters.mjs executeApi for agent local, tools/lanes.mjs, tools/router.mjs, doctor local). Promises: the key is read from the Keychain (or an env var named in config on Linux) at call time only, sent only as an Authorization Bearer header to the endpoint's configured baseUrl, never printed, logged, recorded in usage or runs, put in a prompt, error text or a manifest; baseUrl is only http(s) and a non-loopback http url or a redirect to another host cannot leak the key (check redirects and a hostile baseUrl); sensitive jobs may use the local lane only if intended (check the sensitive-provider rules); slot and agency caps cannot be bypassed; the Keychain read uses no shell string interpolation (argument array). Report only real findings with a concrete state or input, ranked, verdict PASS or FAIL; no working exploit commands.",
+   "context": [
+    "coordination/review/locallane.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}

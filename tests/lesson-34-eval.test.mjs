@@ -59,9 +59,14 @@ test('eval 34.1: split adds an integration ticket per requirement, and a require
   await fs.rm(path.join(root, '.swarm/project/tickets.json'));
   // The prompt asks for it.
   assert.match(buildSplitManifest(parseScope(SCOPE), {}).jobs[0].prompt, /integration ticket.*routes, pages or entry points.*route-level or end-to-end test/s);
-  // An integration ticket without a route-level test is refused too.
+  // An integration ticket without a route-level test is repaired or parked; ingest does not refuse the whole split.
   await fakeRun(root, 'r2', [MODULE, { ...MOUNT, tests: [] }]);
-  assert.match((await runScopeCommand(root, 'scope', ['split', '--ingest', 'r2'])).stdout, /no route-level test/);
+  const badWire = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r2', '--max-repairs', '0']);
+  assert.equal(badWire.exitCode, 0, badWire.stdout);
+  assert.match(badWire.stdout, /no route-level test|parked:/);
+  const parkedMount = badWire.stdout.match(/parked:/) ? badWire.stdout : '';
+  if (parkedMount) assert.match(parkedMount, /no route-level test/);
+  await fs.rm(path.join(root, '.swarm/project/tickets.json'), { force: true }).catch(() => {});
   // With the integration ticket the split passes, the runner makes it wait for the module, and the ledger is marked as wired.
   await fakeRun(root, 'r3', [MODULE, MOUNT]);
   assert.equal((await runScopeCommand(root, 'scope', ['split', '--ingest', 'r3'])).exitCode, 0);

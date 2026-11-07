@@ -17,6 +17,9 @@ Out of scope: building the 8 managers as separate long-running agents (S6 define
 - S6: Managers, first versions
 - S7: Swarm v2 stage 1 (internal, about one month)
 - S8: Swarm v2 later stages
+- S9: Cluster (N devices, one ledger, autonomous node-to-node work)
+- S10: Swarm Watch Command Center (Hive overview, project cockpit, command palette, tools hub)
+- S11: Self-managing swarm (lane health, self-healing, machine watchdog, shared queue, smart routing, quota forecasting, daily phone summary)
 
 ## S1 Unblock autonomy
 ### R-001 The policy engine auto-decides routine requests.
@@ -295,3 +298,258 @@ Acceptance:
 - A registered cloud CPU runner runs a ticket's own test command and the full e2e suite and writes pass or fail plus duration to the event store.
 - It is the first burst feature built, before any GPU work, because test waiting is the likely larger win: the benchmark scorecard must show ticket ready-to-merged time and idle slot percent before and after, and the runner stays off unless that scorecard improves.
 - Same defaults as R-049: burst off by default, no sensitive code, local queue takes the ticket back after 120 seconds without a heartbeat, spend counted in the daily limit.
+
+## S9 Cluster
+### R-052 One shared ledger with ticket leases replaces hand-off branches and ticket ID ranges.
+Acceptance:
+- With cluster ledger enabled, R-048 shared queue behavior still holds; claims write a lease record with holder node id, monotonic fencing token, and expiry in the ledger owner store instead of hand-off branches or per-node ticket id ranges.
+- A worker heartbeat every 30 seconds extends the lease only when the fencing token matches; after automatic expiry without heartbeat the ticket returns to ready with exit 0 on `swarm queue release --expired`, and a dead node's late heartbeats are rejected.
+- Two simulated workers racing to claim the same ticket produce exactly one holder and one exit non-zero with message `claim rejected`; release benchmark harness records 0 double-claims.
+- An expired lease returns the ticket to the pool for any node with a free slot without owner action.
+
+### R-053 Coordination events are typed swarm-to-swarm messages that use no model turns and no orchestrator tokens.
+Acceptance:
+- `ticket-done`, `release-shipped`, `lease-claim`, `lease-release`, `request`, `question`, `handoff`, and `ack` each validate against schema and are handled without invoking an LLM or spending orchestrator tokens.
+- In the harness, a `ticket-done` from node B reaches node A and updates the shared ledger with 0 model calls recorded on either node.
+- The wake event fires only for message kinds that require an orchestrator decision; routine coordination messages do not start an orchestrator session.
+- Lease and ticket state transitions from these messages complete without owner relay.
+
+### R-054 Reliable delivery uses acks, bounded retries with backoff, a durable outbox on disk, de-duplication, and catch-up after reconnect.
+Acceptance:
+- Every delivered message receives an `ack` with correlation id; senders retry with bounded backoff until acked or max attempts, reading from a durable on-disk outbox that survives process crash.
+- Receivers de-duplicate by sender id and monotonic sequence; duplicate frames are dropped with no side effect on ticket state.
+- After a node sleeps or reconnects, catch-up delivers queued messages in order; 1000 messages queued while offline are delivered exactly once after return.
+- A crash of the sender or receiver does not lose a message accepted into the outbox or inbox; recovery replays unacked work.
+
+### R-055 Any machine joins with `swarm join` using tailnet auth and registers in the node registry with capabilities and live capacity.
+Acceptance:
+- `swarm join` with valid tailnet credentials exits 0, writes a node id under `~/.project-swarm/nodes/self`, and appears in `swarm node list` within 5 seconds with cores, RAM GiB, worker limit, lane list, and GPU flag.
+- The registry row includes live capacity: real memory pressure and swap, free slots, and lane health; free memory uses the real free-memory reading, not Node `os.freemem`, which undercounts on macOS by about 30 times.
+- A node missing tailnet auth exits non-zero and does not appear on any peer registry.
+- Heartbeats refresh capacity fields so placement sees current headroom.
+
+### R-056 Typed signed messages use per-node keys, schema validation, and never carry executable content.
+Acceptance:
+- Every cluster frame is signed with the sender node's key and validates against JSON Schema before send; oversize payloads above 64 KiB exit non-zero.
+- Secret scan runs on send and on receive; messages with key-like material are dropped, logged, and never applied.
+- Forged signatures, replays, and sequence gaps inside the nonce window fail closed with exit non-zero; traffic is accepted only over the tailnet.
+- Message bodies contain no shell commands, scripts, or other executable fields.
+
+### R-057 Autonomous node flows never perform owner-only actions.
+Acceptance:
+- Approve, merge to live, deploy, caps, spend, and keys remain owner-only on every node; cluster workers and peers cannot invoke them.
+- A message that implies any owner-only action is dropped, logged locally, and raised to the owner with no side effect on ticket or deploy state.
+- A simulated approve-attempt leaves ticket state unchanged and increments the owner alert counter by 1.
+- `ticket-done`, `release-shipped`, `handoff`, `request`, `question`, and `ack` flows complete without owner relay in the harness.
+
+### R-058 A release-ready event makes peer nodes run `swarm update` between waves, never mid-wave.
+Acceptance:
+- A `release-shipped` coordination event schedules `swarm update` on followers only when no wave jobs are running on that node (when-idle rule).
+- Pinned projects skip update until unpinned; an in-flight wave is not interrupted by version sync.
+- After update between waves, all nodes report the same swarm release version on `swarm node list` before the next wave starts.
+- Harness verifies zero mid-wave update invocations while jobs are active.
+
+### R-059 One repo-wide merge queue across nodes merges PRs in one order through `swarm merge`.
+Acceptance:
+- PRs opened from any node enqueue to a single merge queue; only one merge runs at a time via `swarm merge` with the green-check requirement.
+- A node cannot merge around the queue; a second merge attempt while one is in flight exits non-zero.
+- Merge order is FIFO by queue position regardless of which node opened the PR.
+- Harness with two nodes submitting PRs proves one ordered merge history in the event store.
+
+### R-060 Placement and work stealing use real capacity across nodes.
+Acceptance:
+- Each node reports free slots, memory pressure, and lane health; a node with free slots pulls ready tickets honoring file ownership, lane fit, ticket target worktree, and fair share across projects.
+- Heavy jobs prefer the node with the most headroom when multiple nodes can run the lane.
+- A ticket bound to a worktree on node B is not started on node C when B alone owns the ticket's files.
+- When two projects both have ready work, slot share across nodes stays within 1 ticket of the fair-share target for 10 consecutive steal cycles in the harness.
+
+### R-061 Messaging and nodes are visible on the CLI and board.
+Acceptance:
+- `swarm msg send`, `swarm msg list`, and `swarm msg tail` exit 0 and show typed messages with sender node id and sequence.
+- `swarm node list` shows every joined machine with last heartbeat age under 120 seconds when healthy.
+- Swarm Watch message log and node view list the same message ids as `swarm msg list` within 1 message.
+
+### R-062 Release benchmarks per version run against a fixed baseline stored under `bench/cluster/`.
+Acceptance:
+- `swarm bench cluster` runs the deterministic harness and writes `bench/cluster/<version>.json` with message latency p50 and p95, ticket ready-to-started time, slot utilization, idle node-minutes while ready work exists, owner relays, double-claims, and tickets per hour per node.
+- Re-running with the same seed produces identical JSON aside from `recordedAt`.
+- Swarm Watch charts the trend for the last five release benchmark points.
+- Optional `swarm bench cluster --tailnet` is documented for the owner and is not required for CI exit 0.
+
+### R-063 CI fails on benchmark regression past threshold and chaos tests pass.
+Acceptance:
+- CI compares new results to `bench/cluster/baseline.json`: throughput more than 10 percent worse, latency p95 more than 25 percent worse, utilization more than 5 points worse, any double-claim above 0, or any owner relay above 0 fails the job with exit non-zero.
+- Chaos tests pass: kill a node mid-ticket, drop the network, clock skew, and two nodes claiming at once (1000 races, 0 double-claims).
+- A deliberate regression injection in the harness test fails CI in under 2 minutes.
+- All four chaos scenarios are required for release gate exit 0.
+
+### R-064 The MacBook and the Mac mini are the first two nodes; relayed hand-off flow is retired once both run on the ledger.
+Acceptance:
+- With both machines on cluster ledger, relayed hand-off branches and owner-forwarded messages count 0 for 24 hours in the board log.
+- Ticket ready-to-started time p95 is under 30 seconds when any node has a free slot (harness with ready queue).
+- Slot utilization across all nodes is above 80 percent whenever ready tickets exist in a 1-hour harness run.
+- Cutover checklist documents disabling legacy hand-off paths after both nodes heartbeats are healthy.
+
+### R-065 A third node joins and leaves without breaking leases, the queue, or the board.
+Acceptance:
+- A third simulated node joins via `swarm join`, steals work, then leaves cleanly; `swarm node list` drops it within 30 seconds and no ticket stays leased to the departed node id.
+- Idle node-minutes while ready tickets exist stay under 1 percent of total node-minutes in the three-node harness.
+- Owner relays and double-claims remain 0 for the three-node scenario.
+- Shared merge queue and board views stay consistent while the third node joins and departs.
+
+## S10 Swarm Watch Command Center
+### R-066 Command Center views read one shared data layer with real labelled numbers only.
+Acceptance:
+- Hive and Project Cockpit import the same board data module; a unit test asserts both views resolve identical values for projects, agents live, and needs-you counts.
+- Every number rendered in Command Center views has a visible label and a hover explanation citing its source field; numbers without a trusted source are omitted from the DOM.
+- Board accuracy tests from S4 extend to Hive stat strip and Cockpit counters; CI fails with exit non-zero when a displayed figure disagrees with the ledger by more than one ticket or $0.01 spend.
+
+### R-067 Everything Swarm Watch has today stays.
+Acceptance:
+- Current Swarm Watch views move under a Classic tab; no existing route is removed from the router.
+- A Playwright test requests each pre-upgrade Swarm Watch path and asserts HTTP 200 and a non-empty main landmark.
+- Build progress, deploy tracking, and owner action panels from S4 still render under Classic with the same data contracts.
+
+### R-068 The Hive overview shows the swarm at a glance.
+Acceptance:
+- A central brain entity sits in the layout with one node per project around it showing status colour, percent done, tickets building, needs-you count, and machine label from real data.
+- A top stat strip shows projects, agents live, tickets done today, and needs you with labelled figures only.
+- A category legend (building, blocked, needs you, done) uses consistent colours across nodes and the legend chips.
+- Bottom panels show a plain-word live event log, lanes and who is working, what the swarm saved (relays avoided, retries, time), and a throughput chart fed from the event store.
+
+### R-069 Particle streams flow from each project node into the core.
+Acceptance:
+- Canvas draws streams from each project node toward the brain; particle density equals active agents on that project and speed scales with tickets per hour.
+- The stream loop runs at 30 fps when the tab is visible and pauses when `document.hidden` is true.
+- A performance test samples frame times and reports at least 30 fps average over 5 seconds with four active projects.
+
+### R-070 The brain entity is an original animated centerpiece.
+Acceptance:
+- The brain asset is an original design (not copied reference art); it breathes with total swarm activity and glows with lane colours currently in use.
+- A merge event triggers a visible pulse; a failure triggers an amber flicker; idle shows a calm rest state.
+- With `prefers-reduced-motion: reduce`, the brain shows one still frame and no breathing animation.
+
+### R-071 Clicking a project zooms into the Project Cockpit with navigation back to the Hive.
+Acceptance:
+- Clicking a project node runs a smooth zoom transition into Project Cockpit for that project id.
+- A breadcrumb control returns to the Hive overview in one action.
+- Deep links `/command-center` and `/command-center/project/<id>` load the correct view; keyboard focus order reaches the breadcrumb and back action.
+
+### R-072 The Project Cockpit shows orchestrator, stages, and ticket flow.
+Acceptance:
+- The orchestrator appears as an animated character using the robot-heads style and reflects real state: thinking, dispatching, waiting on you, or reviewing.
+- Stages and waves render as rings with progress from the ledger.
+- Tickets appear as nodes moving through ready, building, review, and done; each building ticket shows the head of its lane.
+
+### R-073 Cockpit sides and bottom expose lists and the live run stream.
+Acceptance:
+- Ticket lists for building, ready, blocked, and done support search and list the same ticket ids as `swarm queue list` within one id.
+- A live run stream shows what each worker is doing with progress, pace, ETA, PR refs, and deploy status from real run records.
+- Empty states say why there is no data instead of showing placeholder numbers.
+
+### R-074 Real robot heads are used everywhere an agent appears.
+Acceptance:
+- UI mounts `tools/watch-assets/robot-*.js` for every agent avatar; lane colours and states (working, thinking, sleeping, error, idle) match the All Projects page mapping.
+- Kenney emote bubbles and Fluent animated badges layer on robot heads; no stand-in SVG silhouettes ship in production bundles.
+- A snapshot test compares lane colour tokens on Command Center robot heads to the All Projects baseline file.
+
+### R-075 Signature glitch style uses PowerGlitch within strict limits.
+Acceptance:
+- Glitch-in on first load and on Hive→Cockpit switches; brain flickers on event bursts; hover glitch on project names, ticket ids, and robot heads; CountUp updates get a brief glitch; needs-you chips glitch once then stay still; failures and rate limits use stronger red or amber glitch; section headings glitch reveal on scroll into view.
+- Each burst lasts under 400 ms, never loops continuously, never runs on text actively updating, and at most 3 glitches run at once; all effects disable when `prefers-reduced-motion` is set.
+- `npm test -- tests/command-center-glitch-limits.test.mjs` exits 0 and asserts burst duration, concurrency cap, and reduced-motion off state.
+
+### R-076 A command palette jumps to projects, tickets, runs, PRs, docs, and commands.
+Acceptance:
+- Cmd-K on macOS and Ctrl-K elsewhere opens the palette with fuzzy search across projects, tickets, runs, PRs, docs, and swarm commands.
+- Arrow keys move selection and Enter navigates; recent items appear at the top after use.
+- Choosing a project opens Project Cockpit; choosing a doc opens the Resources hub entry.
+
+### R-077 A first-visit guided tour explains the Command Center.
+Acceptance:
+- On first visit a skippable tour highlights the Hive, Project Cockpit, colour legend, and command palette in plain language.
+- Help menu includes Replay tour, which restarts the tour without clearing completion for other users.
+- Tour steps are reachable by keyboard and dismiss with Escape.
+
+### R-078 A Resources and Tools hub is searchable and plugin-extensible.
+Acceptance:
+- The hub lists searchable docs, runbooks, every swarm command with a copy button, links to repos, PRs, deploys, lane setup guides, and the asset library with licences.
+- Dropping a validated JSON or Markdown entry into `tools/watch-hub/entries/` surfaces a new resource without code changes.
+- `npm test -- tests/watch-hub-schema.test.mjs` exits 0 against the entry JSON Schema.
+
+### R-079 The phone layout stacks the Hive and tabs the Cockpit without horizontal scroll.
+Acceptance:
+- At 390 px width the Hive layout is a vertical stack with no horizontal scroll in Playwright.
+- Project Cockpit uses tabs for orchestrator, tickets, and run stream at phone width.
+- Interactive targets measure at least 44 px in both dimensions on phone layout tests.
+
+### R-080 Performance, accessibility, and review gates pass for every Command Center stage.
+Acceptance:
+- Idle CPU stays under 3 percent in a 60-second trace; ambient canvas targets 30 fps and pauses when the tab is hidden; reduced motion shows still frames; keyboard access covers primary actions; body text contrast is at least 4.5:1.
+- Each CC stage completes the self-review loop in `docs/design/review-rubric.md` with every rubric item scored 4 or better within 5 rounds; artifacts live under `docs/design/review/CCn/roundN/` with screenshots and `scores.json`.
+- Every new vendored asset includes `VENDOR.json` beside the files and an entry in `docs/third-party.md`; licence check test exits 0.
+
+## S11 Self-managing swarm
+### R-081 Every lane is health-monitored automatically from the config and the adapter registry, with no hardcoded lane list.
+Acceptance:
+- A monitor inside autopilot probes every lane found in the config (every lanes key and every local endpoint) and in the adapter registry on a timer of about 2 minutes, and records healthy, degraded, down or paused with a reason and a last-checked time.
+- A test config that adds a fake new lane shows it monitored, on probation, then routed, with zero manual setup; removing a lane from the config removes it from monitoring and routing and leaves nothing pointing at it.
+- Probes are free checks only (tunnel or port reachable, a models-list GET, a CLI version or status call, rate-limit records, spend-cap records); a test asserts no model call and no POST is made by any probe.
+
+### R-082 Every lane adapter ships a health check, and new lanes start on probation.
+Acceptance:
+- The adapter interface includes a health function; a contract test fails for any adapter without one, so it cannot ship.
+- A lane with no specific check uses the default: endpoint or CLI reachable plus the last job result.
+- A new lane takes small jobs only until it passes 3 checks and 2 real jobs, then joins full routing automatically.
+
+### R-083 Routing uses lane health and reroutes without stuck jobs.
+Acceptance:
+- A down lane gets no new jobs; its share goes to the next cheapest healthy lane in the existing cost order; a degraded lane stays routable with lower weight.
+- A job already running on a lane that goes down is retried on another lane; a test with a fake lane going down proves no job stays running.
+- A lane returns after 2 healthy checks in a row; flapping lanes back off for longer before they are re-added.
+
+### R-084 Lane status is visible and only truly stuck cases alert the owner.
+Acceptance:
+- Swarm Watch and Command Center show each lane with a colour dot and the reason; lane up and down events are written to the swarm event log and to the swarm message bus when it exists so every orchestrator sees the same status.
+- Needs-you is raised only when every lane in a tier has been down for 30 minutes, or a lane needs the owner (login expired, billing).
+
+### R-085 Lanes try safe self-healing before they are marked down.
+Acceptance:
+- Before marking a lane down the swarm tries only safe fixes: restart that lane's own tunnel or service, kill only that lane's own leaked processes (checked by command line and port), and wait out a rate-limit reset.
+- Only an expired login or a billing problem goes to Needs-you; every fix attempt is logged with the lane, the action and the result.
+- Tests with a fake tunnel that comes back after a restart, a fake leaked process, and a fake rate limit prove the fixes and prove that no unrelated process is touched.
+
+### R-086 A machine watchdog keeps every machine healthy and widens waves again when pressure drops.
+Acceptance:
+- The watchdog watches memory, swap, disk and orphaned swarm processes on each machine and cleans up automatically (only processes it can prove are leaked swarm test or lane processes; never other programs).
+- Waves shrink under memory pressure and widen again within 2 checks after pressure drops; a fake-machine test proves both directions and the orphan cleanup.
+- Disk use of the scratch and run folders stays under a configured cap through safe garbage collection that never touches a checkout holding swarm state.
+
+### R-087 The MacBook and the Mac mini pull from one shared queue.
+Acceptance:
+- Machines share one ledger and queue over the swarm message bus; any machine with free capacity takes the next ready ticket, with no hand-written wave manifests.
+- A claim is a lease with an expiry; two machines never run the same ticket; a crashed machine's lease expires and the ticket is retried. A two-fake-machine test proves no double run, including under a simulated crash and a network split.
+- Stage ownership by hand is no longer needed after this ships; held tickets return to the shared queue.
+
+### R-088 Smart routing picks the best-value healthy lane and keeps the safety rules.
+Acceptance:
+- The swarm tracks each lane's success rate, speed and cost per ticket type and routes each ticket to the best-value healthy lane, with the cost order as the tie-break.
+- No secrets go to any worker and no sensitive or production code goes to OpenRouter; tests with fake lanes prove these rules still hold under every routing score.
+- Routing decisions are logged with the scores that decided them.
+
+### R-089 Quota forecasting shifts work early and never raises a cap.
+Acceptance:
+- The swarm predicts when Claude subscription quotas, the Anthropic API daily cap and the OpenRouter daily cap will run out and shifts work to other lanes before they do.
+- A forecast never raises a cap and never spends more than the configured caps; a test proves a cap is never changed by forecasting or routing.
+- The forecast appears in the daily summary and on the board with its inputs labelled.
+
+### R-090 One short daily summary reaches the owner's phone.
+Acceptance:
+- Each morning one short message lists what shipped, lane health, spend per tier, and anything that truly needs the owner, and is sent to the phone through swarm phone or the inbox, not only the board.
+- A test with fake data proves the message content, its length limit and that it is sent once per day.
+
+### R-091 Self-management changes are reviewed and released safely.
+Acceptance:
+- Every change that kills processes, changes routing, or touches money or quotas gets an Opus static review before merge.
+- Each feature ships in a numbered release with tests that use fake lanes and fake machines, and the release is installed on both Macs and confirmed.
+

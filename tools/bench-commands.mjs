@@ -112,7 +112,11 @@ async function listJsonBaselines(fs, root) {
     if (!name.endsWith('.json')) continue;
     try {
       baselines.push(await readJsonFile(fs, path.join(dir, name)));
-    } catch { /* skip */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
+        console.error('[tools/bench-commands.mjs] listJsonBaselines readJsonFile:', error?.message ?? error);
+      }
+    }
   }
   return baselines;
 }
@@ -125,7 +129,11 @@ async function listJsonReplays(fs, root) {
     if (!name.endsWith('.json')) continue;
     try {
       replays.push(await readJsonFile(fs, path.join(dir, name)));
-    } catch { /* skip */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
+        console.error('[tools/bench-commands.mjs] listJsonReplays readJsonFile:', error?.message ?? error);
+      }
+    }
   }
   return replays;
 }

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "lock-fix2",
+      "agent": "auto",
+      "prompt": "My shared-lock ENOENT fix in tools/integration-lock.mjs (tryAcquireLock) is wrong in one place and fails tests/integrate-safety.test.mjs on CI (expected code integrate-locked, got lock-race-exhausted): ENOENT while reading owner.json is the NORMAL ownerless creation window of a held lock (the holder has made the directory but not yet written owner.json) and must keep the original behavior (treated as ownerless: the lock is held, stale only by age), NOT as released. Only an ENOENT from lstat(lock) (the lock directory itself is gone) means released and may retry the mkdir. Fix that: restore the original owner.json handling, keep the lstat ENOENT retry (bounded, 50, then lock-race-exhausted) and the fsImpl hook. Update tests/integration-lock-enoent.test.mjs accordingly and ADD a test that an ownerless fresh lock (directory exists, no owner.json) still refuses with integrate-locked and an old ownerless lock is cleared as stale. Then run every test file with lock in its name and tests/integrate-safety.test.mjs; all pass. ignoreTests reason: only the named files change.",
+      "context": [
+        "tools/integration-lock.mjs",
+        "tests/integration-lock-enoent.test.mjs",
+        "tests/integrate-safety.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/integration-lock.mjs",
+        "tests/integration-lock-enoent.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/integration-lock-branch.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}

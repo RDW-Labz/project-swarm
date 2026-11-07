@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-import { decide, autoDecisionEvent, NEVER_AUTO, normalizePolicyProjectPath } from './policy.mjs';
+import {
+  decide,
+  autoDecisionEvent,
+  NEVER_AUTO,
+  normalizePolicyProjectPath,
+  enrichHandBuildFactsForPolicy,
+  effectiveCommitWindowMinutes,
+} from './policy.mjs';
 import { centralDayKey } from './daily-limit.mjs';
 import { ELEVATED_GIT_OPS } from './handbuild.mjs';
 
@@ -161,7 +168,10 @@ function resolveCapProject(item, baseFacts, root) {
 }
 
 function enrichFactsForItem(item, baseFacts, { autoToday, handledRecords, now, limits, root }) {
-  const facts = { ...baseFacts, autoToday };
+  let facts = { ...baseFacts, autoToday };
+  if (item.kind === 'hand-build-request') {
+    facts = enrichHandBuildFactsForPolicy(facts, item, root);
+  }
   if (kindUsesPastDailyAutoLimit(item.kind)) {
     enrichPastDailyAutoLimit(facts, limits, item.project);
   }
@@ -200,6 +210,7 @@ export async function appendAutoDecision({ root, entry, deps = {} }) {
     reason: entry?.reason ?? null,
   };
   if (typeof entry?.amountUsd === 'number') journalLine.amountUsd = entry.amountUsd;
+  if (Array.isArray(entry?.renames)) journalLine.renames = entry.renames;
   const eventsLine = {
     at,
     kind: 'auto-decision',
@@ -211,6 +222,7 @@ export async function appendAutoDecision({ root, entry, deps = {} }) {
     reason: journalLine.reason,
   };
   if (typeof entry?.amountUsd === 'number') eventsLine.amountUsd = entry.amountUsd;
+  if (Array.isArray(entry?.renames)) eventsLine.renames = entry.renames;
   await appendJournal(root, journalLine, { now });
   await appendEvents(root, eventsLine);
 }
@@ -236,6 +248,7 @@ export async function runPolicyPass({
   machine = '',
   readHandled,
   limits = {},
+  persistAutoDecision,
 } = {}) {
   const list = items ?? [];
   if (rulesLoadFailed(rules)) {
@@ -305,24 +318,37 @@ export async function runPolicyPass({
       }
 
       const event = autoDecisionEvent(request, result, { now, machine });
-      if (!await persistAutoDecisionBeforeApply(root, event, now)) {
+      const persist = typeof persistAutoDecision === 'function'
+        ? persistAutoDecision
+        : (r, ev, n) => persistAutoDecisionBeforeApply(r, ev, n);
+      if (!await persist(root, event, now)) {
         left.push(item);
         continue;
       }
 
       try {
-        await apply({ item, decision: result, channel: 'policy' });
+        const applyCtx = {
+          item,
+          decision: result,
+          channel: 'policy',
+          policyRule: result.rule,
+          policyFacts: facts,
+          approvalMinutes: result.rule === 'commit-window-generated'
+            ? effectiveCommitWindowMinutes(facts)
+            : undefined,
+        };
+        await apply(applyCtx);
       } catch {
         const errEntry = applyFailedRecord(item);
         try {
           await journal(errEntry);
-        } catch {
-          /* ignore secondary log failure */
+        } catch (journalError) {
+          console.error('[tools/policy-run.mjs] journal after apply failure:', item.id, journalError?.message ?? journalError);
         }
         try {
           await events(errEntry);
-        } catch {
-          /* ignore secondary log failure */
+        } catch (eventsError) {
+          console.error('[tools/policy-run.mjs] events after apply failure:', item.id, eventsError?.message ?? eventsError);
         }
         errors.push({ id: item.id, kind: item.kind });
         left.push(item);

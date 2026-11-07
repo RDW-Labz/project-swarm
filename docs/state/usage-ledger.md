@@ -165,6 +165,25 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-27 | - | d-fix-gc-ledger-autopilot: 37 flagged catches updated; checksRun all passed; gc: 12 narrowed, 3 visi | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-27 | - | ask-1793115390244-d531b567: complete | claude | opus | pass | 25,389 | $0.18 |
+| 2026-10-27 | - | d-fix-board-data-board: checksRun: [{"name":"board tests","status":"passed"}]; board.mjs:72 (a) unli | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-27 | - | d-fix-watch-cli: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-27 | - | d-fix-phone: 20 flagged catch sites fixed; approval gate (`why`, `same(token, rec.word)`) untouched; | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-27 | - | ask-1793118702987-78f7de07: complete | claude | opus | pass | 57,297 | $0.19 |
+| 2026-10-28 | - | bump16723: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | reviewtrain1: complete | claude | opus | pass | 1,097,737 | $1.50 |
+| 2026-10-28 | - | fixapprove: B1: orchestratorWriteAllowedRel denies .swarm/project/{approved-tickets.json,tickets.jso | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | fixguardrace: Added orchestratorManifestGate (async, dynamic imports) vetting parsed manifests via s | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | fixdefaultbranch: Protected branches: main, master, init.defaultBranch, and every branch from refs/r | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | paidkeypause: Hosted lambda only: pause gate runs when SWARM_LAMBDA_URL is unset; self-hosted lambda | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | paidpausevalidate: exit 1: [31m✗ Failed to reach the Cursor API. If you are behind a corporate proxy | cursor | composer-2.5 | failed: exit 1: [31m✗ Failed to reach the Cursor API. If you are beh | - | subscription |
+| 2026-10-28 | - | paidpausevalidate: Imported pausedPaidLaneProblems and isHostedLambdaInference; after the openrouter | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | b13redirect: omWriteTargetRel resolves root, cwd, and target with realpath before path.relative; seg | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | hangguard: Added withHangGuard helper with comment, self-test, and wrapped cancellation cleanup deni | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | hangguard: withHangGuard races runManifest against a timer; denied-kill hang comment; self-test for | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | t2money: status blocked: tests/api-workers.test.mjs must assert day cap $20 (lines 18–22, 24–25); fi | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | t2reviewgaps: B16: delete-only branch in cmdSync now uses the same security-review gate as the norma | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -182,4 +201,8 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| **total** | all | 161 | 146 | 15 | 14,711,375 | $26.67 (incl. estimates) |
+| 2026-10-27 | claude | 2 | 2 | 0 | 82,686 | $0.37 |
+| 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
+| 2026-10-28 | claude | 1 | 1 | 0 | 1,097,737 | $1.50 |
+| 2026-10-28 | cursor | 12 | 11 | 1 | 0 | subscription |
+| **total** | all | 180 | 164 | 16 | 15,891,798 | $28.54 (incl. estimates) |

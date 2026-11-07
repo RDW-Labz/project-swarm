@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2blk3",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable). Only return blocked for a real design conflict inside these files.\nTrain 2 Opus security review (claude-opus-5-5, run 1793221468839-cfc492bd) found this BLOCKER; fix it exactly and minimally, in the surrounding style, and add the regression test. Never raise or change a cap value. Do not touch any other file. Existing tests in context must keep passing.\nBLOCKER 3 (guard bypass via symlinks): tools/shell-writes.mjs now allows echo/printf redirects into orchestrator-allowed areas (omRedirectsForbidden ~1879, the redirect-target resolution ~1828-1843 / omWriteTargetRel, used at ~2406 and ~2522). (a) The target is normalized with path.resolve BEFORE realpath, so '..' is applied lexically while the shell applies it physically through symlinks: `echo x > docs/plans/L/../y` with L a directory symlink into .swarm/ resolves to an allowed path but writes into .swarm/. (b) When the leaf does not exist, realpath fails and the code walks up and re-appends the basename, so a DANGLING leaf symlink docs/plans/x.md -> ../../coordination/manifests/wave.json is treated as a new plain file, but bash '>' follows it and creates coordination/manifests/wave.json. FIX: resolve the redirect target component by component from ctx.cwd without lexical '..' collapsing: for each existing component lstat it and follow symlinks (realpath of that prefix); if any '..' appears AFTER a symlinked component, refuse. For the final component: lstat it; if it is a symlink (dangling or not), refuse the redirect (simplest safe rule) - or realpath its target and re-check, but refusing is preferred. A non-existent leaf in a real (non-symlink) directory stays allowed exactly as today. Also refuse a redirect in a compound command whose earlier segment is a cd/pushd (the guard does not track cwd across segments). Keep all other guard behaviour identical. Tests in NEW tests/t2-redirect-symlink.test.mjs (first line import './_isolate-config.mjs';) in a temp project using the same entry points tests/om-redirect-realpath.test.mjs uses: dangling leaf symlink into coordination/manifests/ refused; non-dangling leaf symlink refused; docs/plans/L/../y with L -> .swarm refused; `cd docs && echo x > plans/a.md` refused; plain `echo x > docs/plans/new.md` still allowed; existing om-redirect-realpath cases unchanged. The ignored tests cover behaviour that must not change; the coordinator runs the full suite before ship.",
+      "context": [
+        "tests/om-redirect-realpath.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tests/t2-redirect-symlink.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/auto-approve.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-reason-words.test.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/orchestrator-allow.test.mjs",
+        "tests/orchestrator-mode-default.test.mjs",
+        "tests/orchestrator-mode-review2.test.mjs",
+        "tests/orchestrator-mode-review3.test.mjs",
+        "tests/orchestrator-mode-review4.test.mjs",
+        "tests/orchestrator-mode-timeout.test.mjs",
+        "tests/orchestrator-mode.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2blk3",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/t2-redirect-symlink.test.mjs",
+        "tests/om-redirect-realpath.test.mjs"
+      ]
+    }
+  ]
+}

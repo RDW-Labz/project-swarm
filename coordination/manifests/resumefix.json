@@ -1,0 +1,41 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "resumefix",
+   "agent": "auto",
+   "prompt": "Bug (reported from a real project, atlas-seafloor): `swarm go --scope` can leave a ticket in status 'review' with no review run recorded, and resuming fails every time with 'Manifest requires version: 1 and 1-5000 jobs' ('review could not start'), looping forever. Root cause: queueResumeReviews() in tools/scope-loop.mjs invents a manifest path .swarm/acceptance-reviews/resume-N-<TICKET>.json and passes it to recordReview/deps.review, but nothing writes that manifest first; the missing-file read returns null and validateManifest(null) throws the generic message (tools/swarm/core-31.mjs validate; surfaced via reviewRun in tools/swarm.mjs). The normal integrated-wave path builds and writes its acceptance-review manifest first (see the acceptance review code in tools/scope-commands.mjs around the sync path, and acceptanceManifest/reviewManifest in tools/acceptance.mjs). Fix: (1) queueResumeReviews (or recordReview when source is 'resume') must build the acceptance-review manifest for the ticket the same way the sync path does and write it to the file path before calling deps.review; reuse the same builder, do not duplicate its logic. Tickets that cannot get a review (cross-worktree skip, no acceptance lines, ticket files missing) follow the existing skip rules with a clear note rather than an endless retry. (2) A missing or unparseable manifest must raise a clear error naming the file ('review manifest <path> is missing or not valid JSON'), not the generic version message, in the review start path. (3) Make sure a ticket whose review cannot start does not loop forever: after the same start failure twice, park it as blocked with the reason in blockNote (existing blocker mechanism) and let the loop continue with other tickets. Regression tests in a new tests/scope-loop-resume-review.test.mjs: resume with a ticket in review and no recorded review run writes the manifest first (fake deps.review asserts the file exists and validates), the clear missing-manifest error, and the park-after-two-failures rule. Keep tests/scope-loop*.test.mjs and acceptance tests passing.",
+   "context": [
+    "tools/scope-loop.mjs",
+    "tools/acceptance.mjs",
+    "tools/scope-commands.mjs",
+    "tools/swarm/core-31.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/scope-loop.mjs",
+    "tools/acceptance.mjs",
+    "tests/scope-loop-resume-review.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/acceptance-review-skip.test.mjs",
+    "tests/acceptance-review-worktree.test.mjs",
+    "tests/acceptance-sync.test.mjs",
+    "tests/acceptance.test.mjs",
+    "tests/gallery-tickets.test.mjs",
+    "tests/human-progress.test.mjs",
+    "tests/practice-tooling.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/scope-loop-review-stall.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/ticket-target-worktree.test.mjs"
+   ],
+   "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+  }
+ ]
+}

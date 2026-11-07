@@ -27,7 +27,7 @@ Replace the example paths with files in your target project.
 - `version`: required, exactly `1`.
 - `jobs`: required array of 1–5000 jobs.
 - `concurrency`: optional integer from 1 to 512; default is 2. This global capacity is also bounded by each agent's lane cap.
-- `lanes`: optional per-agent overrides for concurrency, requests per minute, backoff, quota pause, and routing model. Machine config applies first, then manifest overrides merge per field. See [lanes and routing](lanes.md).
+- `lanes`: optional per-agent overrides for concurrency, requests per minute, backoff, quota pause, and routing model. Machine config applies first, then manifest overrides merge per field. `lanes.openrouter.allowCodeOutputs` is an optional boolean (default unset/false) that lets OpenRouter write non-sensitive code; operators usually set it in machine config so `swarm update` cannot wipe it. See [lanes and routing](lanes.md).
 - `report`: optional, only `"short"` is allowed. Requires a valid short report from every worker job. Other values refuse with `report-invalid-mode`: `report must be "short"`. See [reports and rollups](reports.md).
 - `checks`: optional array of at most 10 post-integration checks, run by `integrate` after it writes files. See the Checks section below.
 - `mutants`: optional array of at most 32 mutation entries, checked by `integrate --mutants`. See the Mutation checks section below.

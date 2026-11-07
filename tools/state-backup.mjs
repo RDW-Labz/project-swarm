@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 
 export const BACKUP_DIR = '.swarm/backups';
-export const BACKUP_INCLUDE = Object.freeze(['.swarm/project', '.project-swarm.json', '.swarm/ui/results.json', 'coordination/journal.ndjson']);
+export const BACKUP_INCLUDE = Object.freeze(['.swarm/project', '.project-swarm.json', '.swarm/runner-pointer.json', '.swarm/ui/results.json', 'coordination/journal.ndjson']);
 
 const ID_RE = /^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$/;
 const MAX_FILES = 5000;
@@ -122,7 +122,7 @@ async function backupIds(root) {
 async function prune(root, keep, protect = []) {
   const complete = [];
   for (const id of await backupIds(root)) {
-    try { await readManifest(root, id); complete.push(id); } catch { /* incomplete: left alone */ }
+    try { await readManifest(root, id); complete.push(id); } catch (error) { if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) console.error('[tools/state-backup.mjs] readManifest prune:', id, error?.message ?? error); }
   }
   for (const id of complete.slice(Math.max(1, keep))) {
     if (protect.includes(id)) continue;
@@ -174,8 +174,8 @@ export async function listBackups(root) {
         files: m.files.length,
         bytes: m.files.reduce((s, f) => s + (Number(f.bytes) || 0), 0),
       });
-    } catch {
-      // unreadable or incomplete backup: skipped
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) console.error('[tools/state-backup.mjs] listBackups readManifest:', id, error?.message ?? error);
     }
   }
   return out;

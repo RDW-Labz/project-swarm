@@ -37,7 +37,11 @@ const within = (file, parent) => { const rel = path.relative(parent, file); retu
 export function defaultTmpRoots() {
   const raw = os.tmpdir();
   let real = raw;
-  try { real = realpathSync(raw); } catch { /* raw kept as the sole spelling */ }
+  try { real = realpathSync(raw); } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'EACCES') {
+      console.error('[tools/codex-adapter.mjs] defaultTmpRoots realpath:', error?.message ?? error);
+    }
+  }
   return [...new Set(['/private/tmp', '/tmp', raw, real])];
 }
 export function validateReadPaths(paths = [], home = os.homedir(), config = {}) {
@@ -200,6 +204,17 @@ export function parseCodexReply(text) {
     if (fenced) return fenced;
   }
   return lastTopLevelObject(text);
+}
+export function blockedNoteFromReply(reply) {
+  if (!reply || !Array.isArray(reply.notes)) return null;
+  for (const item of reply.notes) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith('blocked') || lower.includes('status: blocked') || lower.includes('blocked:')) return trimmed;
+  }
+  return null;
 }
 // Lesson #64: when the reply itself yields nothing, the same `-o` file is re-read directly in
 // case only the captured reply text, not the file, was empty or truncated.

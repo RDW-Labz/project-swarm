@@ -1,0 +1,102 @@
+{
+  "round": "5",
+  "hive": {
+    "scores": {
+      "workflow": 4.2,
+      "layout": 4.1,
+      "readability": 4.2,
+      "data": 3.9,
+      "phone": 4.2,
+      "polish": 4.1
+    },
+    "overall": 4.1,
+    "fixes": [
+      {
+        "problem": "On desktop the hub map takes about 55% of the screen height, so the Needs You queue (the main action list) starts at y~675 and only 2.5 rows fit above the fold. The map also leaves a large empty band below the last project cards.",
+        "where": "Desktop: the central hub map panel (y 190-655) and the Needs You panel in the bottom-left",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Cap the map height at about 46vh: .cc-hive-map { min-height: 0; height: clamp(360px, 46vh, 440px); }. Tighten the project-card vertical gap to 10px. Alternatively, put Needs You in a right-hand 360px column beside the map: .cc-hive-body { display: grid; grid-template-columns: 1fr 360px; gap: 16px; }."
+      },
+      {
+        "problem": "Project names in Needs You are cut to 'parts-req...' and 'project-s...' because the NEEDS YOU chip and the OPEN pill take up the row. The owner cannot tell which project needs them.",
+        "where": "Needs You list rows, desktop and phone",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Drop the repeated NEEDS YOU chip from each row (the panel title already says it) and replace it with a count pill such as '3 asks'. Let the name wrap to 2 lines: .cc-needs-row .name { white-space: normal; overflow-wrap: anywhere; -webkit-line-clamp: 2; }."
+      },
+      {
+        "problem": "The panels contradict each other on agent counts. Lanes and Savings adds up to 5 (3/0/1/1) while the header and stat card say 10 agents live. Throughput says 4/5 projects running, but only one project card shows RUNNING (the others say NEEDS YOU or IDLE). Every session log entry shows the same '1s'.",
+        "where": "Lanes and Savings, Throughput and Session Log panels, bottom row",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Compute the lane bars from the same agent list that feeds AGENTS LIVE, and label the axis 'agents per lane' so the totals match. Rename 'projects running' to 'projects active', or count only the running state. Render log times as relative time from each event's own timestamp (e.g. '12s', '3m') rather than the render time."
+      },
+      {
+        "problem": "Projects use plain letter avatars (P / A / S / B) instead of the colourful robot-head assets. The page also has no visible glitch accent, so two of the owner's stated taste items are missing.",
+        "where": "Project cards on the hub map and the avatars in the Needs You rows",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Swap the letter tile for the robot-head asset, picked deterministically by a hash of the project id: <img class=\"cc-avatar\" src=\"robot-heads/${idx}.svg\" alt=\"\">. Add a single glitch effect to the 'opus' hub wordmark only: .cc-hub-title { position: relative } .cc-hub-title::before,::after { content: attr(data-text); clip-path: inset(..); animation: cc-glitch 6s steps(1) infinite; }, disabled under prefers-reduced-motion and the Pause motion toggle."
+      },
+      {
+        "problem": "The spend value reads '$41.8' (dropping the trailing zero looks like a bug). The FAILS tiles show '—' on every project, which says nothing about whether anything failed.",
+        "where": "SPEND stat card, Throughput 'board spend' row, and the FAILS tile in each project card",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Format currency with Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2}). Show a muted '0' in FAILS when the count is known to be zero, keep '—' only when there is no data, and colour FAILS > 0 red with a pill."
+      },
+      {
+        "problem": "On phone the header controls wrap into an uneven row of five pills, and the LIVE chip loses its agent count. The hub map cards below repeat what Needs You and the stat cards already show.",
+        "where": "Phone header (y 40-85) and the hub map section below Needs You",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "@media (max-width:480px){ .cc-hive-nav { display:grid; grid-template-columns: repeat(3,1fr) auto auto; gap:6px } .cc-live-chip .count { display:inline } }. Collapse the hub map into a compact 2-col grid of project tiles with min-height:44px tap targets."
+      }
+    ]
+  },
+  "cockpit": {
+    "scores": {
+      "workflow": 3.3,
+      "layout": 2.6,
+      "readability": 3.1,
+      "data": 2.9,
+      "phone": 3.2,
+      "polish": 3.0
+    },
+    "overall": 3.0,
+    "fixes": [
+      {
+        "problem": "Panels overlap. The STAGE STACK card sits on top of the 'How the swarm loop works' bar and wedges into the Worker Stream row, leaving gaps between the cards. The RUN STREAM card hangs past the bottom of the main board. The floating '?' button covers the footer text ('Live board data').",
+        "where": "Desktop centre column, y 600-855; '?' in the bottom-left corner",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Take the stage stack out of absolute positioning and give it a grid area. Use .cc-cockpit-board { display:grid; grid-template-columns: 1fr 300px 1fr; grid-template-areas: 'left center right' } and put .cc-run-stream and .cc-stage-stack in the centre column as normal flow (position: static). Make the worker stream its own full-width row: .cc-worker-stream { display:grid; grid-template-columns: repeat(4,1fr); gap:12px }. Give the body padding-bottom: 72px so the fixed '?' never covers content."
+      },
+      {
+        "problem": "The headline is a huge pure-white condensed display font with double spaces ('5  OF  14 TICKETS DONE'), and it glares. Under it, a raw CLI string 'BASH SWARM GO --SCOPE, 40M 4S' is shown as the subtitle, which reads like debug text.",
+        "where": "Page title block, top-left, y 70-175",
+        "file": "tools/watch-assets/cockpit-view.js",
+        "change": "Collapse the whitespace when building the title (`${done} of ${total} tickets done`). Show the project name plus the elapsed time as a mono chip (e.g. 'parts-request-app · 40m 4s') rather than the command line. In cc-cockpit.css: .cc-title { color:#e7e9ee; font-size:clamp(40px,5vw,64px); letter-spacing:-0.01em }."
+      },
+      {
+        "problem": "Some identifiers are inconsistent or look like debug output. Now Loading shows 'T-0615' while the list numbers it 06. The run row prints its id twice ('17933130 17933130'). OWNER shows a hostname ('Bradens-MacBook-Pro.local'). 'AVAILABILITY 5/14' is actually tickets done, not availability.",
+        "where": "Now Loading card, Run Stream row, owner/lane breadcrumb, availability bar",
+        "file": "tools/watch-assets/cockpit-view.js",
+        "change": "Use one ticket id format everywhere: show T-0615 as a mono chip in each row, or keep the index and add the id as a subtitle. Render run rows as `${shortId} · ${label}`, without repeating the id. Map the owner to a display name or hide the field when the value is a hostname. Rename the bar to 'PROGRESS' and drive it from done/total, or compute a real availability metric."
+      },
+      {
+        "problem": "The ticket lists leave a large empty area under ticket 07 in the left column. The rows are all the same bold mono weight, so DONE, RUNNING and READY don't separate at a glance, and the robot sits in a mostly empty centre.",
+        "where": "Main board, left and right ticket columns and the centre stage, y 280-690",
+        "file": "tools/watch-assets/cockpit-lists.js",
+        "change": "Group tickets by status, not by index. Put RUNNING first with a green accent bar, then READY, then a collapsed 'Done (5)' disclosure. Flow them as one list into a 2-col CSS grid (grid-auto-flow: row) so the columns stay balanced. Make titles font-weight:500 in the sans face and keep mono for ids and stage only. Dim done rows with opacity:.6."
+      },
+      {
+        "problem": "The palette is mostly orange plus one teal, with flat dark boxes. There are no stat cards with trend pills, no gradient section separation, no corner brackets and no glitch effect, so the page feels generic next to Hive.",
+        "where": "Whole page, especially the header strip and the board container",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Reuse Hive's stat-card component for a row of Done / Running / Ready / Spend cards with coloured top borders (green/teal/amber/pink) and trend pills. Give .cc-cockpit-board { background: radial-gradient(ellipse at 50% 30%, rgba(220,60,120,.10), transparent 60%), #111318 } and add the Hive corner-bracket ::before/::after. Give lane labels a coloured dot (shared with Hive) for each lane. Use one glitch effect on the 'thinking' chip only, respecting reduced motion."
+      },
+      {
+        "problem": "On phone, the headline and breadcrumbs push the tabs to y~340, so only the robot and three running rows fit above the fold. The '?' button overlaps the 'SEARCH TICKETS' label, ticket titles are cut off, and the lane list wraps onto two lines.",
+        "where": "Phone, top 340px, bottom-left '?', ticket rows",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "@media (max-width:480px){ .cc-title{font-size:36px; line-height:1} .cc-breadcrumb, .cc-lanes{display:none} .cc-tabs{position:sticky; top:0; z-index:5} .cc-help-fab{bottom:16px; right:16px; left:auto} .cc-ticket .title{white-space:normal; -webkit-line-clamp:2} .cc-robot-stage{height:140px} } and move the lanes into the STACK tab."
+      }
+    ]
+  },
+  "notes": "Hive is close to the bar: the hub map, stat cards and accent palette land well, but it needs a tighter fold, robot-head avatars and consistent counts across panels. Cockpit is the weak page: its centre column overlaps, the headline glares and shows debug-like text, and its ids are inconsistent, so it needs a layout rework before it can be graded on polish."
+}

@@ -1,0 +1,95 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8019",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "wiring.mjs:170-198 alignTestTicketsWithBuildStages; wiring.mjs:110-149 orderTestsAfterBuild (testWaitsOnModule skips done); tests/scope-split-guards.test.mjs ingest moves a later-stage test ticket; tests/splitter-lesson-55.test.mjs older done module is not given a dependency",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "wiring.mjs:210-232 reconcileTicketContext; tests/scope-split-guards.test.mjs ingest drops orphan context but keeps dependsOn-produced context",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "wiring.mjs:235-269 peelProtectedOutputs; tests/scope-split-guards.test.mjs ingest peels coordination/checks.json into an owner commit window human ticket",
+          "gap": ""
+        },
+        {
+          "n": 4,
+          "met": true,
+          "evidence": "scope-commands.mjs:1138-1155 applySplitIngestGuards + finalizeSplitTestStages; tests/scope-split-guards.test.mjs (stage move, reject, context drop, protected peel cases)",
+          "gap": ""
+        }
+      ]
+    },
+    {
+      "ticket": "T-8020",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "scope-loop.mjs:205-222 skipAcceptanceReview; acceptance.mjs:381-388 acceptanceReviewSkipNote/acceptanceReviewSkipWarning; tests/acceptance-review-skip.test.mjs acceptance skip helpers; tests/scope-loop-review-stall.test.mjs a review that cannot start is skipped with a named warning",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tests/acceptance-review-skip.test.mjs one ticket in another worktree is skipped while the rest of the wave completes (T-8020/T-8021 done, T-8022 skipped)",
+          "gap": ""
+        }
+      ]
+    },
+    {
+      "ticket": "T-8021",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "board-data.mjs:391-442 lastTicketFinishedAt scans family roots, tickets.log, ledger history, and run jobs",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tests/board-accuracy-activity.test.mjs lastTicketFinishedAt uses the newest tickets.log done transition across linked worktree ledgers",
+          "gap": ""
+        }
+      ]
+    },
+    {
+      "ticket": "T-8022",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "ticket-paths.mjs:218-241 similar-new-file warning on write paths; ticket-paths.mjs:245-255 read/context still errors; tests/ticket-paths-new-files.test.mjs validateTicketPaths warns on a similar new output file; validateTicketPaths still refuses a missing context path",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "scope-commands.mjs:1170-1210 accept-new-path turns refusals into warnings and logs accept-new-path; tests/ticket-paths-new-files.test.mjs --accept-new-path overrides only the named refused path",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tests/ticket-paths-new-files.test.mjs (similar new file warning, context typo refusal, ingest + --accept-new-path integration)",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

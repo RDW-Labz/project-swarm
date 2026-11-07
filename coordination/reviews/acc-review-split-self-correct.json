@@ -1,0 +1,107 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8023",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/split-repair.mjs:39-49 issueFromPartial; tools/split-repair.mjs:53-169 collectSplitIssues; tests/split-repair.test.mjs collectSplitIssues maps tree conflicts to shared-file issues",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/split-repair.mjs:186-193 autoFix+chainSharedFiles; tools/wiring.mjs:72-88 chainSharedFiles; tests/split-repair.test.mjs shared-file same wave is fixed by autoFix with zero repair rounds",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": false,
+          "evidence": "tools/split-repair.mjs:15-21 ROOT_RULES export; tools/scope-commands.mjs:688-690 splitPrompt embeds ROOT_RULES; tests/split-repair.test.mjs buildRepairJobs includes requirements, failures, issues, and output path",
+          "gap": "No test would fail if splitPrompt stopped embedding ROOT_RULES"
+        },
+        {
+          "n": 4,
+          "met": false,
+          "evidence": "tools/split-repair.mjs:313-391 runRepairLoop pushes history and calls log; tools/scope-commands.mjs:1635-1637 ingest stdout repairLines",
+          "gap": "No test asserts per-round log/history (round, errorsIn, errorsLeft) from runRepairLoop"
+        },
+        {
+          "n": 5,
+          "met": true,
+          "evidence": "tests/split-repair.test.mjs future context / test after code / missing integration / exhausted maxRepairs parks bad tickets and keeps good ones / worker that keeps returning the same bad answer stops after one no-progress round",
+          "gap": ""
+        }
+      ]
+    },
+    {
+      "ticket": "T-8024",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/scope-commands.mjs:1184-1274 runIngestRepairLoop; tools/scope-commands.mjs:1623-1637 parkedBlockers+output; tests/scope-split-repair-loop.test.mjs --max-repairs 0 parks a bad ticket, ingests good ones, and skips runSplit",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": false,
+          "evidence": "tools/scope-commands.mjs:688-690 ROOT_RULES in splitPrompt; tools/wiring.mjs:235-269 peelProtectedOutputs; tests/scope-split-repair-loop.test.mjs covers future context, shared file, test stage, missing integration",
+          "gap": "No test in declared suites would fail if protected-file routing to owner-window tickets broke"
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tools/scope-commands.mjs:1221-1222 allowIntegrationRepair for missing-integration; tests/scope-split-repair-loop.test.mjs missing integration ticket is repaired in one round",
+          "gap": ""
+        },
+        {
+          "n": 4,
+          "met": true,
+          "evidence": "tests/scope-split-repair-loop.test.mjs change-order merge with a stray ticket is repaired or parked, not refused",
+          "gap": ""
+        },
+        {
+          "n": 5,
+          "met": true,
+          "evidence": "tools/scope-commands.mjs:1635-1638 repairLines+parkedLines; tests/scope-split-repair-loop.test.mjs no-progress repair parks and reports rounds; tests/scope-split-repair-loop.test.mjs --max-repairs 0 readJournal blocker split-park-",
+          "gap": ""
+        },
+        {
+          "n": 6,
+          "met": true,
+          "evidence": "tests/scope-split-repair-loop.test.mjs end-to-end cases with repairRunSplit injected runSplit",
+          "gap": ""
+        }
+      ]
+    },
+    {
+      "ticket": "T-8026",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/scope-commands.mjs:3064-3086 autoSplitAfterChangeOrder; tools/scope-commands.mjs:3119-3131 cmdChange; tests/change-order-auto-split.test.mjs change --yes auto-splits pending requirements into the ledger; tests/change-order-auto-split.test.mjs change --no-split prints manual steps",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/scope-commands.mjs:1623-1637 parkedBlockers; tests/change-order-auto-split.test.mjs change --yes parks a bad ticket and ingests good ones",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tests/change-order-auto-split.test.mjs change --yes auto-splits pending requirements into the ledger (injected runSplit)",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

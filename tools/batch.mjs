@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+import path from 'node:path';
+import { loadLocalConfig } from './local-config.mjs';
+
 export const BATCH_LIMITS = Object.freeze({ maxRequests: 10000, maxBytes: 200 * 1024 * 1024, collectMs: 2000, maxHoldMs: 15000, pollMs: 30000, expireMs: 25 * 3600 * 1000 })
 export const BATCH_DISCOUNT = 0.5
 const ERR_STATUS = { invalid_request_error: 400, authentication_error: 401, permission_error: 403, not_found_error: 404, rate_limit_error: 429, overloaded_error: 529 }
@@ -18,7 +21,7 @@ export function createBatchCollector({ fetchImpl = globalThis.fetch, readKey, ba
   const L = { ...BATCH_LIMITS, ...limits }
   const batches = new Set()
   let pending = [], pendingBytes = 0, timer = null, seq = 0, closed = false, firstAt = 0
-  const emit = (e) => { try { onEvent(e) } catch {} }
+  const emit = (e) => { try { onEvent(e) } catch (error) { console.error('[tools/batch.mjs] onEvent callback:', error?.message ?? error) } }
   const hdr = (extra = {}) => ({ 'x-api-key': readKey(), 'anthropic-version': version, ...extra })
   const finish = (it, v, isErr) => { if (it.settled) return; it.settled = true; it.signal?.removeEventListener('abort', it.onAbort); isErr ? it.reject(v) : it.resolve(v) }
   const stopTimer = () => { if (timer !== null) clearTimer(timer); timer = null }
@@ -29,7 +32,7 @@ export function createBatchCollector({ fetchImpl = globalThis.fetch, readKey, ba
     pending = []; pendingBytes = 0
     b.items.forEach((it) => { it.batch = b })
     batches.add(b)
-    runBatch(b).catch(() => {})
+    runBatch(b).catch((error) => { console.error('[tools/batch.mjs] runBatch backstop:', error?.message ?? error) })
   }
   function submit(body, { id, signal, onSent } = {}) {
     if (closed) return Promise.reject(new Error('batch-closed'))
@@ -63,20 +66,20 @@ export function createBatchCollector({ fetchImpl = globalThis.fetch, readKey, ba
   async function cancelRemote(b) {
     b.state = 'canceled'
     emit({ type: 'canceled', batchId: b.id })
-    try { await fetchImpl(`${baseUrl}/v1/messages/batches/${encodeURIComponent(b.id)}/cancel`, { method: 'POST', headers: hdr() }) } catch {}
+    try { await fetchImpl(`${baseUrl}/v1/messages/batches/${encodeURIComponent(b.id)}/cancel`, { method: 'POST', headers: hdr() }) } catch (error) { console.error('[tools/batch.mjs] cancelRemote fetch:', error?.message ?? error) }
   }
   async function runBatch(b) {
     let res, text = ''
     try {
       res = await fetchImpl(`${baseUrl}/v1/messages/batches`, { method: 'POST', headers: hdr({ 'content-type': 'application/json' }), body: JSON.stringify({ requests: b.items.map((it) => ({ custom_id: it.customId, params: it.params })) }) })
     } catch (e) { b.state = 'ended'; return b.items.forEach((it) => finish(it, e, true)) }
-    try { text = await res.text() } catch {}
+    try { text = await res.text() } catch (error) { console.error('[tools/batch.mjs] batch-create response body:', error?.message ?? error) }
     if (!res.ok) { b.state = 'ended'; return b.items.forEach((it) => finish(it, jsonResp(res.status, text), false)) }
     const j = parseJson(text)
     if (!j?.id || !j.processing_status) { b.state = 'ended'; return b.items.forEach((it) => finish(it, new Error('batch-create-invalid'), true)) }
     b.id = j.id; b.created = now()
     // The bodies have been sent; they are not kept in memory for the day the batch may take.
-    for (const it of b.items) { it.params = null; try { it.onSent?.({ batchId: b.id, customId: it.customId }) } catch {} }
+    for (const it of b.items) { it.params = null; try { it.onSent?.({ batchId: b.id, customId: it.customId }) } catch (error) { console.error('[tools/batch.mjs] onSent callback:', error?.message ?? error) } }
     emit({ type: 'submitted', batchId: b.id, requests: b.items.length })
     if (b.state === 'canceled' || b.items.every((it) => it.aborted)) { b.state = 'canceled'; return cancelRemote(b) }
     await track(b)
@@ -87,7 +90,7 @@ export function createBatchCollector({ fetchImpl = globalThis.fetch, readKey, ba
       await sleep(L.pollMs)
       if (b.state !== 'in_progress' || closed) return
       // Expired here: the remote batch is cancelled too, so it stops running (and billing) for nobody.
-      if (now() - b.created >= L.expireMs) { cancelRemote(b).catch(() => {}); b.state = 'ended'; return b.items.forEach((it) => finish(it, toResponse(null), false)) }
+      if (now() - b.created >= L.expireMs) { cancelRemote(b).catch((error) => { console.error('[tools/batch.mjs] cancelRemote expiry backstop:', error?.message ?? error) }); b.state = 'ended'; return b.items.forEach((it) => finish(it, toResponse(null), false)) }
       let j
       try {
         const r = await fetchImpl(`${baseUrl}/v1/messages/batches/${encodeURIComponent(b.id)}`, { headers: hdr() })
@@ -106,7 +109,7 @@ export function createBatchCollector({ fetchImpl = globalThis.fetch, readKey, ba
     try {
       // The key goes only to the API's own host, whatever URL the answer names.
       let sameHost = false
-      try { sameHost = new URL(j.results_url).origin === new URL(baseUrl).origin } catch {}
+      try { sameHost = new URL(j.results_url).origin === new URL(baseUrl).origin } catch (error) { if (!(error instanceof TypeError)) console.error('[tools/batch.mjs] results URL same-host check:', error?.message ?? error) }
       if (!sameHost) throw new Error('batch-results-url-invalid')
       const r = await fetchImpl(j.results_url, { headers: hdr() })
       if (!r.ok) throw new Error(`results-${r.status}`)
@@ -136,9 +139,29 @@ export function createBatchCollector({ fetchImpl = globalThis.fetch, readKey, ba
   }
   return { submit, cancelAll, close, status }
 }
+export function defaultBatchTypes(config = {}) {
+  const batch = config?.batch ?? {};
+  if (batch.reviews === false) return [];
+  if (batch.reviews === true || batch.reviews === undefined) return ['review'];
+  return [];
+}
+
+export function batchPolicyFor(manifest, flag, env = process.env, root) {
+  let machineBatch = {};
+  try { machineBatch = loadLocalConfig({ env }).batch ?? {}; } catch { machineBatch = {}; }
+  const listed = typeof root === 'string' && Array.isArray(machineBatch.projects) && machineBatch.projects.some(item => typeof item === 'string' && path.resolve(item) === path.resolve(root));
+  const config = listed ? machineBatch : {};
+  const own = manifest?.batch;
+  let types = Array.isArray(own?.types) ? own.types : own === undefined && config.enabled === true && Array.isArray(config.types) && config.types.length ? config.types : [];
+  if (listed && !types.length && own === undefined && (config.reviews === true || config.reviews === undefined)) types = ['review'];
+  const all = flag === true || own === true || (own === undefined && config.enabled === true && !(Array.isArray(config.types) && config.types.length));
+  return { all, types };
+}
+
 export function batchEligible(job, { all = false, types = [] } = {}) {
   try {
     if (!job || typeof job !== 'object') return false
+    if (job.urgent === true) return false
     if (job.agent !== 'anthropic' || job.type === 'lead' || job.batch === false || job.privateData) return false
     if (job.batch === true || all === true) return true
     return job.type !== undefined && Array.isArray(types) && types.includes(job.type)

@@ -1,0 +1,62 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "memwire",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "context": [
+    "tools/machine-limit.mjs",
+    "tools/autotune.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tools/autopilot.mjs",
+    "tests/memory-aware-limits.test.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-31.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tools/autopilot.mjs",
+    "tests/memory-wiring.test.mjs",
+    "docs/memory-limits.md"
+   ],
+   "prompt": "tools/machine-limit.mjs already exports memory-aware helpers (readMachine via tools/autotune.mjs, effectiveMachineLimit, memoryPressureHoldLine, jobStartsForBatch, testConcurrencyFor, isNodeTestCommand, applyNodeTestConcurrency, gateVerifyArgvWithMemory) but nothing calls them. Wire them in, small and safe. 1) tools/autopilot-ready-deps.mjs: in autopilotStartReadySettings cap maxJobs by the memory-aware limit (read the machine with readMachine, keep the config ceiling); in startScope, before spawning `go --scope`, re-read the machine and, at hard pressure, do not spawn: return { ok: true, result: 'held-memory' } with one log line from memoryPressureHoldLine; at soft pressure lower --max-jobs by the memory cap. Do not change the shape of the other return values. If tools/autopilot.mjs needs to treat result 'held-memory' like a normal skip (no failure count, retried next pass), do that. 2) tools/swarm/core-31.mjs runChecks: before a check named tests runs its argv, if the argv is a node --test command (isNodeTestCommand) replace or add --test-concurrency=N with N from testConcurrencyFor(await readMachine()); never touch other commands; at hard pressure wait up to 5 minutes (poll every 15 seconds, injectable sleep and machine reader) for pressure to drop to soft before starting, then run anyway at concurrency 1 and record a warning 'ran under memory pressure' in the result. Keep the injection optional through an options field so existing tests and callers keep working with no new arguments. 3) tests/memory-wiring.test.mjs: autopilot hold at hard (spawn never called), soft shrinks --max-jobs, runChecks rewrites --test-concurrency for node --test and leaves other commands alone, waits then runs at 1 when pressure stays hard (fake sleep and machine). No real machine reads or sleeps. 4) docs/memory-limits.md: a short page: the thresholds, the config keys, what is held and why. Keep every existing test passing.",
+   "ignoreTests": [
+    "tests/autopilot-blocker-resolved.test.mjs",
+    "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-ledger-only.test.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-no-outputs.test.mjs",
+    "tests/autopilot-policy-pass.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autopilot.test.mjs",
+    "tests/b7-review-fixes.test.mjs",
+    "tests/brain-commands.test.mjs",
+    "tests/cache-context-normalize.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/generated-state.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/ignore-tests-reason.test.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/run-cleanup.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/safety-commands.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/wave-batch.test.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ]
+  }
+ ]
+}

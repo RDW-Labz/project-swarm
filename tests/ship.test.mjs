@@ -212,7 +212,7 @@ test('ship: refuses with "commit first" when the tree is dirty, and never pushes
   const { exec, calls } = makeExec([ok('M dirty.txt\n')]);
   const result = await ship(baseOptions(root, payloadPath, { exec }));
   assert.equal(result.status, 'refused');
-  assert.equal(result.reason, 'commit first');
+  assert.match(result.reason, /^commit first/);
   assert.ok(!calls.some(c => c.file === 'git' && c.args[0] === 'push'));
 });
 

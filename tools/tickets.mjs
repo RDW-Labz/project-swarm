@@ -12,13 +12,16 @@ import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.
 import { wiringGaps } from './wiring.mjs';
 import { isExampleFile } from './init-profile.mjs';
 import { isSensitivePath } from './sensitive-paths.mjs';
+import { mainWorktreeRoot, worktreeFamily } from './project-spend.mjs';
+import { backupLedger } from './ledger-backup.mjs';
 
 // Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
 export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
 export const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
-export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
+export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled', 'superseded'];
+export const SUPERSEDE_ELIGIBLE = ['proposed', 'todo', 'ready', 'blocked'];
 export const DELIVERABLE_STATUSES = ['todo', 'ready', 'blocked', 'running'];
-export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
+export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'rename', 'design', 'contract', 'human'];
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
 // A ticket may pin its lane (agent, or agent:model). 'auto' is the default and is stored as no lane at all.
@@ -34,21 +37,22 @@ export const laneText = lane => (lane ? `${lane.agent}${lane.model ? `:${lane.mo
 // A sensitive ticket may only go to a lane that stays with a known provider: cursor routes to whatever model is named, so it only counts without one.
 export const laneOkForSensitive = lane => Boolean(lane) && (lane.agent !== 'cursor' || !lane.model);
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'lane', 'approvedBy', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes', 'dependencies'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'lane', 'approvedBy', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes', 'dependencies', 'targetWorktree'];
 const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
 // Build output anywhere in a path, and any dot-env file, are never ticket files.
 const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
 const SECRET_NAMES = ['.project-swarm.json', '.env'];
 // A proposed ticket (made from a gallery comment) is not part of the plan: no worker runs it and the approval hash ignores it until the owner approves it (swarm tickets ID --approve).
 const MOVES = {
-  proposed: ['todo', 'cancelled'],
-  todo: ['ready', 'blocked', 'cancelled'],  // a human ticket may also go todo -> done (see HUMAN_MOVES)
-  ready: ['running', 'blocked', 'cancelled'],
+  proposed: ['todo', 'cancelled', 'superseded'],
+  todo: ['ready', 'blocked', 'cancelled', 'superseded'],  // a human ticket may also go todo -> done (see HUMAN_MOVES)
+  ready: ['running', 'blocked', 'cancelled', 'superseded'],
   running: ['review', 'ready', 'blocked', 'cancelled'],
   review: ['done', 'running', 'blocked', 'cancelled'],
-  blocked: ['ready', 'cancelled'],
+  blocked: ['ready', 'cancelled', 'superseded'],
   done: [],
   cancelled: [],
+  superseded: [],
 };
 
 // Day 0 and other human tickets are done by a person, at any time.
@@ -66,7 +70,7 @@ export function validateSetTransition(ledger, id, to) {
   if (!STATUSES.includes(to)) return { ok: false, message: `status must be one of: ${STATUSES.join(', ')}` };
   const ticket = ledger?.tickets?.find(t => t.id === id);
   if (!ticket) return { ok: false, message: `no ticket ${id}` };
-  if (ticket.status === 'proposed' && to !== 'cancelled') return { ok: false, message: `${id} is proposed: approve it with swarm tickets ${id} --approve (or cancel it with --set cancelled)` };
+  if (ticket.status === 'proposed' && to !== 'cancelled' && to !== 'superseded') return { ok: false, message: `${id} is proposed: approve it with swarm tickets ${id} --approve (or cancel it with --set cancelled)` };
   if (!legalMoves(ticket).includes(to)) return { ok: false, message: `${id}: ${ticket.status} -> ${to} is not allowed; legal next statuses: ${legalMoves(ticket).join(', ') || 'none'}` };
   if (unapprovedProposal(ticket) && ['todo', 'ready', 'running'].includes(to)) return { ok: false, message: `${id} came from outside text (a gallery comment, a production error or a handoff check); the owner approves it with swarm tickets ${id} --approve` };
   if (to === 'ready') {
@@ -99,9 +103,33 @@ const badPath = (p, readOnly = false) => {
     segs.some(s => SECRET_NAMES.includes(s.toLowerCase()));
 };
 
+const absolutePath = value => path.isAbsolute(value) || path.win32.isAbsolute(value);
+
+export function validateTargetWorktree(value) {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 400 || value.includes('\0')) {
+    return 'targetWorktree must be a string of 1 to 400 characters without NUL';
+  }
+  if (absolutePath(value) && value.split(/[\\/]/).some(segment => segment === '..')) {
+    return 'targetWorktree path must not contain .. segments';
+  }
+  return null;
+}
+
+export function effectiveTargetWorktree(ledger, ticket) {
+  if (ticket?.targetWorktree !== undefined) return ticket.targetWorktree;
+  const stages = Array.isArray(ledger?.scope?.stages)
+    ? ledger.scope.stages
+    : Array.isArray(ledger?.stages)
+      ? ledger.stages
+      : [];
+  const stage = stages.find(candidate => candidate?.id === ticket?.stage);
+  if (stage?.targetWorktree !== undefined) return stage.targetWorktree;
+  return ledger?.stageTargets?.[ticket?.stage] ?? ledger?.scope?.stageTargets?.[ticket?.stage];
+}
+
 export function ticketSetHash(tickets) {
-  // Proposed tickets, and comment tickets the owner has not approved (cancelled or hand-edited), are outside what was approved.
-  const picked = [...tickets].filter(t => t.status !== 'proposed' && !unapprovedProposal(t)).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
+  // Proposed and superseded tickets, and comment tickets the owner has not approved (cancelled or hand-edited), are outside what was approved.
+  const picked = [...tickets].filter(t => t.status !== 'proposed' && t.status !== 'superseded' && !unapprovedProposal(t)).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
   return createHash('sha256').update(canon(picked)).digest('hex');
 }
 
@@ -142,6 +170,10 @@ export function validateTicket(t) {
   if (t.sensitive !== undefined && typeof t.sensitive !== 'boolean') errors.push('sensitive must be a boolean');
   if (t.skeleton !== undefined && typeof t.skeleton !== 'boolean') errors.push('skeleton must be a boolean');
   if (t.integration !== undefined && typeof t.integration !== 'boolean') errors.push('integration must be a boolean');
+  if (t.targetWorktree !== undefined) {
+    const error = validateTargetWorktree(t.targetWorktree);
+    if (error) errors.push(error);
+  }
   if (t.screens !== undefined && !(isStrArr(t.screens) && t.screens.length <= 5 && t.screens.every(id => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) && id.length >= 2 && id.length <= 40))) errors.push('screens must be up to 5 kebab-case screen ids');
   if (t.securityReview !== undefined) {
     const r = t.securityReview;
@@ -151,6 +183,7 @@ export function validateTicket(t) {
     const r = t.acceptanceBlocked;
     if (!r || typeof r !== 'object' || Array.isArray(r) || typeof r.reason !== 'string' || r.reason.length < 1 || r.reason.length > 600) errors.push('acceptanceBlocked must be {reason, at, run}');
   }
+  if (t.holdQuestion !== undefined && (typeof t.holdQuestion !== 'string' || t.holdQuestion.length < 1 || t.holdQuestion.length > 300)) errors.push('holdQuestion must be a string of 1 to 300 characters when set');
   if (t.acceptanceResults !== undefined) {
     const list = t.acceptanceResults;
     if (!Array.isArray(list) || list.length > 100 || !list.every(r => r && typeof r === 'object' && Number.isInteger(r.n) && r.n >= 1 && r.n <= 200 && ['test', 'review', 'owner'].includes(r.by) && ['pass', 'fail', 'pending', 'missing', 'accepted'].includes(r.verdict) && (r.line === undefined || (typeof r.line === 'string' && r.line.length <= 200)) && (r.evidence === undefined || (typeof r.evidence === 'string' && r.evidence.length <= 300)))) errors.push('acceptanceResults must be a list of {n, line, by, verdict, evidence} (verdict pass, fail, pending, missing or accepted)');
@@ -158,6 +191,18 @@ export function validateTicket(t) {
   if (t.origin !== undefined && !['ci', ...PROPOSAL_ORIGINS].includes(t.origin)) errors.push('origin must be ci, comment, error or handoff when set');
   if (PROPOSAL_ORIGINS.includes(t.origin) && t.status !== 'proposed' && t.status !== 'cancelled' && !(t.approvedBy === 'owner')) errors.push('a ticket made from a comment, an error or a handoff check needs the owner approval record (approvedBy)');
   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
+  if (t.type === 'rename') {
+    const fileCount = isStrArr(t.files) ? t.files.length : 0;
+    const delCount = isStrArr(t.deletes) ? t.deletes.length : 0;
+    if (fileCount !== 1 || delCount !== 1) errors.push('rename tickets need exactly one new file in files and exactly one path in deletes');
+  }
+  if (t.type === 'migration' && isStrArr(t.files)) {
+    for (const p of t.files) {
+      if (p.toLowerCase().startsWith('supabase/migrations/') && !/\.sql$/i.test(p)) {
+        errors.push(`migration path not allowed: ${p} (files under supabase/migrations must be .sql migrations)`);
+      }
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 
@@ -173,6 +218,63 @@ export async function readLedger(root) {
   }
 }
 
+let backupLedgerForWrite = backupLedger;
+export function setBackupLedgerForWrite(fn) {
+  if (process.env.NODE_ENV !== 'test' && process.env.NODE_TEST_CONTEXT == null) {
+    throw new Error('setBackupLedgerForWrite is only available in tests');
+  }
+  backupLedgerForWrite = fn;
+}
+export function resetBackupLedgerForWrite() { backupLedgerForWrite = backupLedger; }
+
+const SYSTEM_TEMP_ROOTS = ['/tmp', '/private/tmp', '/private/var/folders'];
+
+function isUnderSystemTempRoot(resolvedPath) {
+  for (const root of SYSTEM_TEMP_ROOTS) {
+    if (resolvedPath === root || resolvedPath.startsWith(root + path.sep)) return true;
+  }
+  return false;
+}
+
+async function ledgerBackupAfterWrite(root) {
+  if (process.env.PROJECT_SWARM_NO_LEDGER_BACKUP) return;
+  const explicitHome = process.env.PROJECT_SWARM_HOME;
+  if (!explicitHome) {
+    try {
+      const real = await fs.realpath(root);
+      const tmpBase = await fs.realpath(os.tmpdir());
+      if (isUnderSystemTempRoot(tmpBase)) {
+        let homeReal;
+        try { homeReal = await fs.realpath(os.homedir()); } catch { homeReal = path.resolve(os.homedir()); }
+        const inTmp = real === tmpBase || real.startsWith(tmpBase + path.sep);
+        const tmpEqualsOrContainsHome =
+          tmpBase === homeReal || homeReal.startsWith(tmpBase + path.sep);
+        if (inTmp && !tmpEqualsOrContainsHome) return;
+      }
+    } catch (realpathErr) {
+      if (realpathErr?.code !== 'ENOENT') {
+        console.error('[tools/tickets.mjs] ledgerBackupAfterWrite temp-root check:', root, realpathErr?.message ?? realpathErr);
+      }
+    }
+  }
+  let timer;
+  const cap = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timeout')), 5000);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  });
+  try {
+    await Promise.race([
+      backupLedgerForWrite(root, { reason: 'write', ...(explicitHome ? { home: explicitHome } : {}) }),
+      cap,
+    ]);
+  } catch (backupErr) {
+    console.error('[tools/tickets.mjs] ledgerBackupAfterWrite backup failed:', root, backupErr?.message ?? backupErr);
+  }
+  finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function writeLedger(root, ledger) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const file = path.join(dir, 'tickets.json');
@@ -185,10 +287,13 @@ export async function writeLedger(root, ledger) {
     await handle.close();
     await fs.rename(tmp, file);
   } catch (error) {
-    await handle.close().catch(() => {});
+    await handle.close().catch((closeErr) => {
+      console.error('[tools/tickets.mjs] writeLedger close tmp on error:', tmp, closeErr?.message ?? closeErr);
+    });
     await fs.rm(tmp, { force: true });
     throw error;
   }
+  await ledgerBackupAfterWrite(root);
 }
 
 export async function appendLog(root, event) {
@@ -203,7 +308,115 @@ export async function appendLog(root, event) {
   }
 }
 
-export function createLedger({ scope, tickets = [], now = Date.now() } = {}) {
+const CORRUPT_LOG_LINE_MSG = '[tools/tickets.mjs] readTicketLog: skipping corrupt log line';
+
+export async function readTicketLog(root) {
+  try {
+    const text = await fs.readFile(logPath(root), 'utf8');
+    let loggedCorrupt = false;
+    const events = [];
+    for (const line of text.split('\n').filter(Boolean)) {
+      try {
+        events.push(JSON.parse(line));
+      } catch {
+        if (!loggedCorrupt) {
+          console.error(CORRUPT_LOG_LINE_MSG);
+          loggedCorrupt = true;
+        }
+      }
+    }
+    return events;
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+function ticketIdsFromLogEvent(ev) {
+  const ids = [];
+  if (typeof ev.id === 'string') ids.push(ev.id);
+  if (typeof ev.ticket === 'string') ids.push(ev.ticket);
+  if (Array.isArray(ev.ids) && ev.ids.every(s => typeof s === 'string')) ids.push(...ev.ids);
+  if (Array.isArray(ev.tickets) && ev.tickets.every(s => typeof s === 'string')) ids.push(...ev.tickets);
+  return ids;
+}
+
+function recordTouch(fromLog, id, at) {
+  const ms = Date.parse(at ?? '');
+  if (Number.isNaN(ms)) return;
+  const prev = fromLog.get(id);
+  if (!prev || ms > prev.ms) fromLog.set(id, { ms, at, basis: 'log' });
+}
+
+export function lastTouchForTickets(ledger, logEvents) {
+  const fromLog = new Map();
+  for (const ev of logEvents) {
+    for (const id of ticketIdsFromLogEvent(ev)) recordTouch(fromLog, id, ev.at);
+  }
+  const ledgerMs = Date.parse(ledger?.createdAt ?? '');
+  const fallbackMs = Number.isNaN(ledgerMs) ? 0 : ledgerMs;
+  const fallbackAt = ledger?.createdAt ?? '';
+  return ticket => {
+    const hit = fromLog.get(ticket.id);
+    if (hit) return hit;
+    return { ms: fallbackMs, at: fallbackAt, basis: 'ledger-created' };
+  };
+}
+
+export function supersedeCandidates(ledger, logEvents, { before, stage } = {}) {
+  const beforeMs = Date.parse(before);
+  if (Number.isNaN(beforeMs)) throw fail('supersede-before', `unparseable --before date: ${before}`);
+  const touch = lastTouchForTickets(ledger, logEvents);
+  const out = [];
+  for (const t of ledger?.tickets ?? []) {
+    if (!SUPERSEDE_ELIGIBLE.includes(t.status)) continue;
+    if (stage !== undefined && stage !== null && t.stage !== stage) continue;
+    const lt = touch(t);
+    if (lt.ms >= beforeMs) continue;
+    out.push({
+      id: t.id,
+      status: t.status,
+      stage: t.stage,
+      lastTouch: lt.at,
+      basis: lt.basis,
+      title: t.title,
+    });
+  }
+  out.sort(byId);
+  return out;
+}
+
+export async function applySupersedeStale(root, { before, stage, now = Date.now(), ledger: ledgerIn, logEvents: logEventsIn } = {}) {
+  const logEvents = logEventsIn ?? await readTicketLog(root);
+  const ledger = ledgerIn ?? await readLedger(root);
+  if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
+  const candidates = supersedeCandidates(ledger, logEvents, { before, stage });
+  if (!candidates.length) return { count: 0, ids: [] };
+  const ids = candidates.map(c => c.id);
+  for (const id of ids) {
+    const ticket = ledger.tickets.find(t => t.id === id);
+    if (!ticket || !SUPERSEDE_ELIGIBLE.includes(ticket.status)) continue;
+    ticket.status = 'superseded';
+    delete ticket.blockReason;
+    delete ticket.holdQuestion;
+  }
+  const pruned = pruneCancelledDeps(ledger).pruned;
+  ledger.updatedAt = new Date(now).toISOString();
+  await writeLedger(root, ledger);
+  await appendLog(root, {
+    event: 'supersede-stale',
+    by: 'owner',
+    before,
+    count: ids.length,
+    ids,
+    source: 'tickets-supersede',
+    actor: ticketActor(),
+  });
+  await logPrune(root, pruned, { by: 'owner' }, now);
+  return { count: ids.length, ids };
+}
+
+export function createLedger({ scope, stageTargets, tickets = [], now = Date.now() } = {}) {
   const seen = new Set();
   for (const t of tickets) {
     const r = validateTicket(t);
@@ -211,8 +424,64 @@ export function createLedger({ scope, tickets = [], now = Date.now() } = {}) {
     if (seen.has(t.id)) throw fail('ticket-invalid', `duplicate ticket id: ${t.id}`);
     seen.add(t.id);
   }
+  for (const stage of scope?.stages ?? []) {
+    if (stage?.targetWorktree !== undefined) {
+      const error = validateTargetWorktree(stage.targetWorktree);
+      if (error) throw fail('ticket-invalid', `${stage.id ?? '?'}: ${error}`);
+    }
+  }
+  for (const [stageId, target] of Object.entries(stageTargets ?? scope?.stageTargets ?? {})) {
+    const error = validateTargetWorktree(target);
+    if (error) throw fail('ticket-invalid', `${stageId}: ${error}`);
+  }
   const at = new Date(now).toISOString();
-  return { version: 1, scope, tickets, changeOrders: [], approved: null, createdAt: at, updatedAt: at };
+  return { version: 1, scope, ...(stageTargets === undefined ? {} : { stageTargets }), tickets, changeOrders: [], approved: null, createdAt: at, updatedAt: at };
+}
+
+const unknownTarget = target => fail('target-worktree-unknown', `target-worktree-unknown: ${String(target ?? '')}`);
+
+async function worktreeGitDir(worktree) {
+  try {
+    const gitPath = path.join(worktree, '.git');
+    const stat = await fs.lstat(gitPath);
+    if (stat.isDirectory()) return gitPath;
+    if (!stat.isFile()) return null;
+    const pointer = /^gitdir:\s*(.+)$/i.exec((await fs.readFile(gitPath, 'utf8')).trim());
+    return pointer ? path.resolve(worktree, pointer[1].trim()) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function checkedOutBranch(worktree) {
+  const gitDir = await worktreeGitDir(worktree);
+  if (!gitDir) return null;
+  try {
+    const head = (await fs.readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim();
+    return head.startsWith('ref: refs/heads/') ? head.slice('ref: refs/heads/'.length) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Resolve only from worktree metadata. This deliberately does not invoke git: target paths must
+// be registered members of the repository family, and branch targets must be checked out now.
+export async function resolveTargetWorktree(root, target) {
+  const invalid = validateTargetWorktree(target);
+  if (invalid) throw unknownTarget(target);
+  const members = await worktreeFamily(root, { all: true });
+  if (absolutePath(target)) {
+    const wanted = await fs.realpath(target).catch(() => path.resolve(target));
+    const found = members.find(member => member === wanted);
+    if (found) return found;
+    throw unknownTarget(target);
+  }
+  const main = await mainWorktreeRoot(root) ?? await fs.realpath(root).catch(() => path.resolve(root));
+  const candidates = [main, ...members.filter(member => member !== main)];
+  for (const member of candidates) {
+    if ((await checkedOutBranch(member)) === target) return member;
+  }
+  throw unknownTarget(target);
 }
 
 let viewPullRequestOverride = null;
@@ -263,6 +532,7 @@ export async function verifyMergedPullRequests(prNumbers, { repo } = {}) {
 
 const clearRunState = ticket => {
   delete ticket.blockReason;
+  delete ticket.holdQuestion;
   for (const key of ['attempts', 'escalation', 'retryNote', 'retryHistory', 'runId', 'infraRetries']) delete ticket[key];
 };
 
@@ -295,7 +565,7 @@ export async function applyDelivered(root, { ids, prNumbers, repo, by = 'owner',
   return { ledger: saved, note, prInfos, tickets: ids.map(id => saved.tickets.find(t => t.id === id)) };
 }
 
-export async function transition(root, id, to, { by = 'system', note, now = Date.now(), reason, actor, source, confirmation } = {}) {
+export async function transition(root, id, to, { by = 'system', note, now = Date.now(), reason, holdQuestion, actor, source, confirmation } = {}) {
   const ledger = await readLedger(root);
   if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
   const ticket = ledger.tickets.find(t => t.id === id);
@@ -309,9 +579,16 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   const from = ticket.status;
   ticket.status = to;
   // Why a ticket is blocked decides whether it may unlock by itself: only a dependency block does.
-  if (to === 'blocked') ticket.blockReason = reason ?? 'manual'; else delete ticket.blockReason;
-  // A cancelled ticket stops being a dependency: the tickets that waited on it no longer wait.
-  const pruned = to === 'cancelled' ? pruneCancelledDeps(ledger).pruned : [];
+  if (to === 'blocked') {
+    ticket.blockReason = reason ?? 'manual';
+    if (holdQuestion !== undefined) ticket.holdQuestion = holdQuestion;
+    else delete ticket.holdQuestion;
+  } else {
+    delete ticket.blockReason;
+    delete ticket.holdQuestion;
+  }
+  // A cancelled or superseded ticket stops being a dependency: the tickets that waited on it no longer wait.
+  const pruned = to === 'cancelled' || to === 'superseded' ? pruneCancelledDeps(ledger).pruned : [];
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
   await appendLog(root, {
@@ -325,7 +602,7 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
     ...(source ? { source } : {}),
     ...(confirmation ? { confirmation } : {}),
   });
-  await logPrune(root, pruned, { cancelled: id, by }, now);
+  await logPrune(root, pruned, { ...(to === 'cancelled' ? { cancelled: id } : {}), by }, now);
   return ticket;
 }
 
@@ -337,20 +614,23 @@ export async function logPrune(root, pruned, { cancelled, by } = {}, now = Date.
   try {
     // A note in the journal, not an inbox item: nothing here needs the owner.
     await appendEvent(root, { kind: 'note', id: `prune-${pruned[0].id}-${now}`, text: `a cancelled ticket was dropped as a dependency of ${list}` }, { now: () => now });
-  } catch { /* the note is a courtesy; the prune and its log line already happened */ }
+  } catch (noteErr) {
+    // The note is a courtesy; the prune and its log line already happened.
+    console.error('[tools/tickets.mjs] logPrune appendEvent note:', pruned[0].id, noteErr?.message ?? noteErr);
+  }
 }
 
 // Takes every cancelled ticket out of the dependsOn of the others (in place). The owner's approval stays valid when it was valid just
 // before: removing a dependency on a cancelled ticket only makes a ticket less blocked, and the seal is renewed over the new set.
 export function pruneCancelledDeps(ledger) {
   const tickets = ledger?.tickets ?? [];
-  const cancelled = new Set(tickets.filter(t => t.status === 'cancelled').map(t => t.id));
+  const dropped = new Set(tickets.filter(t => t.status === 'cancelled' || t.status === 'superseded').map(t => t.id));
   const wasApproved = isApproved(ledger);
   const pruned = [];
   for (const t of tickets) {
-    const removed = (t.dependsOn ?? []).filter(d => cancelled.has(d));
+    const removed = (t.dependsOn ?? []).filter(d => dropped.has(d));
     if (!removed.length) continue;
-    t.dependsOn = t.dependsOn.filter(d => !cancelled.has(d));
+    t.dependsOn = t.dependsOn.filter(d => !dropped.has(d));
     pruned.push({ id: t.id, removed });
   }
   if (pruned.length && wasApproved) {
@@ -368,7 +648,7 @@ export function readyTickets(tickets) {
 }
 
 export function wavesOf(tickets) {
-  const active = tickets.filter(t => t.status !== 'cancelled');
+  const active = tickets.filter(t => t.status !== 'cancelled' && t.status !== 'superseded');
   const ids = new Set(active.map(t => t.id));
   const placed = new Set();
   const waves = [];
@@ -413,7 +693,7 @@ export function ledgerStats(ledger) {
     byStage[key].total++;
     if (t.status === 'done') byStage[key].done++;
   }
-  const live = tickets.filter(t => !['cancelled', 'proposed'].includes(t.status));
+  const live = tickets.filter(t => !['cancelled', 'proposed', 'superseded'].includes(t.status));
   const percentDone = live.length ? Math.round(100 * live.filter(t => t.status === 'done').length / live.length) : 0;
   let coveragePct = null;
   if (Array.isArray(ledger?.requirements)) {
@@ -433,18 +713,24 @@ export function renderBuildPlan(ledger, scope) {
   const name = scope?.name ?? ledger?.scope?.name ?? 'untitled';
   const version = scope?.version ?? ledger?.scope?.version ?? 1;
   const cell = s => String(s ?? '').replace(/\s+/g, ' ').split('|').join('/');
-  const live = tickets.filter(t => t.status !== 'cancelled');
+  const live = tickets.filter(t => !['cancelled', 'proposed', 'superseded'].includes(t.status));
   const out = ['# Build plan', '', `Scope: ${cell(name)} (version ${version})`, `Progress: ${stats.percentDone}% done of ${live.length} live tickets`];
   if (stats.coveragePct !== null) out.push(`Requirement coverage: ${stats.coveragePct}%`);
   out.push(`Tickets: ${stats.total} total (${STATUSES.map(s => `${s} ${stats.byStatus[s] ?? 0}`).join(', ')})`);
   const cos = ledger?.changeOrders ?? [];
   out.push(`Change orders: ${cos.length}${cos.length ? ' (' + cos.map(c => c.id).join(', ') + ')' : ''}`, '');
-  const stageList = Array.isArray(scope?.stages) ? scope.stages.map(s => ({ id: s.id, title: s.title ?? '' })) : [];
+  const sourceStages = scope?.stages ?? ledger?.scope?.stages;
+  const stageList = Array.isArray(sourceStages) ? sourceStages.map(s => ({ id: s.id, title: s.title ?? '', ...(s.targetWorktree !== undefined ? { targetWorktree: s.targetWorktree } : {}) })) : [];
   for (const id of [...new Set(tickets.map(t => t.stage ?? 'none'))].sort()) if (!stageList.some(s => s.id === id)) stageList.push({ id, title: '' });
+  const hasTarget = tickets.some(t => t.targetWorktree !== undefined) || stageList.some(s => s.targetWorktree !== undefined);
   for (const st of stageList) {
     const rows = tickets.filter(t => (t.stage ?? 'none') === st.id);
-    out.push(`## ${cell(st.id)} ${cell(st.title)}`.trimEnd(), '', '| Ticket | Title | Status | Risk |', '| --- | --- | --- | --- |');
-    for (const t of rows) out.push(`| ${cell(t.id)} | ${cell(t.title)} | ${t.status} | ${t.risk} |`);
+    const stageTarget = st.targetWorktree === undefined ? '' : ` [targetWorktree: ${cell(st.targetWorktree)}]`;
+    out.push(`## ${cell(st.id)} ${cell(st.title)}${stageTarget}`.trimEnd(), '');
+    out.push(hasTarget ? '| Ticket | Title | Status | Risk | Target worktree |' : '| Ticket | Title | Status | Risk |', hasTarget ? '| --- | --- | --- | --- | --- |' : '| --- | --- | --- | --- |');
+    for (const t of rows) out.push(hasTarget
+      ? `| ${cell(t.id)} | ${cell(t.title)} | ${t.status} | ${t.risk} | ${cell(t.targetWorktree ?? '')} |`
+      : `| ${cell(t.id)} | ${cell(t.title)} | ${t.status} | ${t.risk} |`);
     if (!rows.length) out.push('_No tickets._');
     out.push('');
   }

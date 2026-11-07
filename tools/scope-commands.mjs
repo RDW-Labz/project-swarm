@@ -8,8 +8,8 @@ import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { appTypes, runInterview, scopeFromAnswers } from './scope-interview.mjs';
 import readline from 'node:readline';
-import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
+import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText } from './scope.mjs';
+import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS, readTicketLog, supersedeCandidates, applySupersedeStale } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
 import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
 import { isSecretLooking } from './ignored-artifacts.mjs';
@@ -18,8 +18,18 @@ import { readRuns } from './quotes.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
 import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
-import { ticketsToManifest, ticketOutcome } from './ticket-manifest.mjs';
-import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
+import { ticketsToManifest, ticketOutcome, criticalPathLength, normalizeCacheContext, parseCheckTimeoutMs, resolveTicketCheckTimeoutMs, isE2eSpecPath } from './ticket-manifest.mjs';
+import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
+import {
+  ROOT_RULES,
+  autoFix,
+  collectSplitIssues,
+  buildRepairJobs,
+  runRepairLoop,
+  parkedBlockers,
+  repairTicketBatch,
+  refreshRejectedDependents,
+} from './split-repair.mjs';
 import { validateOpenApi, contractFiles } from './contracts.mjs';
 import { verifyContracts } from './contracts-verify.mjs';
 import { validateProfile, protectedPathHit, isSecretPath, isExampleFile } from './init-profile.mjs';
@@ -32,37 +42,83 @@ import { countTests, detectTestCommand } from './zero-tests.mjs';
 import { runCheckArgv } from './init.mjs';
 import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
 import { nextStep, sizeTicket } from './escalation.mjs';
+import { persistReplans } from './ticket-replan.mjs';
+import { CHEAP_LANE_ORDER, DEFAULT_MAX_FILES, adviseTicketLane, capBytesForLane, ticketByteTotal } from './lane-size.mjs';
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
-import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets } from './wiring.mjs';
+import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets, integrationTickets, alignTestTicketsWithBuildStages, reconcileTicketContext, peelProtectedOutputs, cascadeRejectedDependents } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
+import {
+  allowedPathsForAcceptance,
+  filterProvableAcceptance,
+  ownersOfPath,
+  pathsInAcceptanceText,
+  provabilityOfAcceptanceLine,
+  wireAcceptancePathDependencies,
+} from './acceptance-provable.mjs';
+import { isSensitiveTicket } from './sensitive-ticket.mjs';
+import { syncCheckForTicket } from './ticket-sync-checks.mjs';
+import { runManagersScopeGate } from './manager-commands.mjs';
+import {
+  checkTicketManagerScopeIntegrity,
+  duplicateOwnerDependsOnFixes,
+} from './managers/ticket-manager/scope-integrity.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
+import {
+  applyTicketPathWiring,
+  validateTicketPaths,
+  formatTicketPathRefusal,
+  formatTicketPathWarning,
+  normTicketPath,
+} from './ticket-paths.mjs';
+import { simulateBeforeIngest } from './split-wave-sim.mjs';
+import { evaluateAutoApprove } from './split-auto-approve.mjs';
+import { parseUncovered } from './uncovered-tests.mjs';
+import { suggestIgnoreTests } from './context-check.mjs';
+import { API_AGENTS, decodeContext } from './api-adapters.mjs';
+import { CONTEXT_TOTAL_CAP } from './swarm/patterns.mjs';
 
 export const SCOPE_USAGE = [
   'Usage: swarm scope new [--type web-portal] [--out FILE] [--answers FILE]   (an interview that writes the scope: no model, no cost; --answers takes the same answers as JSON)',
   '       swarm scope template [--out FILE]',
   '       swarm scope check [FILE]',
-  '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire]',
-  '       swarm scope approve [FILE] [--yes]',
+  '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire] [--max-repairs N] [--accept-waves] [--accept-new-path PATH[,PATH]]',
+  '       swarm scope approve [FILE] [--yes] [--accept-waves]',
+  '       swarm scope gate --list [--json] | scope gate --fix-owners [--yes]',
   '       swarm scope sync RUN [--integrated] [--accept-unreviewed T-0001 --reason TEXT --yes] [--accept-unmet T-0001 --reason TEXT --yes]',
   '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
   '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets ID --approve [--yes]     (a ticket made from a gallery comment is proposed: you read it, name its files, approve it; no worker runs it before)',
-  '       swarm tickets ID --clear-note | --retry-note TEXT | --reopen --reason "why"   (drop or replace the note a failed attempt left; put a done ticket back to ready, logged)',
+  '       swarm tickets ID --clear-note | --retry-note TEXT | --note TEXT | --reopen --reason "why"   (--retry-note replaces the system note a failed attempt left, shown to the next worker as untrusted failure text; --clear-note removes that retry note and any owner guidance note; --note alone leaves guidance for the next worker)',
   '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
-  '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT]     (hand status change: previews the move; --yes or --force applies; reviews for done are never skipped)',
+  '       swarm tickets ID --check-timeout MS | --check-timeout auto [--yes]   (per-ticket merge-queue check timeout 60000–1800000 ms; logged; an approved ledger is sealed again)',
+  '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT] [--question TEXT]     (hand status change: previews the move; --yes or --force applies; --note with --set ready, todo or blocked saves owner guidance for the next worker; with --set blocked, --question is stored on the ticket for the board; reviews for done are never skipped)',
   '       swarm tickets ID [ID...] --delivered PR[,PR] [--repo OWNER/NAME] [--dry-run] [--note TEXT] --yes     (merged PRs outside the ledger: marks todo, ready, blocked or running tickets done)',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
   '       swarm tickets ID... --release [--note TEXT]     (clean release of held tickets: blocked, todo or review go back to ready with attempts, escalation and retry notes cleared)',
   '       swarm tickets --mark-deps [ID...] [--yes]     (one time, older ledgers: mark blocked tickets with no reason as dependency-blocked so they unlock)',
-  '       swarm change "reason" [FILE] [--yes]',
+  '       swarm change "reason" [FILE] [--yes] [--no-split] [--max-repairs N]',
   '       swarm go --scope [--max-jobs N] [go options]',
   ''].join('\n');
+
+/** Scope subcommands for completion and command meta (see tools/watch-command-meta.mjs). */
+export const SCOPE_SUBCOMMANDS = [
+  { name: 'new', summary: 'Interview that writes the scope file.', flags: ['--type', '--out', '--answers'] },
+  { name: 'template', summary: 'Print or write the scope template.', flags: ['--out'] },
+  { name: 'check', summary: 'Validate the scope file.', flags: [] },
+  { name: 'split', summary: 'Split the scope into tickets.', flags: ['--stage', '--ingest', '--merge', '--wire', '--all', '--max-repairs', '--accept-waves', '--accept-new-path'] },
+  { name: 'approve', summary: 'Approve the ticket ledger and seal the build plan.', flags: ['--yes', '--accept-waves', '--auto-ok'] },
+  { name: 'gate', summary: 'Ticket-manager scope gate: list findings or fix duplicate file owners.', flags: ['--list', '--json', '--fix-owners', '--yes'] },
+  { name: 'sync', summary: 'Sync ticket status from a run.', flags: ['--integrated', '--accept-unreviewed', '--accept-unmet', '--reason', '--yes'] },
+  { name: 'security-review', summary: 'Record Opus security review verdicts for a run.', flags: [] },
+  { name: 'acceptance-review', summary: 'Record acceptance review verdicts for a run.', flags: [] },
+  { name: 'contracts', summary: 'Generate contract helpers from OpenAPI.', flags: ['--yes'] },
+];
 
 export const DEFAULT_SCOPE_FILE = 'docs/scope/scope.md';
 const SNAPSHOT = ['.swarm', 'project', 'scope.snapshot.md'];
@@ -73,9 +129,349 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--check-timeout', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs', '--before']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
+
+function machineSlots(override) {
+  let configured = override;
+  if (configured !== undefined) return Number.isInteger(configured) && configured > 0 ? configured : 8;
+  try {
+    const config = loadLocalConfig();
+    configured = config?.machineConcurrency ?? config?.machine?.concurrency ?? config?.lanes?.machineConcurrency;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] local config unreadable; using the default:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+  }
+  return Number.isInteger(configured) && configured > 0 ? configured : 8;
+}
+
+const TICKET_ID_CEILING = 9000;
+
+function ticketIdNumber(id) {
+  const match = /^T-(\d+)$/.exec(String(id ?? ''));
+  return match ? Number(match[1]) : null;
+}
+
+function formatTicketId(n) {
+  return `T-${String(n).padStart(4, '0')}`;
+}
+
+export function parseTicketIdBlock(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const start = Number(raw.start);
+  const end = raw.end === undefined ? TICKET_ID_CEILING - 1 : Number(raw.end);
+  if (!Number.isInteger(start) || start < 1 || start >= TICKET_ID_CEILING) return null;
+  if (!Number.isInteger(end) || end < start || end >= TICKET_ID_CEILING) return null;
+  return { start, end };
+}
+
+function readLocalConfigForIngest() {
+  try {
+    return loadLocalConfig();
+  } catch (error) {
+    throw fail('ticket-id-block', `cannot read local config: ${error.message}`);
+  }
+}
+
+function ticketIdBlockFromConfig(config) {
+  const top = config?.ticketIdBlock;
+  const machine = config?.machine?.ticketIdBlock;
+  // Top-level ticketIdBlock wins; machine.ticketIdBlock applies only when the top-level key is absent.
+  const raw = top !== undefined && top !== null ? top : machine;
+  if (raw === undefined || raw === null) return null;
+  const block = parseTicketIdBlock(raw);
+  if (!block) {
+    throw fail(
+      'ticket-id-block',
+      'invalid ticketIdBlock in local config: start must be an integer from 1 through 8999 and end must be an integer from start through 8998',
+    );
+  }
+  return block;
+}
+
+function peerTicketsLedgerRawFromConfig(config) {
+  if (config?.peerTicketsLedger !== undefined && config?.peerTicketsLedger !== null) {
+    return { raw: config.peerTicketsLedger, label: 'peerTicketsLedger' };
+  }
+  if (config?.peerLedger !== undefined && config?.peerLedger !== null) {
+    return { raw: config.peerLedger, label: 'peerLedger' };
+  }
+  if (config?.machine?.peerTicketsLedger !== undefined && config?.machine?.peerTicketsLedger !== null) {
+    return { raw: config.machine.peerTicketsLedger, label: 'machine.peerTicketsLedger' };
+  }
+  return null;
+}
+
+function resolvePeerTicketsLedgerPath(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw fail('ticket-id-collision', 'invalid peer tickets ledger in local config: must be a non-empty path to an existing file');
+  }
+  let resolved = path.resolve(raw.trim());
+  try {
+    resolved = realpathSync(resolved);
+  } catch (error) {
+    if (error.code === 'ENOENT') throw fail('ticket-id-collision', 'peer tickets ledger file not found');
+    throw fail('ticket-id-collision', `cannot access peer tickets ledger: ${error.message}`);
+  }
+  const st = lstatSync(resolved);
+  if (!st.isFile()) {
+    throw fail('ticket-id-collision', 'peer tickets ledger path is not a regular file');
+  }
+  return resolved;
+}
+
+function peerTicketsLedgerPathFromConfig(config) {
+  const entry = peerTicketsLedgerRawFromConfig(config);
+  if (!entry) return null;
+  try {
+    return resolvePeerTicketsLedgerPath(entry.raw);
+  } catch (error) {
+    if (error.code === 'ticket-id-collision') throw error;
+    throw fail('ticket-id-collision', `invalid ${entry.label} in local config: ${error.message}`);
+  }
+}
+
+function idNumberInBlock(n, block) {
+  return n >= block.start && n <= block.end;
+}
+
+function ticketIdBlockLabel(block) {
+  return `${formatTicketId(block.start)} through ${formatTicketId(block.end)}`;
+}
+
+export function resolveIngestStartAt(existing, block) {
+  if (!block) {
+    return existing
+      ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1
+      : 1;
+  }
+  const nums = (existing?.tickets ?? [])
+    .map(t => ticketIdNumber(t.id))
+    .filter(n => n !== null && n < TICKET_ID_CEILING && idNumberInBlock(n, block));
+  const next = nums.length ? Math.max(...nums) + 1 : block.start;
+  return Math.max(next, block.start);
+}
+
+function countIngestItems(lists) {
+  return (lists ?? []).reduce((sum, entry) => sum + (entry.items?.length ?? 0), 0);
+}
+
+export function validateIngestTicketIds({ startAt, itemCount, block, peerIds, peerPath }) {
+  if (!itemCount) return null;
+  const last = startAt + itemCount - 1;
+  if (last >= TICKET_ID_CEILING) {
+    return 'too many tickets: ids T-9000 and up are reserved for day 0 tickets';
+  }
+  if (block && (startAt < block.start || last > block.end)) {
+    const attempted = itemCount === 1
+      ? formatTicketId(startAt)
+      : `${formatTicketId(startAt)} through ${formatTicketId(last)}`;
+    return `ticket-id-block: cannot mint ${attempted}; this machine is configured for ticket ids ${ticketIdBlockLabel(block)}`;
+  }
+  if (peerIds) {
+    for (let n = startAt; n <= last; n += 1) {
+      const id = formatTicketId(n);
+      if (peerIds.has(id)) {
+        return `ticket-id-collision: ${id} already exists in peer tickets ledger`;
+      }
+    }
+  }
+  return null;
+}
+
+async function loadPeerTicketIds(validatedPeerPath) {
+  let text;
+  try {
+    text = await fs.readFile(validatedPeerPath, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') throw fail('ticket-id-collision', 'peer tickets ledger file not found');
+    throw fail('ticket-id-collision', `cannot read peer tickets ledger: ${error.message}`);
+  }
+  let ledger;
+  try {
+    ledger = JSON.parse(text);
+  } catch (error) {
+    throw fail('ticket-id-collision', `peer tickets ledger is not valid JSON: ${error.message}`);
+  }
+  if (!Array.isArray(ledger?.tickets)) {
+    throw fail('ticket-id-collision', 'peer tickets ledger must contain a tickets array');
+  }
+  return new Set(ledger.tickets.map(t => t.id).filter(id => /^T-\d+$/.test(id)));
+}
+
+function longestWaveChain(tickets) {
+  const active = (tickets ?? []).filter(t => t && t.status !== 'cancelled' && t.status !== 'proposed');
+  const ids = new Set(active.map(t => t.id));
+  const byId = new Map(active.map(t => [t.id, t]));
+  const memo = new Map();
+  const chain = id => {
+    if (memo.has(id)) return memo.get(id);
+    const deps = (byId.get(id)?.dependsOn ?? []).filter(dep => ids.has(dep));
+    const best = deps.reduce((longest, dep) => {
+      const candidate = chain(dep);
+      return candidate.length > longest.length ? candidate : longest;
+    }, []);
+    const result = [...best, id];
+    memo.set(id, result);
+    return result;
+  };
+  return active.reduce((longest, ticket) => {
+    const candidate = chain(ticket.id);
+    return candidate.length > longest.length ? candidate : longest;
+  }, []);
+}
+
+function testFirstTickets(tickets) {
+  const active = (tickets ?? []).filter(ticket => ticket && ticket.status !== 'cancelled' && ticket.status !== 'proposed');
+  const ownedTests = new Map();
+  const virtualTests = [];
+  for (const ticket of active) {
+    if (ticket.type !== 'build') continue;
+    const files = [...new Set((ticket.tests ?? []).filter(looksLikeTestFile))];
+    if (!files.length) continue;
+    const ids = files.map((file, index) => `${ticket.id}:test:${index + 1}`);
+    ownedTests.set(ticket.id, ids);
+    virtualTests.push(...ids.map(id => ({ id, type: 'test', status: 'todo', dependsOn: [ticket.id] })));
+  }
+  const expanded = active.map(ticket => ({
+    ...ticket,
+    dependsOn: [...new Set((ticket.dependsOn ?? []).flatMap(dep => ownedTests.get(dep) ?? [dep]))],
+  }));
+  return [...expanded, ...virtualTests];
+}
+
+function waveSummary(sim) {
+  return `waves: ${sim.waveCount}, critical path ${sim.criticalPathLength} of ${sim.ticketCount} (${Math.round(sim.criticalPathTicketRatio * 100)}%), average fill ${Math.round(sim.averageFill * 100)}% of ${sim.slots} slots`;
+}
+
+function waveRefusal(sim, tickets) {
+  const chain = longestWaveChain(tickets);
+  return `${waveSummary(sim)}\nwave simulation failed; longest chain: ${chain.join(' -> ') || 'none'}; advice: re-split (merge chains / split the long chain), or rerun with --accept-waves`;
+}
+
+async function persistSyncReplans(root, deps = {}, blockedAtSyncStart = new Set()) {
+  const current = await readLedger(root);
+  if (!current) return { replans: [], lines: [] };
+  const injectedNow = typeof deps.now === 'number'
+    ? deps.now
+    : typeof deps.clock === 'function'
+      ? deps.clock()
+      : undefined;
+  const options = { by: 'sync', onlyIds: blockedAtSyncStart, requireChange: true };
+  if (injectedNow !== undefined) options.now = injectedNow;
+  const result = await persistReplans(root, current, options);
+  const lines = result.replans.map(entry => `${entry.ticketId} replanned: ${entry.reason}`);
+  return { ...result, lines };
+}
+
+// A tiny ledger cannot be made meaningfully wider by re-splitting. Keep its measured summary,
+// while reserving the refusal/acceptance gate for batches large enough to act on.
+const waveGateFails = sim => !sim.ok && sim.ticketCount >= 10;
+
+async function logAcceptedWaveSimulation(root, sim, tickets, command) {
+  await appendLog(root, {
+    event: 'wave-sim-accepted',
+    warning: 'wave simulation failed; owner accepted the waves',
+    command,
+    slots: sim.slots,
+    ticketCount: sim.ticketCount,
+    criticalPathLength: sim.criticalPathLength,
+    criticalPathTicketRatio: sim.criticalPathTicketRatio,
+    averageFill: sim.averageFill,
+    longestChain: longestWaveChain(tickets),
+  });
+}
+
+function walkRepoFiles(root, dir = '', out = []) {
+  const abs = dir ? path.join(root, dir) : root;
+  for (const entry of readdirSync(abs, { withFileTypes: true })) {
+    if (entry.name === '.git' || entry.name === '.swarm' || entry.name === 'node_modules') continue;
+    const rel = dir ? `${dir}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) walkRepoFiles(root, rel, out);
+    else if (entry.isFile()) out.push(rel);
+  }
+  return out;
+}
+
+async function listTrackedRepoFiles(root) {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', root, 'ls-files'], { maxBuffer: 16 * 1024 * 1024 });
+    return stdout.split('\n').filter(Boolean);
+  } catch {
+    return walkRepoFiles(root);
+  }
+}
+
+function contextReachableOutputs(tickets) {
+  const byId = new Map(tickets.map(ticket => [ticket.id, ticket]));
+  const memo = new Map();
+  const reach = (ticketId, seen = new Set()) => {
+    if (memo.has(ticketId)) return memo.get(ticketId);
+    if (seen.has(ticketId)) return new Set();
+    seen.add(ticketId);
+    const ticket = byId.get(ticketId);
+    const out = new Set([...(ticket?.files ?? []), ...(ticket?.tests ?? [])]);
+    for (const dep of ticket?.dependsOn ?? []) for (const file of reach(dep, seen)) out.add(file);
+    memo.set(ticketId, out);
+    return out;
+  };
+  const allowed = new Set();
+  for (const ticket of tickets) {
+    if (ticket.type === 'human') continue;
+    for (const file of ticket.context ?? []) {
+      if (reach(ticket.id).has(file)) allowed.add(`${ticket.id}\0${file}`);
+    }
+  }
+  return allowed;
+}
+
+function parseAcceptNewPaths(raw) {
+  if (raw === undefined || raw === null || raw === '') return [];
+  return String(raw).split(',').map((p) => normTicketPath(p.trim())).filter(Boolean);
+}
+
+function ticketPathCheckLines(tickets, repoFiles, root, acceptNewPaths = new Set()) {
+  const refusals = [];
+  const warnings = [];
+  const usedAcceptPaths = new Set();
+  const allowedContext = contextReachableOutputs(tickets);
+  for (const t of tickets) {
+    const wired = applyTicketPathWiring(t, tickets, { repoFiles, root });
+    for (const note of wired.notes ?? []) warnings.push(note);
+    for (const warn of wired.warnings ?? []) {
+      warnings.push(typeof warn === 'string' ? warn : formatTicketPathWarning(t.id, warn));
+    }
+    for (const err of wired.errors) {
+      if (err.field === 'context' && allowedContext.has(`${t.id}\0${err.path}`)) continue;
+      const norm = normTicketPath(err.path);
+      if (acceptNewPaths.has(norm)) {
+        usedAcceptPaths.add(norm);
+        warnings.push(`accepted new path: ${formatTicketPathRefusal(t.id, err)}`);
+        continue;
+      }
+      refusals.push(formatTicketPathRefusal(t.id, err));
+    }
+  }
+  return { refusals, warnings, usedAcceptPaths };
+}
+
+function applySplitIngestGuards(builtTickets, existingTickets, { profile, repoFiles, notes, rejected, guardNotes }) {
+  const noteMark = notes.length;
+  let nextNum = Math.max(0, ...builtTickets.map(ticket => Number(ticket.id.slice(2))));
+  const allocId = () => {
+    nextNum += 1;
+    return `T-${String(nextNum).padStart(4, '0')}`;
+  };
+  builtTickets.push(...peelProtectedOutputs(builtTickets, profile, { notes, allocId }));
+  reconcileTicketContext([...existingTickets, ...builtTickets], repoFiles, notes);
+  if (guardNotes) guardNotes.push(...notes.slice(noteMark));
+  return builtTickets;
+}
+
+function finalizeSplitTestStages(builtTickets, existingTickets, { notes, rejected }) {
+  let kept = alignTestTicketsWithBuildStages(builtTickets, existingTickets, { notes, rejected });
+  return cascadeRejectedDependents(kept, rejected);
+}
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
 const bad = message => out(`${message}\n${SCOPE_USAGE}`, 1);
 
@@ -113,8 +509,99 @@ async function loadScope(root, file) {
   return { file: target, text, scope: parseScope(text), hash: scopeHash(text) };
 }
 
+async function resolveTicketManagerScope(root, ledger) {
+  const embedded = ledger?.scope;
+  if (embedded && Array.isArray(embedded.requirements) && embedded.requirements.length > 0) return embedded;
+  const snapshot = await readText(path.join(root, '.swarm', 'project', 'scope.snapshot.md'));
+  if (snapshot) return parseScope(snapshot);
+  if (embedded && typeof embedded === 'object' && !Array.isArray(embedded)) return embedded;
+  const file = ledger.scope?.file ?? DEFAULT_SCOPE_FILE;
+  try {
+    const { scope } = await loadScope(root, file);
+    return scope;
+  } catch {
+    return embedded && typeof embedded === 'object' ? embedded : {};
+  }
+}
+
+async function ticketManagerGateCheck(root, ledger) {
+  const scope = await resolveTicketManagerScope(root, ledger);
+  const profile = await readProfile(root);
+  const { exists, listFiles, sizes, profileContext } = contextEnvFor(root, profile);
+  return checkTicketManagerScopeIntegrity({
+    scope,
+    tickets: ledger.tickets,
+    exists,
+    listFiles,
+    sizes,
+    profileContext,
+  });
+}
+
+const GATE_SEVERITY_ORDER = ['needs_you', 'warn', 'info'];
+
+function formatGateFindingLines(findings) {
+  const sorted = [...findings].sort((a, b) => {
+    const ai = GATE_SEVERITY_ORDER.indexOf(a.severity);
+    const bi = GATE_SEVERITY_ORDER.indexOf(b.severity);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi) || String(a.code).localeCompare(String(b.code));
+  });
+  const lines = sorted.map((f) => [f.code, f.ticket ?? '-', f.reason, f.recommendation ?? ''].join('\t'));
+  const totals = GATE_SEVERITY_ORDER.map((sev) => {
+    const n = findings.filter((x) => x.severity === sev).length;
+    return n ? `${sev} ${n}` : null;
+  }).filter(Boolean);
+  lines.push(`totals: ${totals.length ? totals.join(', ') : 'none'}`);
+  return lines.join('\n');
+}
+
+function approveGateFindingLines(findings, limit = 25) {
+  return findings
+    .filter((f) => f.severity === 'needs_you')
+    .slice(0, limit)
+    .map((f) => `finding: ${f.code} ${f.ticket ?? '-'} ${f.reason}`);
+}
+
+const ROOT_FILE_NAME = /^[\w.-]{1,100}$/;
+const isAllowedRootFileName = name => typeof name === 'string' && ROOT_FILE_NAME.test(name) && !/^\.env/i.test(name);
+
+function addRootFileNames(target, value, source, notes) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    notes.push(`${source}: ignored invalid value (expected an array)`);
+    return;
+  }
+  if (value.length > 50) notes.push(`${source}: ignored entries after the maximum of 50`);
+  for (const name of value.slice(0, 50)) {
+    if (isAllowedRootFileName(name)) target.add(name);
+    else notes.push(`${source}: ignored invalid entry ${JSON.stringify(name)}`);
+  }
+}
+
+function scopeHeaderRootFiles(text) {
+  const header = String(text ?? '').split(/^##\s/m, 1)[0];
+  const line = header.match(/^Root files:\s*(.*)$/im);
+  return line ? line[1].split(',').map(name => name.trim()).filter(Boolean) : undefined;
+}
+
+async function rootFilesForProject(root, { scope = null, scopeText = '', notes = [] } = {}) {
+  const allowed = new Set();
+  let pointer = null;
+  try {
+    const text = await readText(path.join(root, '.project-swarm.json'));
+    pointer = text === null ? null : JSON.parse(text);
+  } catch {
+    pointer = null;
+  }
+  addRootFileNames(allowed, pointer?.scopeRootFiles, 'scopeRootFiles', notes);
+  addRootFileNames(allowed, pointer?.profile?.scopeRootFiles, 'profile.scopeRootFiles', notes);
+  addRootFileNames(allowed, scope?.rootFiles ?? scopeHeaderRootFiles(scopeText), 'scope rootFiles', notes);
+  return allowed;
+}
+
 export async function readApprovalPolicy(root) {
-  const pointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? '{}');
+  const { readRunnerPointer } = await import('./runner-pointer.mjs');
+  const pointer = await readRunnerPointer(root, { allowMissing: true });
   const { policy, errors } = validateApprovalPolicy(pointer?.profile?.approval);
   if (errors.length) throw fail('approval-invalid', `profile.approval: ${errors[0]}`);
   return policy;
@@ -125,7 +612,8 @@ export async function readApprovalPolicy(root) {
 // The validated profile of the project (null when there is none or it is invalid).
 export async function readProfile(root) {
   try {
-    const pointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+    const { readRunnerPointer } = await import('./runner-pointer.mjs');
+    const pointer = await readRunnerPointer(root, { allowMissing: true });
     if (!pointer?.profile) return null;
     const { profile, errors } = validateProfile(pointer.profile);
     return errors.length ? null : { ...profile, stack: pointer.stack ?? profile.stack };
@@ -172,7 +660,168 @@ export function contextEnvFor(root, profile) {
     profileContext: profile?.context ?? {},
     screenMockups: Object.fromEntries((profile?.ui?.screens ?? []).map(screen => [screen.id, screen.mockup])),
     envLine: envLineFor(root),
+    isApiTextFile: p => {
+      if (!usable(p) && !usable(p, true)) return false;
+      try {
+        decodeContext(readFileSync(path.join(root, p)));
+        return true;
+      } catch {
+        return false;
+      }
+    },
   };
+}
+
+export const WAVE_PREP_IGNORE_TESTS_REASON = 'tests that reference these files in passing are covered by the full suite run before merge';
+
+const UNCOVERED_TEST_REFERENCES_HEADER = 'Uncovered test references';
+const WAVE_PREP_CONTEXT_TESTS_MAX = 25;
+
+function wavePrepContextBytes(context, root) {
+  if (!root) return 0;
+  let total = 0;
+  for (const file of context ?? []) {
+    try { total += statSync(path.join(root, file)).size; } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] context size:', error?.code ?? 'unknown');
+    }
+  }
+  return total;
+}
+
+function applyUncoveredTestReferences(jobs, suggested, ticketsById, root) {
+  let changed = false;
+  const next = jobs.map(job => {
+    const add = suggested?.[job.id];
+    if (!add?.length) return job;
+    const outputs = new Set(job.outputs ?? []);
+    const context = [...(job.context ?? [])];
+    const seen = new Set(context);
+    const pending = [...new Set(add)].filter(test => !seen.has(test) && !outputs.has(test)).sort();
+    if (!pending.length) return job;
+    const forIgnore = [];
+    let contextAdds = 0;
+    let apiBytes = wavePrepContextBytes(context, root);
+    const usesApiCap = Boolean(root && API_AGENTS.includes(job.agent));
+    for (const test of pending) {
+      if (contextAdds >= WAVE_PREP_CONTEXT_TESTS_MAX) {
+        forIgnore.push(test);
+        continue;
+      }
+      let testBytes = 0;
+      if (root) {
+        try { testBytes = statSync(path.join(root, test)).size; } catch { testBytes = 0; }
+      }
+      if (usesApiCap && apiBytes + testBytes > CONTEXT_TOTAL_CAP) {
+        forIgnore.push(test);
+        continue;
+      }
+      context.push(test);
+      seen.add(test);
+      contextAdds += 1;
+      apiBytes += testBytes;
+      changed = true;
+    }
+    let updated = changed ? { ...job, context } : job;
+    if (forIgnore.length) {
+      const prior = new Set(updated.ignoreTests ?? []);
+      const merged = [...new Set([...prior, ...forIgnore])].sort().slice(0, 1000);
+      if (merged.length !== prior.size || updated.ignoreTestsReason !== WAVE_PREP_IGNORE_TESTS_REASON) {
+        updated = { ...updated, ignoreTests: merged, ignoreTestsReason: WAVE_PREP_IGNORE_TESTS_REASON };
+        changed = true;
+      }
+    }
+    normalizeCacheContext(updated);
+    return updated;
+  });
+  return changed ? next : jobs;
+}
+
+function dropWaveDependents(manifest, jobId, bucket, tail = 'which was skipped') {
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const j of [...manifest.jobs]) {
+      if ((j.after ?? []).some(a => a === jobId || bucket.some(u => u.id === a))) {
+        manifest.jobs = manifest.jobs.filter(x => x.id !== j.id);
+        bucket.push({ id: j.id, reason: `waits for ${jobId}, ${tail}` });
+        grew = true;
+      }
+    }
+  }
+}
+
+function prepFailureJobId(error, manifest, root) {
+  const msg = String(error?.message ?? '');
+  let id = /context-not-deliverable: context exceeds \d+ bytes for (\S+)/.exec(msg)?.[1];
+  if (id) return id;
+  id = /context exceeds \d+ bytes for (\S+)/.exec(msg)?.[1];
+  if (id) return id;
+  id = /for job (\S+?)(?:[;)]| \(|$)/.exec(msg)?.[1];
+  if (id && /^T-\d+$/.test(id)) return id;
+  id = /Job (\S+):/.exec(msg)?.[1];
+  if (id) return id;
+  const missing = /context-not-deliverable: missing context (\S+)/.exec(msg)?.[1]
+    ?? /Missing context: (\S+)/.exec(msg)?.[1];
+  if (missing) return manifest.jobs.find(j => (j.context ?? []).includes(missing))?.id ?? null;
+  if (/UTF-8 text files without NUL bytes only/.test(msg) && root) {
+    return manifest.jobs.find(j => (j.context ?? []).some(p => {
+      try {
+        decodeContext(readFileSync(path.join(root, p)));
+        return false;
+      } catch {
+        return true;
+      }
+    }))?.id ?? null;
+  }
+  return null;
+}
+
+export async function finalizeScopeWaveManifest(manifest, { validate, tickets, warnings, unroutable = [], root = null }) {
+  const ticketsById = new Map((tickets ?? []).map(t => [t.id, t]));
+  const parked = [];
+  const limit = Math.max(50, (manifest.jobs?.length ?? 0) * 4 + 10);
+  for (let pass = 0; pass < limit; pass += 1) {
+    try {
+      for (const job of manifest.jobs ?? []) normalizeCacheContext(job);
+      await validate(manifest);
+      return { manifest, parked, unroutable };
+    } catch (error) {
+      if (error?.code === 'route-exhausted') {
+        const jobId = /for job (\S+?)(?:[;)]| \(|$)/.exec(String(error.message))?.[1];
+        if (jobId && manifest.jobs.some(j => j.id === jobId)) {
+          manifest.jobs = manifest.jobs.filter(j => j.id !== jobId);
+          dropWaveDependents(manifest, jobId, unroutable, 'which no lane can take');
+          unroutable.push({ id: jobId, reason: String(error.message) });
+          if (!manifest.jobs.length) throw fail('scope-nothing', `no ticket of this wave can be routed: ${unroutable.map(u => `${u.id}: ${u.reason}`).join('; ')}`);
+          pass -= 1;
+          continue;
+        }
+      }
+      const suggested = error?.details?.suggestedIgnoreTests;
+      if (suggested || String(error.message ?? '').startsWith(UNCOVERED_TEST_REFERENCES_HEADER)) {
+        const map = suggested ?? suggestIgnoreTests(parseUncovered(error.message));
+        const nextJobs = applyUncoveredTestReferences(manifest.jobs, map, ticketsById, root);
+        if (nextJobs !== manifest.jobs) {
+          manifest.jobs = nextJobs;
+          continue;
+        }
+        throw error;
+      }
+      const jobId = prepFailureJobId(error, manifest, root);
+      if (jobId && manifest.jobs.some(j => j.id === jobId)) {
+        const reason = String(error.message ?? error).split('\n')[0].slice(0, 300);
+        manifest.jobs = manifest.jobs.filter(j => j.id !== jobId);
+        parked.push({ id: jobId, reason });
+        warnings.push(`${jobId} skipped: ${reason}`);
+        const dependents = [];
+        dropWaveDependents(manifest, jobId, dependents);
+        for (const d of dependents) warnings.push(`${d.id} skipped: ${d.reason}`);
+        if (!manifest.jobs.length) throw fail('scope-nothing', `no ticket of this wave could be prepared${parked.length ? ` (${parked.map(p => p.id).join(', ')} skipped)` : ''}`);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw fail('scope-prep', 'wave prep validation did not converge');
 }
 
 // Variable names (never values) from the project's example env file: a regular file, no symlink, small.
@@ -188,13 +837,14 @@ function envLineFor(root) {
 // The quality checks (typecheck, lint, optional build) this project's profile and package.json give.
 export async function qualityFor(root, profile) {
   let pkg = null;
-  try { pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch { /* no package.json */ }
+  try { pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] package.json unreadable; quality checks use the defaults:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+  }
   return deriveQualityChecks({ pkg, hasTsconfig: existsSync(path.join(root, 'tsconfig.json')), manager: packageManagerOf(profile) ?? 'npm', config: profile?.quality ?? {} });
 }
 
 const SPEC_TESTS_TOKEN = '{tests}';
 const SPEC_AFFECTED_TOKEN = '{affected}';
-const E2E_SPEC_PATH = /(?:(^|\/)(e2e|playwright|cypress\/e2e)\/|\.e2e\.[cm]?[jt]sx?$)/i;
 const specTestArg = p => `./${p}`;
 
 async function readProjectChecks(root) {
@@ -202,10 +852,6 @@ async function readProjectChecks(root) {
     const parsed = JSON.parse(await fs.readFile(path.join(root, 'coordination/checks.json'), 'utf8'));
     return Array.isArray(parsed?.checks) ? parsed.checks : [];
   } catch { return []; }
-}
-
-function isE2eSpecPath(file) {
-  return E2E_SPEC_PATH.test(file);
 }
 
 function argvLooksE2e(argv) {
@@ -261,10 +907,15 @@ export function argvForTicketSpec(file, { profile, checks, pkg, files = [] } = {
   return null;
 }
 
-export async function runTicketSpec(root, file, { profile, checks, pkg, files, timeoutMs } = {}) {
+export async function runTicketSpec(root, file, { profile, checks, pkg, files, timeoutMs, ticket } = {}) {
   const argv = argvForTicketSpec(file, { profile, checks, pkg, files });
   if (!argv?.length) return { ok: false, reason: `no runner configured for ${file}` };
-  const limit = timeoutMs ?? (validateVerifyConfig(profile?.verify).value?.timeoutSec ?? 900) * 1000;
+  let limit = timeoutMs;
+  if (limit === undefined && ticket && isE2eSpecPath(file)) {
+    const custom = resolveTicketCheckTimeoutMs(ticket, profile?.verify);
+    if (custom !== undefined) limit = custom;
+  }
+  if (limit === undefined) limit = (validateVerifyConfig(profile?.verify).value?.timeoutSec ?? 900) * 1000;
   try {
     const { exitCode, stdout, stderr } = await runCheckArgv(argv, { cwd: root, timeoutMs: limit });
     const tail = [stdout, stderr].filter(Boolean).join('\n').slice(-8000);
@@ -285,6 +936,19 @@ export function redactNote(text) {
     .replace(/eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, '***')
     .replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|AUTH|CREDENTIAL)[A-Za-z0-9_]*)(\s*[=:]\s*)\S+/gi, '$1$2***')
     .replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}/g, '***');
+}
+
+/** Owner or orchestrator guidance for the next worker attempt (not the system retryNote). */
+export function applyOwnerNote(ticket, raw) {
+  const text = redactNote(String(raw ?? '')).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/[<>]/g, '').trim().slice(0, 600);
+  if (!text) {
+    delete ticket.ownerNote;
+    delete ticket.ownerNoteAt;
+    return null;
+  }
+  ticket.ownerNote = text;
+  ticket.ownerNoteAt = new Date().toISOString();
+  return text;
 }
 
 // Ticket moves share the wave lock, so an owner command, a wave start and a sync cannot overwrite each other.
@@ -405,6 +1069,53 @@ export function parseLooseJson(text) {
   }
 }
 
+async function readApprovedTicketsSnapshot(root) {
+  try {
+    return JSON.parse(await fs.readFile(path.join(root, '.swarm', 'project', 'approved-tickets.json'), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function lastApproveLogTicketsHash(root) {
+  const file = path.join(root, '.swarm', 'project', 'tickets.log');
+  let text;
+  try {
+    text = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  let last = null;
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.event === 'approve' && typeof entry.ticketsHash === 'string') last = entry.ticketsHash;
+    } catch { /* skip malformed lines */ }
+  }
+  return last;
+}
+
+async function writeApprovedTicketsSnapshot(root, payload) {
+  const dir = await safeWritableDir(root, ['.swarm', 'project']);
+  const file = path.join(dir, 'approved-tickets.json');
+  await assertRegularOrMissing(file);
+  const tmp = path.join(dir, `.approved-tickets.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  const handle = await fs.open(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(payload, null, 2) + '\n');
+    await handle.sync();
+    await handle.close();
+    await fs.rename(tmp, file);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await fs.rm(tmp, { force: true });
+    throw error;
+  }
+}
+
 async function writeFileSafe(root, rel_, text, { exclusive = false } = {}) {
   const segments = rel_.split('/');
   const dir = await safeWritableDir(root, segments.slice(0, -1));
@@ -430,6 +1141,14 @@ const readRunState = async (root, runId) => {
   return state;
 };
 
+/** Wave summary: only report committed when integrate post-write verification passed. */
+export function scopeWaveDisplayStatus(goResult) {
+  if (!goResult) return 'unknown';
+  const unverified = goResult.integrate?.integrateUnverified;
+  if (goResult.status === 'committed' && (unverified?.length || !goResult.integrate?.integrationOutputsVerified)) return 'integrated';
+  return goResult.status;
+}
+
 function splitPrompt(scope, stage, only, layout = '', wire = null, existing = null) {
   const reqs = scope.requirements.filter(r => r.stage === stage.id && (!only || only.has(r.id)));
   const lines = [
@@ -438,7 +1157,7 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     'Each ticket object has these fields:',
     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
-    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), dependencies (new npm packages the ticket needs, like zod or zod@^3.23.0; the runner installs them and the change goes through the security gate; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file, or ids of existing open tickets when listed below),',
+    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; the scope header may allow additional exact root names with `Root files: a.json, b.txt`; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), dependencies (new npm packages the ticket needs, like zod or zod@^3.23.0; the runner installs them and the change goes through the security gate; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file, or ids of existing open tickets when listed below),',
     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
     'Rules: no ticket may gate more than 8 others: shared work (shared CSS, layout, i18n keys, types) is split early into one small ticket per component or file group, so one blocked ticket cannot hold half a stage; every requirement is covered by at least one ticket; every ticket traces to a requirement; two open tickets that can run at the same time never write the same file unless one depends on the other (dependsOn);',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
@@ -448,6 +1167,8 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     'Keep every ticket small enough for one worker answer: at most 4 files, each file under about 12 KB when written; split a bigger feature into several tickets (the output of one worker is capped at about 15 KB per file).',
     'Tools: when an acceptance check or test runs a tool command (supabase, cypress, prisma, drizzle-kit), a ticket must write that tool\'s config file (for example supabase/config.toml, cypress.config.ts) unless the project already has it.',
     WIRING_PROMPT,
+    'Root rules (follow exactly in addition to the rules above):',
+    ...ROOT_RULES.map((rule, index) => `${index + 1}. ${rule}`),
     ...(wire ? [WIRE_ONLY_PROMPT, ...wire.filter(w => w.stage === stage.id).map(w => `Existing module tickets of ${w.req}: ${w.modules.map(m => `${m.id} ${m.title} (${(m.files ?? []).join(', ')})`).join('; ')}`)] : []),
     ...(layout ? ['Project layout (use these folders):', layout] : []),
     ...(existing ? [
@@ -555,40 +1276,61 @@ async function changeContext(root, tickets) {
 const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'steps', 'deletes', 'dependencies'];
 const isStrings = v => Array.isArray(v) && v.every(x => typeof x === 'string');
 const strings = v => (isStrings(v) ? v : []);
+const publicRoutePath = file => /(?:^|\/)app\/api\/.+\/route\.[cm]?[jt]sx?$|(?:^|\/)src\/routes\/public(?:\/|$)/i.test(String(file ?? ''));
+const writesPublicApiRoute = ticket => (ticket?.files ?? []).some(publicRoutePath);
 
-export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null, ledger = null } = {}) {
+export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null, ledger = null, rootFiles = [], scopeRootFiles = [] } = {}) {
   const keyToId = new Map();
+  const keyErrors = new Map();
   const tickets = [];
   const errors = [];
   const notes = [];
+  const rejected = [];
+  const copiedAcceptanceIds = new Set();
+  const allowedRootFiles = new Set();
+  addRootFileNames(allowedRootFiles, rootFiles, 'rootFiles', notes);
+  addRootFileNames(allowedRootFiles, scopeRootFiles, 'scopeRootFiles', notes);
+  addRootFileNames(allowedRootFiles, scope?.rootFiles, 'scope rootFiles', notes);
   const ledgerTickets = ledger?.tickets ?? [];
   const existingOpenIds = new Set(ledgerTickets.filter(isOpenFileOwner).map(t => t.id));
   const existingDoneIds = new Set(ledgerTickets.filter(t => t.status === 'done').map(t => t.id));
   const existingIds = new Set(ledgerTickets.filter(t => t.status !== 'cancelled').map(t => t.id));
+  const reqLookup = new Map((scope?.requirements ?? []).map((requirement) => [requirement.id, requirement]));
   let n = startAt;
   for (const { stage, items } of lists) for (const raw of items) {
     const id = `T-${String(n).padStart(4, '0')}`;
     n += 1;
-    if (typeof raw?.key !== 'string' || !raw.key) { errors.push(`${id}: key must be a non-empty string`); continue; }
+    if (typeof raw?.key !== 'string' || !raw.key) { keyErrors.set(id, 'key must be a non-empty string'); continue; }
     const key = `${stage}/${raw.key}`;
-    if (keyToId.has(key)) errors.push(`${id}: duplicate key ${raw.key} in ${stage}`);
+    if (keyToId.has(key)) keyErrors.set(id, `duplicate key ${raw.key} in ${stage}`);
     else keyToId.set(key, id);
   }
+  const candidates = [];
   n = startAt;
   for (const { stage, items } of lists) for (let raw of items) {
     const id = `T-${String(n).padStart(4, '0')}`;
     n += 1;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { errors.push(`${stage}: ticket ${id} is not an object`); continue; }
+    const ownErrors = keyErrors.has(id) ? [keyErrors.get(id)] : [];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      const reason = 'ticket is not an object';
+      errors.push(`${stage}: ticket ${id} is not an object`);
+      rejected.push({ id, title: '', reason });
+      continue;
+    }
     const wrong = [...ARRAY_FIELDS.filter(f => raw[f] !== undefined && !isStrings(raw[f])), ...['title', 'epic'].filter(f => raw[f] !== undefined && typeof raw[f] !== 'string')];
-    if (wrong.length) { errors.push(`${id}: ${wrong.join(', ')} must be ${wrong.every(f => ARRAY_FIELDS.includes(f)) ? 'arrays of strings' : 'strings (and lists of strings)'}`); continue; }
-    const refs = strings(raw.scopeRefs).map(r => requirementText(scope, r)).filter(Boolean).flatMap(r => [r.text, ...r.acceptance]);
-    const text = [raw.title, raw.epic, ...strings(raw.acceptance), ...strings(raw.files), ...refs].filter(x => typeof x === 'string').join('\n');
+    if (wrong.length) {
+      const reason = `${wrong.join(', ')} must be ${wrong.every(f => ARRAY_FIELDS.includes(f)) ? 'arrays of strings' : 'strings (and lists of strings)'}`;
+      errors.push(`${id}: ${reason}`);
+      rejected.push({ id, title: String(raw.title ?? ''), reason });
+      continue;
+    }
     const deps = [];
+    const localDependencyIds = [];
     const droppedKeys = [];
     const unknownIds = [];
     for (const k of strings(raw.dependsOn)) {
       const local = keyToId.get(`${stage}/${k}`);
-      if (local) { deps.push(local); continue; }
+      if (local) { deps.push(local); localDependencyIds.push(local); continue; }
       if (/^T-[0-9]{4,}$/.test(k)) {
         if (existingOpenIds.has(k)) { deps.push(k); continue; }
         if (existingDoneIds.has(k)) { notes.push(`${id}: dependsOn ${k} is done (context only); dependency dropped`); continue; }
@@ -599,21 +1341,26 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
       if (!keyToId.has(`${stage}/${k}`)) droppedKeys.push(k);
     }
     if (droppedKeys.length) notes.push(`${id}: dropped dependsOn keys that name no ticket in the file: ${droppedKeys.join(', ')}`);
-    for (const k of unknownIds) errors.push(`${id}: unknown dependsOn ticket ${k}`);
+    for (const k of unknownIds) ownErrors.push(`unknown dependsOn ticket ${k}`);
     // A worker (a small model especially) sometimes leaves a TEST ticket without acceptance lines (parts-app lesson 55): they are copied from its
     // requirements' own acceptance, which is what a test checks. A build or migration ticket is not given them (the lines of a requirement are usually route-level
     // and a module cannot meet them before it is wired): it is refused as before. With none to copy, the test ticket is refused too.
     if (raw.type === 'test' && !strings(raw.acceptance).some(a => a.trim())) {
       const copied = strings(raw.scopeRefs).flatMap(r => requirementText(scope, r)?.acceptance ?? []).slice(0, 5);
-      if (copied.length) { raw = { ...raw, acceptance: copied }; notes.push(`${id}: no acceptance lines from the worker; copied ${copied.length} from ${strings(raw.scopeRefs).join(', ')}`); }
+      if (copied.length) {
+        raw = { ...raw, acceptance: copied };
+        copiedAcceptanceIds.add(id);
+        notes.push(`${id}: no acceptance lines from the worker; copied ${copied.length} from ${strings(raw.scopeRefs).join(', ')}`);
+      }
     }
     const t = {
       id, title: String(raw.title ?? ''), type: raw.type, stage, epic: String(raw.epic ?? 'E-00'),
       scopeRefs: strings(raw.scopeRefs), acceptance: strings(raw.acceptance), files: strings(raw.files),
       context: strings(raw.context), contracts: strings(raw.contracts), tests: strings(raw.tests), ...(strings(raw.screens).length ? { screens: strings(raw.screens) } : {}), dependsOn: deps,
-      size: raw.size, risk: raw.risk, sensitive: raw.sensitive === true || isSensitiveText(scope, text),
+      size: raw.size, risk: raw.risk, sensitive: raw.sensitive === true,
       status: 'todo',
     };
+    if (raw.sensitive !== true) t.sensitive = isSensitiveTicket(t, scope, reqLookup) || writesPublicApiRoute(t);
     if (raw.type === 'human') t.steps = strings(raw.steps);
     if (raw.hard === true) t.hard = true;
     if (raw.skeleton === true) t.skeleton = true;
@@ -621,19 +1368,44 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     if (strings(raw.deletes).length) t.deletes = strings(raw.deletes);
     if (strings(raw.dependencies).length) t.dependencies = strings(raw.dependencies);
     const v = validateTicket(t);
-    if (!v.ok) errors.push(`${id}: ${v.errors[0]}`);
+    if (!v.ok) ownErrors.push(v.errors[0]);
     // Format rules the dogfood run needed (contract format, real paths, env template, one package manager).
-    if (t.type === 'contract' && !(t.files.length === 1 && /^contracts\/[\w.-]+\.json$/.test(t.files[0]))) errors.push(`${id}: a contract ticket must write exactly one OpenAPI JSON file under contracts/ (for example contracts/api.json); put TypeScript or SQL types in build tickets that depend on it`);
+    if (t.type === 'contract' && !(t.files.length === 1 && /^contracts\/[\w.-]+\.json$/.test(t.files[0]))) ownErrors.push('a contract ticket must write exactly one OpenAPI JSON file under contracts/ (for example contracts/api.json); put TypeScript or SQL types in build tickets that depend on it');
     for (const f of t.files) {
       const base = f.split('/').pop();
-      if (base.startsWith('.env')) errors.push(`${id}: ${f} is a reserved name; use env.example.txt for an env template`);
-      else if (!f.includes('/') && !ROOT_FILE_OK.test(f)) errors.push(`${id}: ${f} has no folder; give it its real path (for example src/... or supabase/migrations/...)`);
+      if (base.startsWith('.env')) ownErrors.push(`${f} is a reserved name; use env.example.txt for an env template`);
+      else if (!f.includes('/') && !ROOT_FILE_OK.test(f) && !allowedRootFiles.has(f)) ownErrors.push(`${f} has no folder; give it its real path (for example src/... or supabase/migrations/...)`);
     }
     const other = otherManagerLockfile(t.files, packageManager);
-    if (other) errors.push(`${id}: ${other.file} is a ${other.manager} lockfile but the project uses ${packageManager}`);
-    tickets.push(t);
+    if (other) ownErrors.push(`${other.file} is a ${other.manager} lockfile but the project uses ${packageManager}`);
+    for (const reason of ownErrors) errors.push(`${id}: ${reason}`);
+    candidates.push({ id, title: t.title, ticket: t, localDependencyIds, reasons: ownErrors });
   }
-  return { tickets, errors, notes };
+  const rejectedById = new Map(rejected.map(entry => [entry.id, entry]));
+  for (const candidate of candidates) {
+    if (candidate.reasons.length && !rejectedById.has(candidate.id)) {
+      const entry = { id: candidate.id, title: candidate.title, reason: candidate.reasons[0] };
+      rejectedById.set(candidate.id, entry);
+      rejected.push(entry);
+    }
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const candidate of candidates) {
+      if (rejectedById.has(candidate.id)) continue;
+      const dependency = candidate.localDependencyIds.find(dep => rejectedById.has(dep));
+      if (!dependency) continue;
+      const entry = { id: candidate.id, title: candidate.title, reason: `depends on rejected ${dependency}` };
+      rejectedById.set(candidate.id, entry);
+      rejected.push(entry);
+      errors.push(`${candidate.id}: ${entry.reason}`);
+      changed = true;
+    }
+  }
+  for (const candidate of candidates) if (!rejectedById.has(candidate.id)) tickets.push(candidate.ticket);
+  rejected.sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2)));
+  return { tickets, errors, notes, copiedAcceptanceIds, rejected, candidateTickets: candidates.map((candidate) => candidate.ticket) };
 }
 
 async function readStageFiles(root, runId) {
@@ -674,6 +1446,505 @@ function treeReport(scope, tickets) {
   return { tree, lines };
 }
 
+function parseMaxRepairs(flags) {
+  if (flags['max-repairs'] === undefined) return 3;
+  const n = Number(flags['max-repairs']);
+  if (!Number.isFinite(n) || n < 0) return 3;
+  return Math.floor(n);
+}
+
+async function mergeIngestStageLists(root, baseRunId, stageRuns = {}) {
+  const base = await readStageFiles(root, baseRunId);
+  const byStage = new Map(base.lists.map(entry => [entry.stage, entry]));
+  const errors = [...base.errors];
+  const notes = [...base.notes];
+  for (const [stage, runId] of Object.entries(stageRuns)) {
+    if (runId === baseRunId) continue;
+    try {
+      const rep = await readStageFiles(root, runId);
+      const repStage = rep.lists.find(entry => entry.stage === stage);
+      if (repStage) byStage.set(stage, repStage);
+      errors.push(...rep.errors);
+      notes.push(...rep.notes);
+    } catch (error) {
+      errors.push(`split-${stage}: ${error.message ?? error}`);
+    }
+  }
+  return {
+    lists: [...byStage.values()].sort((a, b) => a.stage.localeCompare(b.stage, 'en', { numeric: true })),
+    errors,
+    notes,
+  };
+}
+
+function ticketStageLookup(lists, startAt) {
+  const map = new Map();
+  let n = startAt;
+  for (const { stage, items } of lists) for (const _raw of items) {
+    map.set(`T-${String(n).padStart(4, '0')}`, stage);
+    n += 1;
+  }
+  return map;
+}
+
+function tagIssueStages(issues, stageByTicket) {
+  return issues.map(issue => (issue.stage ? issue : { ...issue, stage: issue.ticket ? stageByTicket.get(issue.ticket) ?? null : null }));
+}
+
+export function promotePathPendingTickets(pathPendingParked, tickets, { repoFiles, acceptNewPaths, pathExists }) {
+  const stillParked = [];
+  const promoted = [];
+  for (const entry of pathPendingParked) {
+    const ticket = entry.ticket;
+    const paths = validateTicketPaths(ticket, { exists: pathExists, allTickets: [...tickets, ticket], repoFiles });
+    const missing = (paths.errors ?? []).filter(err => err.reason === 'missing file');
+    const promote = (t) => {
+      if (!Object.hasOwn(t, 'pathPending')) return t;
+      const { pathPending: _drop, ...rest } = t;
+      return rest;
+    };
+    if (!missing.length) {
+      promoted.push(promote(ticket));
+      continue;
+    }
+    const cleared = missing.every(err => {
+      const norm = normTicketPath(err.path);
+      return acceptNewPaths.has(norm) || repoFiles.includes(norm);
+    });
+    if (cleared) promoted.push(promote(ticket));
+    else stillParked.push(entry);
+  }
+  return { tickets: [...tickets, ...promoted], pathPendingParked: stillParked };
+}
+
+function evaluateSplitIngest({
+  root,
+  lists,
+  readErrors,
+  scope,
+  scopeText = '',
+  existing,
+  profile,
+  repoFiles,
+  rootFiles,
+  startAt,
+  packageManager,
+  flags,
+  acceptNewPaths,
+  machineConcurrency,
+  ticketPatches,
+  guardNotes,
+  ticketIdBlock,
+  peerTicketIds,
+  peerTicketsLedgerPath,
+}) {
+  const idFatal = validateIngestTicketIds({
+    startAt,
+    itemCount: countIngestItems(lists),
+    block: ticketIdBlock,
+    peerIds: peerTicketIds,
+    peerPath: peerTicketsLedgerPath,
+  });
+  if (idFatal) return { fatal: idFatal };
+  const built = ticketsFromStageLists(lists, scope, { startAt, packageManager, ledger: existing, rootFiles: [...rootFiles] });
+  let tickets = built.tickets.map(ticket => {
+    const patch = ticketPatches.get(ticket.id);
+    return patch ? { ...ticket, ...patch } : ticket;
+  });
+  let rejected = [...built.rejected];
+  const pathExists = (p) => repoFiles.includes(normTicketPath(p));
+  const batchRepair = repairTicketBatch({
+    tickets,
+    ledgerTickets: existing?.tickets ?? [],
+    scopeText,
+    pathExists,
+    repoFiles,
+  });
+  built.notes.push(...batchRepair.notes);
+  const pathPendingParked = batchRepair.parked.filter((entry) => entry.parkedReason === 'path-not-in-repo-pending');
+  const hardParked = batchRepair.parked.filter((entry) => entry.parkedReason !== 'path-not-in-repo-pending');
+  tickets = batchRepair.tickets;
+  for (const entry of hardParked) {
+    rejected.push({ id: entry.ticket.id, title: entry.ticket.title ?? '', reason: entry.issues[0]?.reason ?? 'could not repair ticket' });
+  }
+  const repairedIds = new Set(batchRepair.notes.map(line => /^T-[0-9]+/.exec(line)?.[0]).filter(Boolean));
+  const refreshed = refreshRejectedDependents({
+    tickets,
+    rejected,
+    repairedIds,
+    candidateTickets: built.candidateTickets ?? [],
+    exists: pathExists,
+    pathOptions: { repoFiles },
+  });
+  tickets = refreshed.tickets;
+  rejected = refreshed.rejected;
+  const stillRejectedIds = new Set(rejected.map((row) => row.id));
+  built.rejected = built.rejected.filter((row) => stillRejectedIds.has(row.id));
+  built.notes.push(...refreshed.notes);
+  const pathPendingIds = new Set(pathPendingParked.map((entry) => entry.ticket.id));
+  tickets = [...tickets, ...pathPendingParked.map((entry) => entry.ticket)];
+  for (const entry of pathPendingParked) {
+    built.notes.push(`${entry.ticket.id}: path not in repo (pending path gate)`);
+  }
+  const stageByTicket = ticketStageLookup(lists, startAt);
+  for (const ticket of tickets) if (!stageByTicket.has(ticket.id)) stageByTicket.set(ticket.id, ticket.stage);
+
+  tickets = applySplitIngestGuards(tickets, existing?.tickets ?? [], { profile, repoFiles, notes: built.notes, rejected, guardNotes });
+  const acceptanceCheck = ingestAcceptanceChecks(root, scope, profile, existing?.tickets ?? [], tickets, built.copiedAcceptanceIds, repoFiles);
+  built.notes.push(...acceptanceCheck.notes);
+
+  if (flags.wire && tickets.some(t => t.integration !== true)) {
+    return {
+      fatal: `split refused: --wire takes integration tickets only; these are not: ${tickets.filter(t => t.integration !== true).map(t => t.title).slice(0, 5).join('; ')}`,
+    };
+  }
+
+  const strayTickets = [];
+  if (existing && !flags.wire) {
+    const pending = pendingRequirements(scope, existing.tickets);
+    for (const ticket of tickets) {
+      if (ticket.scopeRefs.some(ref => !pending.has(ref))) strayTickets.push(ticket);
+    }
+  }
+
+  addWiringDeps(tickets, existing?.tickets ?? []);
+  const orderNotes = orderTestsAfterBuild(tickets, existing?.tickets ?? []);
+  tickets = finalizeSplitTestStages(tickets, existing?.tickets ?? [], { notes: built.notes, rejected });
+  const rejectedIdsAfterFinalize = new Set(rejected.map((row) => row.id));
+  built.rejected = built.rejected.filter((row) => rejectedIdsAfterFinalize.has(row.id));
+  for (const entry of rejected) {
+    if (!built.rejected.some(row => row.id === entry.id)) built.rejected.push(entry);
+  }
+  chainSharedFiles(tickets, existing?.tickets ?? []);
+
+  const touched = [...new Set(tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs))];
+  const allForWiring = [...(existing?.tickets ?? []), ...tickets];
+  const unwired = wiringGaps(allForWiring, touched);
+  // Soft miss (modules, no integration): wire manifest after ingest. Hard gaps and approved-ledger merges still refuse.
+  const needsIntegration = new Set(unwiredRequirements(allForWiring).filter(r => touched.includes(r)));
+  const hardWiringGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
+
+  const pendingAfterGuards = pathPendingParked.map((entry) => ({
+    ...entry,
+    ticket: tickets.find((ticket) => ticket.id === entry.ticket.id) ?? entry.ticket,
+  }));
+  const readyTickets = tickets.filter((ticket) => !pathPendingIds.has(ticket.id));
+  const pathPromotion = promotePathPendingTickets(pendingAfterGuards, readyTickets, { repoFiles, acceptNewPaths, pathExists });
+  tickets = pathPromotion.tickets;
+  const pathCheck = ticketPathCheckLines(tickets, repoFiles, root, acceptNewPaths);
+  for (const entry of pathPromotion.pathPendingParked) {
+    const paths = validateTicketPaths(entry.ticket, { exists: pathExists, allTickets: tickets, repoFiles });
+    for (const err of paths.errors ?? []) {
+      pathCheck.refusals.push(formatTicketPathRefusal(entry.ticket.id, err));
+    }
+  }
+  const laneRefusals = [];
+  const laneNotes = [];
+  const sizes = contextEnvFor(root, profile).sizes;
+  for (const ticket of tickets) {
+    const advice = adviseTicketLane(ticket, { sizes, lanes: CHEAP_LANE_ORDER, maxFiles: DEFAULT_MAX_FILES });
+    if (!advice.ok) {
+      const bytes = ticketByteTotal(ticket, sizes);
+      const cap = capBytesForLane('hermes');
+      laneRefusals.push({
+        ticket: ticket.id,
+        reason: `${ticket.id}: ${bytes} bytes exceeds the cheap-lane cap of ${cap} bytes (max ${DEFAULT_MAX_FILES} output files); split this ticket or reduce its outputs`,
+      });
+    } else if (advice.action === 'route-in-place') {
+      ticket.lane = advice.lane;
+      laneNotes.push(`${ticket.id}: ${ticketByteTotal(ticket, sizes)} bytes routed to in-place lane ${advice.lane}`);
+    }
+  }
+
+  const previewTickets = [...(existing?.tickets ?? []), ...tickets];
+  if (!existing) previewTickets.push(...checklistToTickets(day0Checklist(scope)));
+  const tree = checkTicketTree({ scope, tickets: previewTickets });
+  const structural = tree.errors.filter(e => e.code !== 'uncovered');
+  const waveSimulation = simulateBeforeIngest(previewTickets, machineSlots(machineConcurrency));
+  const waveBlockText = waveGateFails(waveSimulation) && flags['accept-waves'] !== true ? waveRefusal(waveSimulation, previewTickets) : null;
+
+  const issues = collectSplitIssues({
+    errors: readErrors,
+    rejected,
+    acceptanceRefusals: [],
+    wiringGaps: hardWiringGaps,
+    pathRefusals: pathCheck.refusals.map(line => ({ reason: line, ticket: /^T-\d+/.exec(line)?.[0] })),
+    laneRefusals: laneRefusals.map(row => (typeof row === 'string' ? row : row.reason)),
+    treeErrors: structural,
+    strayTickets,
+    waveRefusal: waveBlockText,
+    tickets,
+    touchedReqs: touched,
+  });
+  for (const msg of acceptanceCheck.refusals) {
+    const ticket = /^T-\d+/.exec(String(msg))?.[0] ?? null;
+    issues.push({
+      code: 'acceptance',
+      reason: msg,
+      ticket,
+      stage: ticket ? stageByTicket.get(ticket) ?? null : null,
+      fixable: false,
+    });
+  }
+  for (const issue of issues) {
+    if (issue.code === 'invalid-integration-test' && issue.req) {
+      const integ = integrationTickets(allForWiring, issue.req)[0];
+      if (integ) {
+        issue.stage = integ.stage;
+        issue.ticket = integ.id;
+      }
+      continue;
+    }
+    if (issue.code === 'missing-integration' && issue.req) {
+      const mod = moduleTickets(allForWiring, issue.req)[0];
+      if (mod) {
+        issue.stage = mod.stage;
+        issue.ticket = mod.id;
+      }
+    }
+  }
+  for (const issue of issues) {
+    if (!issue.stage && issue.ticket) issue.stage = stageByTicket.get(issue.ticket) ?? null;
+  }
+  for (const issue of issues) {
+    if (issue.code === 'test-after-code' && /no matching build/i.test(String(issue.reason ?? ''))) issue.fixable = false;
+    if (issue.code === 'lane-size' && !issue.ticket) {
+      const id = /^T-\d+/.exec(String(issue.reason ?? ''))?.[0];
+      if (id) issue.ticket = id;
+    }
+  }
+
+  const badIds = new Set(rejected.map(entry => entry.id));
+  for (const issue of issues) {
+    if (!issue.ticket) continue;
+    if (issue.code === 'missing-integration' && /no integration ticket that mounts/i.test(String(issue.reason ?? ''))) continue;
+    badIds.add(issue.ticket);
+  }
+  for (const msg of acceptanceCheck.refusals) {
+    const ticket = /^T-\d+/.exec(String(msg))?.[0];
+    if (ticket) badIds.add(ticket);
+  }
+  for (const issue of issues) {
+    if (issue.code === 'acceptance' && issue.ticket) badIds.add(issue.ticket);
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const ticket of tickets) {
+      if (badIds.has(ticket.id)) continue;
+      const dependency = (ticket.dependsOn ?? []).find(id => badIds.has(id));
+      if (!dependency) continue;
+      badIds.add(ticket.id);
+      rejected.push({ id: ticket.id, title: ticket.title, reason: `depends on rejected ${dependency}` });
+      changed = true;
+    }
+  }
+
+  const validTickets = tickets.filter(ticket => !badIds.has(ticket.id));
+  return {
+    tickets: validTickets,
+    pathPendingParked: pathPromotion.pathPendingParked,
+    allTickets: tickets,
+    issues,
+    existing: existing?.tickets ?? [],
+    repoFiles,
+    profile,
+    built,
+    pathCheck,
+    orderNotes,
+    tree,
+    previewTickets,
+    waveSimulation,
+    stageByTicket,
+    lists,
+    laneNotes,
+  };
+}
+
+async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowIntegrationRepair = false, scopeText = '' }) {
+  const history = [];
+  let rounds = 0;
+  let prevIssueKeys = null;
+
+  const snapshot = () => {
+    const v = validate();
+    const all = [...(v.issues ?? []), ...(v.stageIssues ?? [])];
+    return { all, keys: [...all].map(i => [i.code, i.stage ?? '', i.ticket ?? '', i.path ?? '', i.req ?? '', i.reason ?? ''].join('|')).sort().join('\0'), v };
+  };
+
+  const applyTicketBatchRepair = (v) => {
+    const pool = v.allTickets ?? v.tickets ?? [];
+    if (!pool.length) return [];
+    const repaired = repairTicketBatch({
+      tickets: pool,
+      ledgerTickets: v.existing ?? [],
+      scopeText,
+      pathExists: (p) => (v.repoFiles ?? []).includes(normTicketPath(p)),
+      repoFiles: v.repoFiles ?? [],
+    });
+    if (repaired.notes.length && typeof v.setTickets === 'function') v.setTickets(repaired.tickets);
+    return repaired.notes;
+  };
+
+  const applyAutoFixPass = (v, allIssues) => {
+    const pool = v.allTickets ?? v.tickets ?? [];
+    const result = autoFix(pool, allIssues, {
+      existing: v.existing ?? [],
+      repoFiles: v.repoFiles ?? [],
+      profile: v.profile ?? null,
+      applyIngestGuards: false,
+    });
+    if (result.fixed?.length && typeof v.setTickets === 'function') v.setTickets(result.tickets);
+    return result;
+  };
+
+  // runRepairLoop calls rerun synchronously; ingest uses an async loop that awaits worker runs.
+  let { all: issues, keys, v } = snapshot();
+  if (!issues.length) return { tickets: v.tickets ?? [], parked: [], rounds: 0, history };
+
+  const errorsInFirst = issues.length;
+  applyAutoFixPass(v, issues);
+  v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+  ({ all: issues, keys, v } = snapshot());
+
+  if (!issues.length) {
+    log?.({ round: 0, errorsIn: errorsInFirst, errorsLeft: 0 });
+    history.push({ round: 0, errorsIn: errorsInFirst, errorsLeft: 0 });
+    return { tickets: v.tickets ?? [], parked: [], rounds: 0, history, repairNotes: v.repairNotes ?? [] };
+  }
+
+  const shouldRepair = issueList => issueList.some(issue => issue.fixable)
+    || (allowIntegrationRepair && issueList.some(issue => issue.code === 'missing-integration' || issue.code === 'invalid-integration-test'));
+
+  if (!shouldRepair(issues)) {
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+    ({ all: issues, keys, v } = snapshot());
+    const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
+    return { ...parkedResult, rounds: 0, history, repairNotes: v.repairNotes ?? [] };
+  }
+
+  if (maxRepairs === 0) {
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+    ({ all: issues, keys, v } = snapshot());
+    const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
+    return { ...parkedResult, rounds: 0, history, repairNotes: v.repairNotes ?? [] };
+  }
+
+  prevIssueKeys = keys;
+
+  while (rounds < maxRepairs) {
+    if (!shouldRepair(issues)) {
+      return { tickets: v.tickets ?? [], parked: [], rounds, history };
+    }
+    const stages = [...new Set(issues.map(i => i.stage).filter(Boolean))];
+    const issuesByStage = {};
+    for (const issue of issues) {
+      const s = issue.stage ?? '_';
+      if (!issuesByStage[s]) issuesByStage[s] = [];
+      issuesByStage[s].push(issue);
+    }
+    const errorsIn = issues.length;
+    await rerun(stages, issuesByStage, rounds);
+    rounds += 1;
+
+    ({ all: issues, keys, v } = snapshot());
+    log?.({ round: rounds - 1, errorsIn, errorsLeft: issues.length });
+    history.push({ round: rounds - 1, errorsIn, errorsLeft: issues.length });
+
+    if (!issues.length) {
+      return { tickets: v.tickets ?? [], parked: [], rounds, history };
+    }
+
+    applyAutoFixPass(v, issues);
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+    ({ all: issues, keys, v } = snapshot());
+
+    if (!issues.length) {
+      return { tickets: v.tickets ?? [], parked: [], rounds, history, repairNotes: v.repairNotes ?? [] };
+    }
+
+    if (keys === prevIssueKeys) {
+      v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+      ({ all: issues, keys, v } = snapshot());
+      const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
+      return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])], repairNotes: v.repairNotes ?? [] };
+    }
+    prevIssueKeys = keys;
+  }
+
+  v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+  ({ all: issues, keys, v } = snapshot());
+  const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
+  return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])], repairNotes: v.repairNotes ?? [] };
+}
+
+async function defaultRunSplit(root, manifest) {
+  const { runManifestChecked } = await import('./swarm.mjs');
+  const run = await runManifestChecked(root, manifest, () => {}, { maxUsd: 1.5 });
+  const runId = typeof run?.id === 'string' ? run.id : null;
+  if (!runId) return run;
+  try {
+    const { waitRun } = await import('./swarm/core-51.mjs');
+    await waitRun(root, runId);
+  } catch {
+    for (let i = 0; i < 600; i += 1) {
+      const state = await readRunState(root, runId);
+      const jobs = state?.jobs ?? [];
+      if (jobs.length && jobs.every(job => job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled')) break;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+  return run;
+}
+
+function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTickets, copiedAcceptanceIds, repoFiles = []) {
+  const allTickets = [...existingTickets, ...builtTickets].filter(ticket => ticket?.status !== 'cancelled');
+  const env = contextEnvFor(root, profile);
+  const integrationByRequirement = new Set(
+    allTickets.filter(ticket => ticket.integration === true).flatMap(ticket => ticket.scopeRefs ?? []),
+  );
+  const reqLookup = new Map((scope.requirements ?? []).map(requirement => [requirement.id, requirement]));
+  const refusals = [];
+  const notes = [];
+  const acceptWarnings = [];
+
+  for (const ticket of builtTickets) {
+    const copied = copiedAcceptanceIds.has(ticket.id);
+    const deferred = copied && (ticket.scopeRefs ?? []).some(id => !integrationByRequirement.has(id));
+    if (deferred) {
+      ticket.acceptanceDeferred = true;
+      notes.push(`${ticket.id}: copied requirement acceptance deferred until its integration ticket exists`);
+      continue;
+    }
+    if (ticket.type !== 'build' || !acceptanceLines(ticket).length) continue;
+    const requirements = (ticket.scopeRefs ?? [])
+      .map(id => reqLookup.get(id))
+      .filter(Boolean)
+      .flatMap(requirement => [requirement.text, ...(requirement.acceptance ?? [])])
+      .join('\n');
+    const allowed = allowedPathsForAcceptance({
+      ticket,
+      scope,
+      exists: env.exists,
+      sizes: env.sizes,
+      profileContext: env.profileContext,
+      listFiles: env.listFiles,
+      allTickets,
+      requirements,
+    });
+    wireAcceptancePathDependencies(ticket, allTickets, repoFiles, { notes, warnings: acceptWarnings });
+    const filtered = filterProvableAcceptance({ ticket, allowed, allTickets, repoFiles });
+    for (const dropped of filtered.dropped) {
+      const offending = pathsInAcceptanceText(dropped.line).find(ref => !provabilityOfAcceptanceLine({ line: ref, ticket, allowed, allTickets }).provable);
+      const named = offending ?? pathsInAcceptanceText(dropped.line)[0] ?? 'unknown path';
+      const owners = ownersOfPath(named, allTickets);
+      refusals.push(`${ticket.id}: acceptance line ${dropped.n} names ${named}, owned by ${owners.join(', ') || 'nobody'}`);
+    }
+  }
+  notes.push(...acceptWarnings.map((line) => `warning: ${line}`));
+  return { refusals, notes };
+}
+
 // Warnings for acceptance checks that run a tool nobody configured (lesson 16).
 async function toolConfigWarnings(root, tickets) {
   const lines = toolConfigLines(missingToolConfigs(tickets, await projectFileList(root, execFileAsync), existsIn(root)));
@@ -697,10 +1968,14 @@ async function toolConfigWarnings(root, tickets) {
     const dir = near(file) ?? '.';
     if (infoFor.has(dir)) return infoFor.get(dir);
     let scripts = {}, configText = '';
-    try { scripts = JSON.parse(readFileSync(path.join(root, dir, 'package.json'), 'utf8')).scripts ?? {}; } catch { /* no package.json */ }
+    try { scripts = JSON.parse(readFileSync(path.join(root, dir, 'package.json'), 'utf8')).scripts ?? {}; } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] package.json scripts unreadable:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+    }
     const names = ['playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs', 'cypress.config.ts', 'cypress.config.js'];
     for (const value of Object.values(scripts)) for (const m of String(value).matchAll(/--config[ =]+(\S+)/g)) names.push(m[1].replace(/^['"]|['"]$/g, ''));
-    for (const name of names) { try { configText += `${readFileSync(path.join(root, dir, name), 'utf8')}\n`; } catch { /* absent */ } }
+    for (const name of names) { try { configText += `${readFileSync(path.join(root, dir, name), 'utf8')}\n`; } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] e2e config unreadable:', error?.code ?? 'unknown');
+    } }
     const value = { scripts, configText };
     infoFor.set(dir, value);
     return value;
@@ -740,7 +2015,9 @@ async function cmdNew(root, { flags }, deps = {}) {
   if (!built.ok) {
     // Keep what was typed, so fixing one line does not mean answering everything again.
     const saved = '.swarm/project/scope-answers.json';
-    try { const dir = await safeWritableDir(root, ['.swarm', 'project']); await fs.writeFile(path.join(dir, 'scope-answers.json'), `${JSON.stringify(raw, null, 2)}\n`); } catch { /* the message below still says what to fix */ }
+    try { const dir = await safeWritableDir(root, ['.swarm', 'project']); await fs.writeFile(path.join(dir, 'scope-answers.json'), `${JSON.stringify(raw, null, 2)}\n`); } catch (error) {
+      console.error('[tools/scope-commands.mjs] could not keep the scope answers:', error?.code ?? error?.name ?? 'unknown');
+    }
     return out(`The scope was not written:\n${built.errors.map(e => `  - ${e}`).join('\n')}\nYour answers are kept in ${saved}: fix them there and run swarm scope new --answers ${saved}`, 1);
   }
   await writeFileSafe(root, rel(path.relative(root, target)), built.text, { exclusive: true });
@@ -761,15 +2038,15 @@ async function cmdCheck(root, { rest }) {
   const result = checkScope(scope);
   const lines = [`${file}: ${scope.requirements.length} requirements, ${scope.stages.length} stages, ${result.findings.length} findings`];
   for (const f of result.findings) lines.push(`  ${f.level} ${f.code}${f.id ? ` ${f.id}` : ''}: ${f.message} -> ${f.fix}`);
-  const led = await readLedger(root).catch(() => null);
+  const led = await readLedger(root).catch(error => { console.error('[tools/scope-commands.mjs] could not read the ticket ledger:', error instanceof SyntaxError ? 'corrupt ledger (SyntaxError)' : (error?.code ?? error?.name ?? 'unknown')); return null; });
   if (led) lines.push(...await toolConfigWarnings(root, led.tickets));
   const items = day0Checklist(scope);
   if (items.length) lines.push(`Day 0: ${items.length} outside services need an owner: ${items.map(i => i.service).join(', ')}`);
   return out(lines.join('\n'), result.ok ? 0 : 1);
 }
 
-async function cmdSplit(root, { rest, flags }) {
-  const { file, scope, hash } = await loadScope(root, rest[0]);
+async function cmdSplit(root, { rest, flags }, deps = {}) {
+  const { file, scope, hash, text } = await loadScope(root, rest[0]);
   const checked = checkScope(scope);
   if (!checked.ok) return out(`${file} has errors; run swarm scope check ${file} first`, 1);
   if (!flags.ingest) {
@@ -792,64 +2069,394 @@ async function cmdSplit(root, { rest, flags }) {
     await writeFileSafe(root, `${SPLIT_DIR}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
     return out(`split manifest: ${manifest.jobs.length} job(s) written to ${SPLIT_DIR}/manifest.json\nNext: swarm run ${SPLIT_DIR}/manifest.json, then swarm scope split --ingest RUN${led ? ' --merge' : ''}`);
   }
+  return runSplitIngest(root, { scope, hash, text, file }, { flags }, deps);
+}
+
+async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps = {}) {
   const existing = await readLedger(root);
   if (existing && existing.scope?.hash !== hash) return out('the scope file changed since the ledger was made; record it with swarm change "reason" first', 1);
   if (existing && !flags.merge) return out('a ticket ledger already exists; use --merge to add tickets, or delete .swarm/project/tickets.json first', 1);
   if (flags.merge && !existing) return out('no ticket ledger to merge into', 1);
-  const { lists, errors, notes } = await readStageFiles(root, flags.ingest);
-  const profile = await readProfile(root);
-  const startAt = existing ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1 : 1;
-  const built = ticketsFromStageLists(lists, scope, { startAt, packageManager: packageManagerOf(profile), ledger: existing });
-  const all = [...errors, ...built.errors];
-  if (startAt + built.tickets.length > 9000) all.push('too many tickets: ids T-9000 and up are reserved for day 0 tickets');
-  if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
-  // Integration tickets wait for the module tickets of their requirements; a requirement with modules and no integration ticket is refused.
-  if (flags.wire && built.tickets.some(t => t.integration !== true)) return out(`split refused: --wire takes integration tickets only; these are not: ${built.tickets.filter(t => t.integration !== true).map(t => t.title).slice(0, 5).join('; ')}`, 1);
-  // A merge adds tickets for the requirements that have none. A worker that rewrites a requirement that is already built is refused whole.
-  if (existing && !flags.wire) {
-    const pending = pendingRequirements(scope, existing.tickets);
-    const stray = built.tickets.filter(t => t.scopeRefs.some(r => !pending.has(r)));
-    if (stray.length) return out(`split refused; a change order may only add tickets for requirements that have none (${[...pending].slice(0, 8).join(', ') || 'none'}). These tickets touch other requirements:\n${stray.slice(0, 10).map(t => `  ${t.title} (${t.scopeRefs.join(', ')})`).join('\n')}\nNothing was written; rerun the split job.`, 1);
+
+  let ingestLists;
+  try {
+    ingestLists = await readStageFiles(root, flags.ingest);
+  } catch (error) {
+    return out(String(error.message ?? error), 1);
   }
-  addWiringDeps(built.tickets, existing?.tickets ?? []);
-  const orderNotes = orderTestsAfterBuild(built.tickets, existing?.tickets ?? []);
-  chainSharedFiles(built.tickets, existing?.tickets ?? []);
-  const touched = [...new Set(built.tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs))];
-  const allForWiring = [...(existing?.tickets ?? []), ...built.tickets];
-  const unwired = wiringGaps(allForWiring, touched);
-  // A requirement with modules and no integration ticket is the common miss of a small model: the split is kept (not thrown away) and the wire manifest is written,
-  // so one more run adds the integration tickets. The ledger cannot be approved until they exist. Other wiring gaps (a test missing on an integration ticket) still refuse.
-  const needsIntegration = new Set(unwiredRequirements(allForWiring).filter(r => touched.includes(r)));
-  // A merge into an APPROVED ledger keeps the old refusal: it would drop the approval of a build that may be running, for tickets that cannot be built yet.
-  const hardGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
-  if (hardGaps.length) return out(`split refused; the features are not wired (add an integration ticket per requirement, then split these stages again):\n${hardGaps.slice(0, 15).map(g => `  ${g.reason}`).join('\n')}`, 1);
-  let tickets = built.tickets;
+  const rootFileNotes = [];
+  const rootFiles = await rootFilesForProject(root, { scope, scopeText: text, notes: rootFileNotes });
+  const profile = await readProfile(root);
+  const ingestConfig = readLocalConfigForIngest();
+  const ticketIdBlock = ticketIdBlockFromConfig(ingestConfig);
+  const peerTicketsLedgerPath = peerTicketsLedgerPathFromConfig(ingestConfig);
+  const peerTicketIds = peerTicketsLedgerPath ? await loadPeerTicketIds(peerTicketsLedgerPath) : null;
+  const startAt = resolveIngestStartAt(existing, ticketIdBlock);
+  const repoFiles = await listTrackedRepoFiles(root);
+  const acceptNewPaths = new Set(parseAcceptNewPaths(flags['accept-new-path']));
+  const maxRepairs = parseMaxRepairs(flags);
+  const packageManager = packageManagerOf(profile);
+  const notes = [...ingestLists.notes, ...rootFileNotes];
+  const stageRuns = {};
+  const ticketPatches = new Map();
+  const ingestGuardNotes = [];
+  let workingLists = ingestLists.lists;
+  let readErrors = [...ingestLists.errors];
+
+  const loadLists = async () => {
+    const merged = await mergeIngestStageLists(root, flags.ingest, stageRuns);
+    workingLists = merged.lists.length ? merged.lists : workingLists;
+    readErrors = merged.errors;
+    return { lists: workingLists, errors: merged.errors, notes: [...notes, ...merged.notes] };
+  };
+
+  const validate = () => {
+    const evaluated = evaluateSplitIngest({
+      root,
+      lists: workingLists,
+      readErrors,
+      scope,
+      scopeText: text,
+      existing,
+      profile,
+      repoFiles,
+      rootFiles,
+      startAt,
+      packageManager,
+      flags,
+      acceptNewPaths,
+      machineConcurrency: deps.machineConcurrency,
+      ticketPatches,
+      guardNotes: ingestGuardNotes,
+      ticketIdBlock,
+      peerTicketIds,
+      peerTicketsLedgerPath,
+    });
+    if (evaluated.fatal) return { tickets: [], issues: [{ code: 'fatal', reason: evaluated.fatal }], fatal: evaluated.fatal };
+    const ticketCount = countIngestItems(workingLists);
+    if (startAt + ticketCount > 9000) {
+      return { tickets: [], issues: [{ code: 'fatal', reason: 'too many tickets: ids T-9000 and up are reserved for day 0 tickets' }], fatal: 'too many tickets: ids T-9000 and up are reserved for day 0 tickets' };
+    }
+    return {
+      ...evaluated,
+      issues: evaluated.issues,
+      setTickets: (next) => {
+        for (const ticket of next) {
+          ticketPatches.set(ticket.id, {
+            dependsOn: ticket.dependsOn,
+            stage: ticket.stage,
+            context: ticket.context,
+            files: ticket.files,
+            contracts: ticket.contracts,
+            acceptance: ticket.acceptance,
+            screens: ticket.screens,
+            tests: ticket.tests,
+          });
+        }
+      },
+    };
+  };
+
+  const requirementsByStage = {};
+  for (const req of scope.requirements) {
+    if (!requirementsByStage[req.stage]) requirementsByStage[req.stage] = [];
+    requirementsByStage[req.stage].push(req);
+  }
+
+  const rerun = async (stages, issuesByStage, round) => {
+    const jobs = [];
+    const snapshot = validate();
+    const stageList = stages.length ? stages : workingLists.map(entry => entry.stage);
+    for (const stage of stageList) {
+      if (stage === '_') continue;
+      const stageIssues = issuesByStage[stage] ?? [];
+      const failedIds = new Set(stageIssues.map(issue => issue.ticket).filter(Boolean));
+      const stageTickets = (snapshot.allTickets ?? []).filter(ticket => ticket.stage === stage);
+      let failedTickets = stageTickets.filter(ticket => failedIds.has(ticket.id));
+      if (!failedTickets.length) failedTickets = stageTickets;
+      const job = buildRepairJobs({
+        scopeText: text,
+        requirementsByStage,
+        stage,
+        failedTickets,
+        issues: stageIssues.length ? stageIssues : (issuesByStage._ ?? []),
+        round,
+        outputPath: `${SPLIT_DIR}/${stage}.json`,
+      });
+      jobs.push({
+        id: job.id,
+        type: 'build',
+        agent: 'auto',
+        sensitive: true,
+        maxOutputTokens: 32000,
+        prompt: job.prompt,
+        context: [],
+        outputs: [`${SPLIT_DIR}/${stage}.json`],
+        timeoutMs: 900000,
+      });
+    }
+    if (!jobs.length) return;
+    const manifest = { version: 1, concurrency: Math.min(jobs.length, 8), jobs };
+    let run;
+    try {
+      run = await (deps.runSplit ?? defaultRunSplit)(root, manifest);
+    } catch {
+      return;
+    }
+    const runId = typeof run?.id === 'string' ? run.id : null;
+    if (!runId) return;
+    for (const stage of stages) if (stage !== '_') stageRuns[stage] = runId;
+    ticketPatches.clear();
+    await loadLists();
+  };
+
+  const repairHistory = [];
+  const loopResult = await runIngestRepairLoop({
+    maxRepairs,
+    validate,
+    rerun,
+    allowIntegrationRepair: typeof deps.runSplit === 'function',
+    scopeText: text,
+    log: entry => { repairHistory.push(entry); },
+  });
+  ticketPatches.clear();
+  for (const entry of repairHistory) {
+    await appendLog(root, { event: 'split-repair', round: entry.round, errorsIn: entry.errorsIn, errorsLeft: entry.errorsLeft });
+  }
+
+  const touchedReqs = new Set(loopResult.tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs));
+  const previewLedgerTickets = [...(existing?.tickets ?? []), ...loopResult.tickets];
+  const ingestedIds = new Set(loopResult.tickets.map(t => t.id));
+  for (const req of unwiredRequirements(previewLedgerTickets).filter(r => touchedReqs.has(r))) {
+    const mod = moduleTickets(previewLedgerTickets, req)[0];
+    if (!mod || ingestedIds.has(mod.id)) continue;
+    if (loopResult.parked.some(entry => entry.ticket?.id === mod.id)) continue;
+    loopResult.parked.push({
+      ticket: mod,
+      stage: mod.stage,
+      issues: [{ code: 'missing-integration', reason: `${req}: build tickets but no integration ticket that mounts them in a route or page` }],
+    });
+  }
+  const filterAlignRejectedParked = () => {
+    const alignRejectIds = new Set(
+      (validate().built?.rejected ?? [])
+        .filter(row => /no matching build/i.test(String(row.reason ?? '')))
+        .map(row => row.id),
+    );
+    loopResult.parked = loopResult.parked.filter(entry => !alignRejectIds.has(entry.ticket?.id));
+  };
+  filterAlignRejectedParked();
+  for (const event of parkedBlockers(loopResult.parked, { runId: flags.ingest })) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await appendEvent(root, event);
+        break;
+      } catch (error) {
+        if (error?.code !== 'EEXIST' || attempt === 4) throw error;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+  }
+
+  const repairLines = [
+    `repair rounds: ${loopResult.rounds}`,
+    ...repairHistory.map(entry => `round ${entry.round}: ${entry.errorsIn} in -> ${entry.errorsLeft} left`),
+    ...(loopResult.repairNotes ?? []),
+  ];
+  const parkedLines = loopResult.parked.length
+    ? [`parked: ${loopResult.parked.length} ticket(s)`, ...loopResult.parked.map(({ ticket, issues: parkedIssues }) => `${ticket.id} (${ticket.title ?? 'untitled'}): ${(parkedIssues ?? []).map(i => i.reason ?? i.code).join('; ')}`)]
+    : [];
+
+  const fatal = validate().fatal;
+  if (fatal) return out(fatal, 1);
+
+  if (!loopResult.tickets.length) {
+    return out([
+      ...repairLines,
+      ...parkedLines,
+      ...readErrors.slice(0, 15).map(error => `  ${error}`),
+    ].filter(Boolean).join('\n'), 1);
+  }
+
+  const finalEval = validate();
+  if (finalEval.fatal) return out(finalEval.fatal, 1);
+
+  const built = finalEval.built;
+  const writeNotes = [];
+  const writeRejected = [];
+  let tickets = finalizeSplitTestStages(finalEval.tickets, existing?.tickets ?? [], { notes: writeNotes, rejected: writeRejected });
+  const origStage = ticketStageLookup(workingLists, startAt);
+  for (const ticket of tickets) {
+    const was = origStage.get(ticket.id);
+    if (was && ticket.stage && was !== ticket.stage && ticket.type === 'test') {
+      writeNotes.push(`moved ${ticket.id} into stage ${ticket.stage} with the code it tests`);
+    }
+  }
+  built.notes.push(...writeNotes);
+  loopResult.tickets = tickets;
+  const orderNotes = finalEval.orderNotes ?? [];
+  const pathCheck = finalEval.pathCheck;
+  const unusedAcceptPaths = [...acceptNewPaths].filter((p) => !pathCheck.usedAcceptPaths.has(p));
+  const pathWarningLines = [
+    ...pathCheck.warnings.map((line) => `warning: ${line}`),
+    ...unusedAcceptPaths.map((p) => `warning: --accept-new-path unused (no refusal for this path): ${p}`),
+  ];
+  const laneNotes = finalEval.laneNotes ?? [];
+  const rejectedAll = [...built.rejected, ...writeRejected];
+  filterAlignRejectedParked();
+  const parkedLinesAfterReject = loopResult.parked.length
+    ? [`parked: ${loopResult.parked.length} ticket(s)`, ...loopResult.parked.map(({ ticket, issues: parkedIssues }) => `${ticket.id} (${ticket.title ?? 'untitled'}): ${(parkedIssues ?? []).map(i => i.reason ?? i.code).join('; ')}`)]
+    : [];
+  const rejectedSummary = rejectedAll.length
+    ? `rejected ${rejectedAll.length} ticket(s): ${rejectedAll.map(({ id, title, reason }) => `${id} (${title || 'untitled'}): ${reason}`).join('; ')}`
+    : null;
+
   if (!existing) tickets = [...tickets, ...checklistToTickets(day0Checklist(scope))];
   const base = existing ?? createLedger({ scope: { name: scope.name, version: scope.version, hash, file }, tickets: [] });
-  // New tickets are written by a worker, so any earlier approval no longer covers the ticket set.
   const ledger = { ...createLedger({ scope: base.scope, tickets: [...base.tickets, ...tickets] }), wiring: existing ? existing.wiring === true : true, changeOrders: base.changeOrders ?? [], createdAt: base.createdAt, approved: null };
   const { tree, lines } = treeReport(scope, ledger.tickets);
-  const structural = tree.errors.filter(e => e.code !== 'uncovered');
-  if (structural.length) return out(`split refused; the tickets are inconsistent:\n${lines.join('\n')}`, 1);
+  const criticalPathLine = `critical path: ${criticalPathLength(ledger.tickets)} tickets`;
+  const ownsTests = ledger.tickets.some(ticket => ticket.type === 'build' && (ticket.tests ?? []).some(looksLikeTestFile));
+  const testFirstLine = ownsTests ? `test-first would be ${criticalPathLength(testFirstTickets(ledger.tickets))}` : null;
+  const waveSimulation = finalEval.waveSimulation ?? simulateBeforeIngest(ledger.tickets, machineSlots(deps.machineConcurrency));
+  if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out([...repairLines, ...parkedLines, waveRefusal(waveSimulation, ledger.tickets)].filter(Boolean).join('\n'), 1);
+
   await writeLedger(root, ledger);
-  await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok });
+  for (const acceptedPath of pathCheck.usedAcceptPaths) {
+    await appendLog(root, { event: 'accept-new-path', path: acceptedPath, run: flags.ingest });
+  }
+  if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope split --ingest');
+  await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok, rejected: built.rejected, parked: loopResult.parked.length });
   const gaps = tree.ok ? [] : ['Some requirements still have no tickets: run swarm scope split again (it splits only those), then --ingest RUN --merge.'];
-  // Requirements the worker left without an integration ticket: the wire manifest is written now, so the next step is one run and one ingest.
   let wireLines = [];
-  const missing = [...needsIntegration].filter(r => unwiredRequirements(ledger.tickets).includes(r)).sort();
+  const missing = unwiredRequirements(ledger.tickets).filter(r => touchedReqs.has(r)).sort();
   if (missing.length) {
     const wire = missing.map(req => ({ req, stage: scope.requirements.find(r => r.id === req)?.stage, modules: moduleTickets(ledger.tickets, req) }));
     const wireManifest = buildSplitManifest(scope, { only: new Set(missing), layout: await projectLayout(root, scope, profile), wire });
-    // Its own file: the split manifest the owner may still need is never overwritten.
     await writeFileSafe(root, `${SPLIT_DIR}/wire-manifest.json`, `${JSON.stringify(wireManifest, null, 2)}\n`);
     ledger.pendingWiring = missing;
     await writeLedger(root, ledger);
     wireLines = [`wiring: ${missing.length} requirement(s) have modules but no integration ticket (${missing.slice(0, 8).join(', ')}); the ledger cannot be approved until they do.`, `Next: swarm run ${SPLIT_DIR}/wire-manifest.json, then swarm scope split --ingest RUN --merge --wire`];
   }
-  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
+  const exitCode = loopResult.parked.length && !loopResult.tickets.length ? 1 : 0;
+  const mergedIngestNotes = [...new Set([...ingestGuardNotes, ...built.notes, ...orderNotes])];
+  const ingestNoteOverflow = mergedIngestNotes.length > 12
+    ? [`note: ...and ${mergedIngestNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`]
+    : [];
+  return out([
+    `ledger written: ${loopResult.tickets.length} tickets added (not approved)`,
+    ...repairLines,
+    ...parkedLinesAfterReject,
+    rejectedSummary,
+    criticalPathLine,
+    testFirstLine,
+    ...laneNotes.map(n => `lane: ${n}`),
+    ...pathWarningLines,
+    ...notes.map(n => `note: ${n}`),
+    ...mergedIngestNotes.slice(0, 12).map(n => `note: ${n}`),
+    ...ingestNoteOverflow,
+    ...lines,
+    ...await toolConfigWarnings(root, ledger.tickets),
+    ...gaps,
+    ...wireLines,
+    tree.ok && !wireLines.length ? 'Next: swarm scope approve' : '',
+  ].filter(Boolean).join('\n'), exitCode);
 }
 
-async function cmdApprove(root, { rest, flags }) {
+function managerGateOutcome(result) {
+  const run = result?.run ?? result;
+  const status = result?.status ?? run?.status;
+  const reason = result?.reason ?? result?.blockingReason ?? run?.reason ?? run?.blockingReason ?? run?.error;
+  if (result?.blocked === true || status === 'blocked') return { kind: 'blocked', reason: String(reason ?? 'the ticket manager scope gate blocked approval') };
+  if (status === 'error' || result?.error) return { kind: 'warning', reason: String(reason ?? result.error ?? 'the ticket manager scope gate failed') };
+  return { kind: 'ok', reason: '' };
+}
+
+async function cmdGate(root, { flags }) {
+  const list = flags.list === true;
+  const fix = flags['fix-owners'] === true;
+  if (!list && !fix) return bad('scope gate needs --list or --fix-owners');
+  if (list && fix) return bad('scope gate: use --list or --fix-owners, not both');
+  const ledger = await readLedger(root);
+  if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+  if (list) {
+    const gate = await ticketManagerGateCheck(root, ledger);
+    if (flags.json === true) return out(JSON.stringify(gate.findings), 0);
+    return out(formatGateFindingLines(gate.findings), 0);
+  }
+  const { edits, blocked } = duplicateOwnerDependsOnFixes(ledger.tickets);
+  const preview = edits.map((e) => `  ${e.ticket}: add dependsOn ${e.addDep} (${e.file})`);
+  const blockedLines = blocked.map((b) => `  ${b.file}: ${b.later} cannot depend on ${b.earlier} (would cycle; needs the owner)`);
+  if (!edits.length && !blocked.length) return out('no duplicate file owners to fix', 0);
+  if (flags.yes !== true) {
+    return out([
+      edits.length ? `would add ${edits.length} dependsOn edge(s):` : 'no dependsOn edges to add',
+      ...preview,
+      ...(blocked.length ? ['still needs the owner:', ...blockedLines] : []),
+      'Rerun with --yes to apply.',
+    ].filter(Boolean).join('\n'));
+  }
+  try {
+    return await withLock(root, async () => {
+      const fresh = await readLedger(root);
+      if (!fresh) return out('no ticket ledger; run swarm scope split first', 1);
+      const { edits: plan, blocked: stillBlocked } = duplicateOwnerDependsOnFixes(fresh.tickets);
+      if (!plan.length && !stillBlocked.length) return out('no duplicate file owners to fix', 0);
+      const byId = new Map(fresh.tickets.map((t) => [t.id, t]));
+      const applied = [];
+      for (const { ticket: id, addDep } of plan) {
+        const t = byId.get(id);
+        if (!t) continue;
+        const deps = [...new Set([...(t.dependsOn ?? []), addDep])].sort();
+        const next = { ...t, dependsOn: deps };
+        const v = validateTicket(next);
+        if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+        byId.set(id, next);
+        applied.push({ id, addDep });
+      }
+      if (!applied.length) {
+        return out([
+          'no dependsOn edges applied',
+          ...(stillBlocked.length ? ['still needs the owner:', ...stillBlocked.map((b) => `  ${b.file}: ${b.later} cannot depend on ${b.earlier} (would cycle)`)] : []),
+        ].join('\n'), stillBlocked.length ? 1 : 0);
+      }
+      const wasApproved = isApproved(fresh);
+      const nextTickets = fresh.tickets.map((t) => byId.get(t.id) ?? t);
+      const saved = wasApproved ? approveLedger({ ...fresh, tickets: nextTickets }, { by: 'owner' }) : { ...fresh, tickets: nextTickets };
+      saved.updatedAt = new Date().toISOString();
+      await writeLedger(root, saved);
+      for (const { id, addDep } of applied) {
+        const before = fresh.tickets.find((t) => t.id === id);
+        const after = saved.tickets.find((t) => t.id === id);
+        await appendLog(root, {
+          event: 'ticket-edit',
+          id,
+          by: 'owner',
+          fields: ['dependsOn'],
+          before: { dependsOn: before?.dependsOn ?? [] },
+          after: { dependsOn: after?.dependsOn ?? [] },
+          note: 'scope gate --fix-owners',
+          reapproved: wasApproved,
+        });
+      }
+      await refreshPlan(root);
+      return out([
+        `applied ${applied.length} dependsOn edge(s):`,
+        ...applied.map((e) => `  ${e.id}: depends on ${e.addDep}`),
+        ...(wasApproved ? ['The ledger stays approved (sealed again over the new dependsOn edges).'] : []),
+        ...(stillBlocked.length ? ['still needs the owner:', ...stillBlocked.map((b) => `  ${b.file}: ${b.later} cannot depend on ${b.earlier} (would cycle)`)] : []),
+      ].join('\n'), stillBlocked.length ? 1 : 0);
+    });
+  } catch (error) {
+    if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
+    throw error;
+  }
+}
+
+async function cmdApprove(root, { rest, flags }, deps = {}) {
+  if (flags['auto-ok'] === true && (flags.yes === true || flags['accept-waves'] === true)) {
+    return out('usage: swarm scope approve [--yes | --auto-ok] (--yes and --auto-ok and --accept-waves are mutually exclusive)', 1);
+  }
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   const { scope, hash, text, file } = await loadScope(root, rest[0] ?? ledger.scope?.file);
@@ -868,13 +2475,80 @@ async function cmdApprove(root, { rest, flags }) {
   if (unknownScreens.length) return out(`not approvable: tickets name screens that are not in the profile ui block: ${unknownScreens.slice(0, 8).join(', ')}`, 1);
   const sizes = contextEnvFor(root, uiProfile).sizes;
   const bigTickets = ledger.tickets.filter(t => t.status !== 'cancelled' && t.type !== 'human' && !sizeTicket(t, { sizes }).ok).map(t => t.id);
+  const laneWarnings = ledger.tickets
+    .filter(t => t.status !== 'cancelled' && t.type !== 'human')
+    .map(ticket => {
+      const lane = typeof ticket.lane === 'string' && ticket.lane.trim() ? ticket.lane : CHEAP_LANE_ORDER[0];
+      const cap = capBytesForLane(lane);
+      const bytes = ticketByteTotal(ticket, sizes);
+      return cap !== null && bytes > cap
+        ? `warning: ${ticket.id} exceeds active lane ${lane} byte budget: ${bytes} bytes (cap ${cap}); split it or route it to an in-place lane`
+        : null;
+    })
+    .filter(Boolean);
   const uiNoScreens = uiProfile?.ui ? ledger.tickets.filter(t => !(t.screens ?? []).length && (t.files ?? []).some(f => /\.(?:tsx|jsx|css|html|vue|svelte)$/.test(f))).length : 0;
   const summary = formatSummary(summarizeTree({ scope, tickets: ledger.tickets }));
+  const waveSimulation = simulateBeforeIngest(ledger.tickets, machineSlots(deps.machineConcurrency));
+  const waveLine = waveSummary(waveSimulation);
+  if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(`${waveLine}\n${waveRefusal(waveSimulation, ledger.tickets).split('\n').slice(1).join('\n')}`, 1);
   const policy = await readApprovalPolicy(root);
-  if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true) return out(`${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
-  const by = flags.yes === true ? 'owner' : 'policy';
-  const next = approveLedger(ledger, { by });
+  const autoOk = flags['auto-ok'] === true;
+  if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true && !autoOk) return out(`${waveLine}\n${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
+  const now = typeof deps.now === 'function' ? deps.now : typeof deps.now === 'number' ? () => deps.now : Date.now;
+  const managerWarnings = [];
+  const managerFindingLines = [];
+  const managerGate = deps.runManagersScopeGate ?? runManagersScopeGate;
+  try {
+    const outcome = managerGateOutcome(await managerGate(root, { now }));
+    if (outcome.kind === 'blocked') return out(`${waveLine}\n${summary}\n\nnot approvable: manager scope gate: ${outcome.reason}`, 1);
+    if (outcome.kind === 'warning') managerWarnings.push(`warning: manager scope gate failed: ${outcome.reason}`);
+  } catch (error) {
+    const reason = String(error?.message ?? error);
+    managerWarnings.push(`warning: manager scope gate failed: ${reason}`);
+  }
+  if (managerWarnings.length) {
+    const gateCheck = await ticketManagerGateCheck(root, ledger);
+    const lines = approveGateFindingLines(gateCheck.findings);
+    if (lines.length) {
+      managerFindingLines.push(...lines);
+      if (gateCheck.findings.some((f) => f.severity === 'needs_you')) {
+        managerFindingLines.push('swarm scope gate --list shows all');
+      }
+    }
+  }
+  for (const warning of managerWarnings) {
+    await appendLog(root, { event: 'manager-scope-gate-warning', warning, at: new Date(now()).toISOString() });
+  }
+  let autoApproveLines = [];
+  if (autoOk) {
+    const priorSnapshot = await readApprovedTicketsSnapshot(root);
+    const approveLogTicketsHash = await lastApproveLogTicketsHash(root);
+    const evalProfile = await readProfile(root);
+    const evalResult = evaluateAutoApprove({ ledger, snapshot: priorSnapshot, profile: evalProfile, approveLogTicketsHash });
+    autoApproveLines = evalResult.conditions.map(c => `${c.name}: ${c.ok ? 'ok' : 'FAIL'} — ${c.detail}`);
+    if (!evalResult.ok) {
+      const newIds = (ledger.changeOrders ?? []).map(c => c.id).filter(id => !(priorSnapshot?.changeOrderIds ?? []).includes(id));
+      const failed = evalResult.conditions.filter(c => !c.ok);
+      const blockerText = `Split needs your approval: ${failed.map(c => `${c.name} (${c.detail})`).join('; ')}. Approve with: swarm scope approve --yes`;
+      await appendEvent(root, { kind: 'blocker', id: `auto-approve-refused-${newIds[0] ?? 'none'}`, text: blockerText });
+      await appendLog(root, { event: 'auto-approve-refused', conditions: evalResult.conditions });
+      return out(autoApproveLines.join('\n'), 1);
+    }
+    const newCoIds = (ledger.changeOrders ?? []).map(c => c.id).filter(id => !(priorSnapshot?.changeOrderIds ?? []).includes(id));
+    await appendLog(root, { event: 'auto-approve', by: 'orchestrator-auto', changeOrders: newCoIds, conditions: evalResult.conditions });
+    await appendEvent(root, { kind: 'note', text: `Auto-approved split for ${newCoIds.join(', ') || 'change order'}: all conditions passed (snapshot, change-order, no-done-cancelled, no-paid-lanes, no-migrations, no-deploy-or-main-merge)` });
+  }
+  const by = autoOk ? 'orchestrator-auto' : flags.yes === true ? 'owner' : 'policy';
+  const next = approveLedger(ledger, { by, now: now() });
   next.scope = { ...next.scope, hash, file };
+  const approvedTicketsSnapshot = {
+    at: next.approved.at,
+    by: next.approved.by,
+    ticketsHash: next.approved.ticketsHash,
+    changeOrderIds: (next.changeOrders ?? []).map(c => c.id),
+    tickets: next.tickets,
+  };
+  await writeApprovedTicketsSnapshot(root, approvedTicketsSnapshot);
   await writeLedger(root, next);
   await writeFileSafe(root, '.swarm/project/scope.snapshot.md', text);
   await writeFileSafe(root, 'docs/scope/build-plan.md', renderBuildPlan(next, scope));
@@ -889,9 +2563,12 @@ async function cmdApprove(root, { rest, flags }) {
   if (/\b(python|django|fastapi|flask)\b/i.test(`${scope.overview}`)) stacks.add('python');
   const ignored = stacks.size ? await ensureGitignore(root, [...stacks].filter(s => ['node', 'python'].includes(s))).catch(() => ({ changed: false })) : { changed: false };
   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
+  if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
   // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
-  try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
-  return out([summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
+  try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch (error) {
+    console.error('[tools/scope-commands.mjs] state backup after approve failed:', error?.code ?? error?.name ?? 'unknown');
+  }
+  return out([...(autoApproveLines.length ? [...autoApproveLines, ''] : []), waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...managerWarnings, ...managerFindingLines, ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
 }
 
 // A failed run or check sends the ticket back to ready one level higher (bigger output, then Codex, then Claude); only after the last level does it block. One locked ledger write.
@@ -1019,16 +2696,51 @@ async function readUiResultsGuarded(root) {
 export const REVIEW_FORMAT_REMINDER = 'FORMAT REMINDER: your last answer had no result line. Finish with exactly one JSON line and nothing after it: {"reviews":[{"ticket":"T-0001","verdict":"pass","findings":[]}]} with one entry for every ticket listed above; verdict is pass or fail; each finding is {"severity":"high|medium|low","file":"...","line":0,"issue":"...","fix":"..."}.';
 export const ACCEPTANCE_FORMAT_REMINDER = 'FORMAT REMINDER: your last answer had no result line. Finish with exactly one JSON line and nothing after it: {"acceptance":[{"ticket":"T-0001","lines":[{"n":1,"verdict":"pass","evidence":"short reason with file and line"}]}]} with an entry for every listed line; verdict is pass or fail.';
 
-// The two review kinds share the machinery: where the manifest lives, the job id prefix, which models count, and the reminder for a second ask.
-const SEC_KIND = { dir: 'security-reviews', prefix: 'sec-review-', label: 'security review', models: /^opus$/, reminder: REVIEW_FORMAT_REMINDER, parse: parseReviewVerdicts };
-const ACC_KIND = { dir: 'acceptance-reviews', prefix: 'acc-review-', label: 'acceptance review', models: /^(sonnet|opus)$/, reminder: ACCEPTANCE_FORMAT_REMINDER, parse: parseAcceptanceVerdicts };
+// The two review kinds share the machinery: where the manifest lives, the job id prefix, which reviewers count, and the reminder for a second ask.
+const SEC_KIND = {
+  dir: 'security-reviews',
+  prefix: 'sec-review-',
+  label: 'security review',
+  reviewers: [
+    { agent: 'claude', model: /^opus$/, label: 'claude/opus' },
+    { agent: 'anthropic', model: /^claude-opus-[0-9][a-z0-9.-]*$/, label: 'anthropic/claude-opus-<version>' },
+  ],
+  reminder: REVIEW_FORMAT_REMINDER,
+  parse: parseReviewVerdicts,
+};
+const ACC_KIND = {
+  dir: 'acceptance-reviews',
+  prefix: 'acc-review-',
+  label: 'acceptance review',
+  reviewers: [
+    { agent: 'claude', model: /^(sonnet|opus)$/, label: 'claude/sonnet or claude/opus' },
+    { agent: 'anthropic', model: /^claude-(sonnet|opus)-[0-9][a-z0-9.-]*$/, label: 'anthropic/claude-sonnet-<version> or anthropic/claude-opus-<version>' },
+    { agent: 'codex', model: /.+/, label: 'codex/<non-empty model>' },
+    { agent: 'cursor', model: /.+/, label: 'cursor/<non-empty model>' },
+  ],
+  reminder: ACCEPTANCE_FORMAT_REMINDER,
+  parse: parseAcceptanceVerdicts,
+};
+
+const reviewerAllowed = (kind, job) => kind.reviewers.some(({ agent, model }) => job?.agent === agent && model.test(String(job?.model ?? '')));
+const acceptedReviewers = kind => kind.reviewers.map(({ label }) => label).join('; ');
+const reviewerLabel = job => `${job?.agent ?? 'unknown agent'}/${job?.model ?? 'unknown model'}`;
+
+// Older recorded test fixtures omitted the default manifest agent. Treat the native Claude model
+// as that manifest's implicit claude reviewer, while all explicit agents still require a pair.
+function normalizeReviewerJob(kind, job) {
+  if (job?.agent !== undefined) return job;
+  const legacy = kind.reviewers.find(reviewer => reviewer.agent === 'claude' && reviewer.model.test(String(job?.model ?? '')));
+  return legacy ? { ...job, agent: legacy.agent } : job;
+}
 
 // The response of a finished review run, checked the same way every time: right job, right model, complete.
 async function loadReviewResponse(root, runId, kind = SEC_KIND) {
   const state = await readRunState(root, runId);
-  const job = (state.jobs ?? []).find(j => typeof j.id === 'string' && j.id.startsWith(kind.prefix));
-  if (!job) return { error: `run ${runId} has no ${kind.label} job` };
-  if (!kind.models.test(String(job.model))) return { error: `the ${kind.label} job ran on ${job.model ?? 'an unknown model'}, not ${kind === SEC_KIND ? 'opus' : 'sonnet or opus'}; run the manifest that sync wrote` };
+  const rawJob = (state.jobs ?? []).find(j => typeof j.id === 'string' && j.id.startsWith(kind.prefix));
+  if (!rawJob) return { error: `run ${runId} has no ${kind.label} job` };
+  const job = normalizeReviewerJob(kind, rawJob);
+  if (!reviewerAllowed(kind, job)) return { error: `the ${kind.label} job reviewer ${reviewerLabel(job)} is not accepted; accepted reviewers: ${acceptedReviewers(kind)}; run the manifest that sync wrote` };
   if (job.status !== 'complete') return { error: `the ${kind.label} job is ${job.status}, not complete; run it again` };
   let text = '';
   try { text = await fs.readFile(path.join(root, '.swarm', 'runs', runId, job.id, 'response.txt'), 'utf8'); } catch { return { error: 'the review has no response to read' }; }
@@ -1046,7 +2758,7 @@ async function reAskReview(root, sourceRun, deps, kind = SEC_KIND) {
   // Exactly the one read-only review job sync wrote; anything else would be paid for before it could be checked.
   const jobs = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
   const only = jobs[0];
-  if (jobs.length !== 1 || only?.id !== `${kind.prefix}${sourceRun}`.slice(0, 60) || only.agent !== 'claude' || !kind.models.test(String(only.model)) || only.type !== 'review' || (only.outputs ?? []).length !== 0 || typeof only.prompt !== 'string') return { asked: false, error: `the review manifest is not the single read-only ${kind === SEC_KIND ? 'Opus' : 'Sonnet or Opus'} review job sync wrote` };
+  if (jobs.length !== 1 || only?.id !== `${kind.prefix}${sourceRun}`.slice(0, 60) || !reviewerAllowed(kind, only) || only.type !== 'review' || (only.outputs ?? []).length !== 0 || typeof only.prompt !== 'string') return { asked: false, error: `the review manifest is not the single read-only review job sync wrote; accepted reviewers: ${acceptedReviewers(kind)}` };
   try { await fs.writeFile(marker, `${JSON.stringify({ at: new Date().toISOString() })}\n`, { flag: 'wx' }); }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
@@ -1118,6 +2830,7 @@ async function cmdSecurityReview(root, { rest }, deps = {}) {
   const first = await loadReviewResponse(root, rest[0]);
   if (first.error) return out(first.error, 1);
   const job = first.job;
+  let reviewerJob = first.job;
   // The review must be of a manifest sync wrote: its ticket list and the code hashes taken then.
   const sourceRun = job.id.slice('sec-review-'.length);
   let requested;
@@ -1135,7 +2848,7 @@ async function cmdSecurityReview(root, { rest }, deps = {}) {
       const second = again.runId ? await loadReviewResponse(root, again.runId) : { error: 'the second review did not start' };
       if (second.error) notes.push(`second ask: ${second.error}`);
       else if (second.job.id.slice('sec-review-'.length) !== sourceRun) notes.push('second ask: it is not the review of the same source run');
-      else { verdicts = usable(second.text); reviewRun = again.runId; }
+      else { verdicts = usable(second.text); reviewRun = again.runId; reviewerJob = second.job; }
     }
   }
   if (!verdicts) {
@@ -1153,9 +2866,9 @@ async function cmdSecurityReview(root, { rest }, deps = {}) {
   for (const v of merged.values()) {
     const t = ledger?.tickets.find(x => x.id === v.ticket);
     if (!t || !Object.hasOwn(requested, t.id)) continue;
-    records.tickets[t.id] = { verdict: v.verdict, findings: v.findings, run: reviewRun, at: new Date().toISOString(), filesHash: requested[t.id] };
+    records.tickets[t.id] = { verdict: v.verdict, findings: v.findings, run: reviewRun, at: new Date().toISOString(), filesHash: requested[t.id], reviewer: { agent: reviewerJob.agent, model: reviewerJob.model } };
     lines.push(`${t.id}: ${v.verdict}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length > 1 ? 's' : ''})` : ''}`);
-    await appendLog(root, { event: 'security-review', id: t.id, verdict: v.verdict, findings: v.findings.length, run: reviewRun, by: 'owner' });
+    await appendLog(root, { event: 'security-review', id: t.id, verdict: v.verdict, findings: v.findings.length, run: reviewRun, by: 'owner', reviewer: { agent: reviewerJob.agent, model: reviewerJob.model } });
     if (t.securityReview?.state === 'blocked') cleared.push(t.id);
   }
   await writeReviewRecords(root, records);
@@ -1174,6 +2887,7 @@ async function cmdAcceptanceReview(root, { rest }, deps = {}) {
   const first = await loadReviewResponse(root, rest[0], ACC_KIND);
   if (first.error) return out(first.error, 1);
   const sourceRun = first.job.id.slice(ACC_KIND.prefix.length);
+  let reviewerJob = first.job;
   let request;
   try { request = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'acceptance-reviews', `${sourceRun}.hashes.json`), 'utf8')); } catch { return out(`no acceptance review was requested for run ${sourceRun} (sync writes .swarm/acceptance-reviews/${sourceRun}.json); run that manifest first`, 1); }
   const requested = request?.tickets && typeof request.tickets === 'object' ? request.tickets : {};
@@ -1193,7 +2907,7 @@ async function cmdAcceptanceReview(root, { rest }, deps = {}) {
       const second = again.runId ? await loadReviewResponse(root, again.runId, ACC_KIND) : { error: 'the second review did not start' };
       if (second.error) notes.push(`second ask: ${second.error}`);
       else if (second.job.id.slice(ACC_KIND.prefix.length) !== sourceRun) notes.push('second ask: it is not the review of the same source run');
-      else { verdicts = usable(second.text); reviewRun = again.runId; }
+      else { verdicts = usable(second.text); reviewRun = again.runId; reviewerJob = second.job; }
     }
   }
   const ledger = await readLedger(root);
@@ -1230,11 +2944,11 @@ async function cmdAcceptanceReview(root, { rest }, deps = {}) {
     }
     const kept = records.tickets[t.id]?.filesHash === asked.filesHash ? (records.tickets[t.id].lines ?? []).filter(l => !byLine.has(l.n)) : [];
     // Each verdict carries the hash of the line text it judged (the text can be edited later).
-    records.tickets[t.id] = { filesHash: asked.filesHash, lines: [...kept, ...[...byLine.values()].map(l => ({ n: l.n, h: asked.lineHashes?.[l.n] ?? '', verdict: l.verdict, evidence: l.evidence }))].sort((a, b) => a.n - b.n), run: reviewRun, at: new Date().toISOString() };
+    records.tickets[t.id] = { filesHash: asked.filesHash, lines: [...kept, ...[...byLine.values()].map(l => ({ n: l.n, h: asked.lineHashes?.[l.n] ?? '', verdict: l.verdict, evidence: l.evidence }))].sort((a, b) => a.n - b.n), run: reviewRun, at: new Date().toISOString(), reviewer: { agent: reviewerJob.agent, model: reviewerJob.model } };
     const pass = [...byLine.values()].filter(l => l.verdict === 'pass').length;
     const fail = byLine.size - pass;
     lines.push(`${t.id}: ${pass} line(s) pass${fail ? `, ${fail} fail` : ''}${asked.lines.length > byLine.size ? `, ${asked.lines.length - byLine.size} not answered` : ''}`);
-    await appendLog(root, { event: 'acceptance-review', id: t.id, pass, fail, run: reviewRun, by: 'owner' });
+    await appendLog(root, { event: 'acceptance-review', id: t.id, pass, fail, run: reviewRun, by: 'owner', reviewer: { agent: reviewerJob.agent, model: reviewerJob.model } });
     if (t.acceptanceBlocked) cleared.push(t.id);
   }
   await writeAcceptanceRecords(root, records);
@@ -1246,9 +2960,18 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
   if (rest.length !== 1) return bad('scope sync needs a run id');
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger', 1);
+  // Replanning is a response to a block that existed before this sync began.
+  // Tickets blocked or escalated while processing this pass wait for the next one.
+  const blockedAtSyncStart = new Set(ledger.tickets.filter((ticket) => ticket.status === 'blocked').map((ticket) => ticket.id));
   const state = await readRunState(root, rest[0]);
   if (flags.integrated === true) {
     if (!state.integratedAt) return out(`run ${rest[0]} is not integrated yet; run swarm integrate ${rest[0]} first`, 1);
+    const integrateUnverified = Array.isArray(state.integrateUnverified) ? state.integrateUnverified : [];
+    const unverifiedByJob = new Map();
+    for (const entry of integrateUnverified) {
+      if (!entry || typeof entry.job !== 'string' || typeof entry.path !== 'string') continue;
+      if (!unverifiedByJob.has(entry.job)) unverifiedByJob.set(entry.job, entry.path);
+    }
     const finished = new Set((state.jobs ?? []).filter(j => j.status === 'complete').map(j => j.id));
     const queue = state.mergeQueue;
     const integrated = queue ? new Set((queue.integrated ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.job))) : null;
@@ -1257,11 +2980,14 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     const projectChecks = await readProjectChecks(root);
     let projectPkg = null;
     let projectFiles = [];
-    try { projectPkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch { /* no package.json */ }
+    try { projectPkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] project package.json unreadable:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+    }
     try { projectFiles = await projectFileList(root, execFileAsync); } catch { /* not a git repo */ }
     const runSpec = deps.runTicketSpec ?? ((r, file, ctx) => runTicketSpec(r, file, { ...ctx, pkg: ctx.pkg ?? projectPkg, files: ctx.files ?? projectFiles }));
     // A profile that names a verify block but does not validate must not turn the test gate off.
-    const rawPointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+    const { readRunnerPointer } = await import('./runner-pointer.mjs');
+    const rawPointer = await readRunnerPointer(root, { allowMissing: true });
     if (rawPointer?.profile?.verify !== undefined && !profile?.verify) {
       const { errors } = validateProfile(rawPointer.profile);
       return out(`the profile has a verify block but the profile is invalid, so tests cannot be checked: ${errors[0] ?? 'unknown error'}`, 1);
@@ -1329,6 +3055,12 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     }
     const done = [], unverified = [], retried = [], blocked = [], notIntegrated = [];
     const inTree = new Set();
+    const syncExists = deps.syncExists ?? deps.exists ?? (file => {
+      try { lstatSync(path.join(root, file)); return true; }
+      catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
+    });
+    const syncReadFile = deps.syncReadFile ?? deps.readFile ?? (file => fs.readFile(path.join(root, file)));
+    const runSyncCheck = deps.syncCheckForTicket ?? syncCheckForTicket;
     // A failure whose errors name only files that other tickets own is theirs, not this ticket's (T-0091's lint failed on the file T-0090 wrote):
     // no escalation and no attempt for this ticket. It goes to the owner when the owner is in this run; otherwise this ticket is blocked with a clear note.
     const routed = new Set();
@@ -1381,6 +3113,62 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         continue;
       }
       if (integrated && !integrated.has(t.id)) { notIntegrated.push(t.id); continue; }
+      const unverifiedPath = unverifiedByJob.get(t.id);
+      if (unverifiedPath) {
+        const note = `integrate wrote nothing for ${unverifiedPath}: run swarm integrate ${rest[0]} again or fix by hand`;
+        await setTicketField(root, t.id, 'retryNote', note.slice(0, 600));
+        await appendLog(root, { event: 'integrate-unverified', id: t.id, path: unverifiedPath, run: rest[0], by: 'sync' });
+        unverified.push(`${t.id} (${note})`);
+        continue;
+      }
+      let syncCheck;
+      try {
+        syncCheck = await runSyncCheck(t, { exists: syncExists, readFile: syncReadFile });
+      } catch (error) {
+        const note = `sync check: could not inspect declared files: ${String(error?.message ?? error)}`;
+        await setTicketField(root, t.id, 'retryNote', note.slice(0, 600));
+        await appendLog(root, { event: 'sync-check-refused', id: t.id, kind: 'filesystem', note });
+        unverified.push(`${t.id} (${note})`);
+        continue;
+      }
+      if (!syncCheck.ok) {
+        const problem = syncCheck.problems?.join('; ') || 'declared file state is not ready';
+        const note = `sync check: ${problem}`;
+        await setTicketField(root, t.id, 'retryNote', note.slice(0, 600));
+        await appendLog(root, { event: 'sync-check-refused', id: t.id, kind: syncCheck.kind, note });
+        const legacyEvidence = syncCheck.kind === 'delete-only' ? 'job files are not in the integrated files; ' : '';
+        unverified.push(`${t.id} (${legacyEvidence}${note})`);
+        continue;
+      }
+      if (syncCheck.kind === 'delete-only') {
+        let reviewReason = securityReviewReason(t);
+        if (reviewReason && unreviewedOk.has(t.id)) {
+          const record = reviewRecords.tickets[t.id];
+          const now = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? [])]);
+          const failing = record?.verdict === 'fail' && record.filesHash === now;
+          const passed = record?.verdict === 'pass' && record.filesHash === now;
+          if (!failing && !passed) { skippedReview.push(t.id); reviewReason = null; }
+        }
+        if (reviewReason) {
+          const record = reviewRecords.tickets[t.id];
+          const now = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? [])]);
+          if (t.securityReview?.state === 'blocked' && !(record && Date.parse(record.at) > Date.parse(t.securityReview.at))) { needReview.push({ ticket: t, reason: reviewReason }); continue; }
+          if (record?.verdict === 'fail' && record.filesHash === now) {
+            const found = (record.findings ?? []).map(f => `${f.severity} ${f.file}${f.line ? `:${f.line}` : ''} ${f.issue}${f.fix ? ` (fix: ${f.fix})` : ''}`).join('; ').slice(0, 500);
+            delete reviewRecords.tickets[t.id];
+            await writeReviewRecords(root, reviewRecords);
+            const result = await applyRetry(root, t.id, `failed checks: security review; ${found || 'the review failed this ticket'}`, rest[0]);
+            (result === 'blocked' ? blocked : retried).push(t.id);
+            continue;
+          }
+          if (!(record?.verdict === 'pass' && record.filesHash === now)) { needReview.push({ ticket: t, reason: reviewReason }); continue; }
+        }
+        await lockedTransition(root, t.id, 'done', { by: 'sync', note: 'delete-only: files gone' });
+        done.push(t.id);
+        if (skippedReview.includes(t.id)) await setSecurityReview(root, t.id, { state: 'accepted-unreviewed', reason: unreviewedReason, at: new Date().toISOString(), run: rest[0] });
+        else if (t.securityReview?.state === 'blocked') await setSecurityReview(root, t.id, undefined);
+        continue;
+      }
       // The test files a ticket names must exist in the tree: a ticket whose tests were never written is not done, whatever the suite says.
       const namedTests = ['build', 'test', 'migration'].includes(t.type) ? [...new Set([...(t.tests ?? []), ...ticketTests(t)])].filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f) && !(t.deletes ?? []).includes(f)) : [];
       // A ticket that comes after this one (it depends on it, directly or through others) can never be waited for: its files are written later, so they are not this ticket's to find.
@@ -1406,7 +3194,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
       if (specPaths.length) {
         let specStop = false;
         for (const f of specPaths) {
-          const outcome = await runSpec(root, f, specCtx);
+          const outcome = await runSpec(root, f, { ...specCtx, ticket: t });
           if (outcome?.failed) {
             const result = await applyRetry(root, t.id, `failed checks: ticket spec ${f}${outcome.tail ? `; ${String(outcome.tail).slice(-500)}` : ''}`, rest[0]);
             (result === 'blocked' ? blocked : retried).push(t.id);
@@ -1490,7 +3278,9 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         const tests = ticketTests(t).filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f));
         const hashTests = [...new Set([...(t.tests ?? []), ...tests])];
         const sources = new Map();
-        for (const f of tests) { try { const full = path.join(root, f); const info = lstatSync(full); if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8')); } catch { /* missing: nothing covered by it */ } }
+        for (const f of tests) { try { const full = path.join(root, f); const info = lstatSync(full); if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8')); } catch (error) {
+          if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] test source unreadable:', t.id, error?.code ?? 'unknown');
+        } }
         const cov = coverage({ ...t, tests }, sources);
         const hash = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? []), ...hashTests]);
         // A verdict belongs to the text of the line it judged: after the acceptance text was edited an old verdict for the same number is dropped.
@@ -1555,6 +3345,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     if (acceptedNow.length) await appendLog(root, { event: 'accept-unreviewed', by: 'owner', run: rest[0], tickets: acceptedNow, reason: unreviewedReason, note: flags.note ?? null });
     const notAccepted = [...unreviewedOk].filter(id => !acceptedNow.includes(id));
     const notUnmet = [...unmetOk].filter(id => !unmetNow.includes(id));
+    const replanned = await persistSyncReplans(root, deps, blockedAtSyncStart);
     let reviewLine = null;
     if (needReview.length) {
       const manifest = await securityReviewManifest(root, rest[0], needReview, ledger.tickets);
@@ -1568,7 +3359,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
       reviewLine = `${needReview.length} ticket(s) stay in review until an Opus security review passes: ${needReview.map(x => `${x.ticket.id} (${x.reason}${x.ticket.securityReview?.state === 'blocked' ? '; review-blocked: the last review gave no result' : ''})`).join('; ')}. Run: swarm run ${file}; then swarm scope security-review <that run id>; then swarm scope sync ${rest[0]} --integrated`;
     }
     await refreshPlan(root);
-    if (done.length) await import('./history-hooks.mjs').then(async hooks => hooks.recordStageHistory(root, await readLedger(root))).catch(() => {});
+    if (done.length) await import('./history-hooks.mjs').then(async hooks => hooks.recordStageHistory(root, await readLedger(root))).catch(error => { console.error('[tools/scope-commands.mjs] recordStageHistory:', error?.code ?? error?.name ?? 'unknown'); });
     return out([`${done.length} ticket(s) marked done`,
       ...(notUnmet.length ? [`--accept-unmet: ${notUnmet.join(', ')} had no unmet line to accept (not in this run, not done, no lines unmet, or a failing line, which is never overridden)`] : []),
       ...(notAccepted.length ? [`--accept-unreviewed: ${notAccepted.join(', ')} did not skip a review (not in this run, not done, no review needed, a review already passed, or a failing review on this code: that one is never overridden)`] : []),
@@ -1578,6 +3369,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
       ...(inTree.size ? [`${[...inTree].filter(id => done.includes(id)).length} of them on output that was already in the tree (not re-verified by this run): ${[...inTree].filter(id => done.includes(id)).join(', ')}`] : []),
       ...(retried.length ? [`${retried.length} ticket(s) back to ready, one level higher, after failed checks: ${retried.join(', ')}`] : []),
       ...(blocked.length ? [`${blocked.length} ticket(s) blocked after every escalation level failed: ${blocked.join(', ')}`] : []),
+      ...replanned.lines,
       ...(unverified.length ? [`${unverified.length} ticket(s) stay in review: their tests were not seen passing: ${unverified.join('; ')}`] : []),
       ...(notIntegrated.length ? [`${notIntegrated.length} ticket(s) stay in review: not integrated by this run: ${notIntegrated.join(', ')}`] : []),
       ...(profileQuality.length ? [`warning: the profile now asks for ${profileQuality.join(', ')}, which this run's batches did not run`] : []),
@@ -1606,9 +3398,10 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     for (const m of moves) if (m.to === 'review') { const t = fresh.tickets.find(x => x.id === m.id); t.runId = rest[0]; delete t.infraRetries; }
     await writeLedger(root, fresh);
   }
+  const replanned = await persistSyncReplans(root, deps, blockedAtSyncStart);
   await refreshPlan(root);
   const review = moves.filter(m => m.to === 'review').length;
-  return out(`${review} ticket(s) in review${escalated.length ? `, ${escalated.length} sent back to ready one level higher (${escalated.join(', ')})` : ''}${stuck.length ? `, ${stuck.length} blocked after every level failed (${stuck.join(', ')})` : ''}${infra.length ? `, ${infra.length} back to ready at the same level (the failure was not theirs: ${infra.join(', ')})` : ''}. After swarm integrate ${rest[0]}: swarm scope sync ${rest[0]} --integrated`);
+  return out([`${review} ticket(s) in review${escalated.length ? `, ${escalated.length} sent back to ready one level higher (${escalated.join(', ')})` : ''}${stuck.length ? `, ${stuck.length} blocked after every level failed (${stuck.join(', ')})` : ''}${infra.length ? `, ${infra.length} back to ready at the same level (the failure was not theirs: ${infra.join(', ')})` : ''}. After swarm integrate ${rest[0]}: swarm scope sync ${rest[0]} --integrated`, ...replanned.lines].join('\n'));
 }
 
 // The OpenAPI file a contract ticket wrote: contracts/api.json or contracts/openapi.json, else the only .json a contract ticket names.
@@ -1650,6 +3443,110 @@ async function refreshPlan(root) {
 }
 
 const row = t => `${t.id} ${t.status.padEnd(9)} ${t.stage} ${t.risk.padEnd(6)} ${t.type.padEnd(9)} ${t.title}`;
+
+const SUPERSEDE_OWNER_MSG = 'tickets supersede is owner-only; run from the owner terminal (not inside an agent or worker session)';
+const SUPERSEDE_AGENT_COMMANDS = new Set(['claude', 'codex', 'cursor-agent', 'opencode', 'chatgpt']);
+const SUPERSEDE_AGENT_MARKERS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'SWARM_WORKER', 'SWARM_JOB_ID', 'SWARM_RUN_ID'];
+
+function supersedeProcessInfo(pid) {
+  const options = { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'pipe'] };
+  return {
+    ppid: Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], options).trim()),
+    comm: execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], options).trim(),
+  };
+}
+
+export function supersedeOwnerRefusal({
+  env = process.env,
+  isTTY = process.stdin.isTTY && process.stdout.isTTY,
+  ancestry,
+  processInfo = supersedeProcessInfo,
+} = {}) {
+  if (SUPERSEDE_AGENT_MARKERS.some(marker => env[marker] !== undefined)) return SUPERSEDE_OWNER_MSG;
+  const isAgent = command => SUPERSEDE_AGENT_COMMANDS.has(path.basename(command.trim()).toLowerCase());
+  if (ancestry !== undefined) {
+    if (ancestry.some(isAgent)) return SUPERSEDE_OWNER_MSG;
+  } else {
+    // A terminal allocated inside an agent still has that agent in its parent chain.
+    // Refuse if the chain cannot be inspected completely within the hop limit.
+    let pid = process.pid;
+    const seen = new Set();
+    try {
+      for (let hop = 0; hop < 32 && pid > 1; hop += 1) {
+        if (seen.has(pid)) return SUPERSEDE_OWNER_MSG;
+        seen.add(pid);
+        const { ppid, comm } = processInfo(pid);
+        if (typeof comm !== 'string' || !comm.trim() || isAgent(comm)) return SUPERSEDE_OWNER_MSG;
+        if (!Number.isInteger(ppid) || ppid < 1) return SUPERSEDE_OWNER_MSG;
+        pid = ppid;
+      }
+      if (pid !== 1) return SUPERSEDE_OWNER_MSG;
+    } catch {
+      return SUPERSEDE_OWNER_MSG;
+    }
+  }
+  if (!isTTY) return SUPERSEDE_OWNER_MSG;
+  return null;
+}
+
+let supersedeOwnerCheck = supersedeOwnerRefusal;
+
+// Test-only injection; calling without an argument restores the production gate.
+export function setSupersedeOwnerCheck(fn = supersedeOwnerRefusal) {
+  if (typeof fn !== 'function') throw new TypeError('supersede owner check must be a function');
+  supersedeOwnerCheck = fn;
+}
+
+const supersedeRow = c => `${c.id} ${c.status} ${c.stage} ${c.lastTouch} ${c.basis} ${c.title}`;
+
+async function supersedeStaleCommand(root, rest, flags) {
+  if (rest.length) return bad('tickets supersede does not take positional arguments');
+  if (flags.before === undefined) return out('tickets supersede requires --before DATE', 1);
+  const beforeMs = Date.parse(flags.before);
+  if (Number.isNaN(beforeMs)) return out(`unparseable --before date: ${flags.before}`, 1);
+  const denied = supersedeOwnerCheck();
+  if (denied) return out(denied, 1);
+  const ledger = await readLedger(root);
+  if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+  let candidates;
+  try {
+    candidates = supersedeCandidates(ledger, await readTicketLog(root), { before: flags.before, stage: flags.stage });
+  } catch (error) {
+    if (error.code === 'supersede-before') return out(error.message, 1);
+    throw error;
+  }
+  const apply = flags.yes === true && flags['dry-run'] !== true;
+  if (!apply) {
+    if (flags.json) return out(JSON.stringify(candidates));
+    const lines = candidates.map(supersedeRow);
+    lines.push(`${candidates.length} stale ticket(s) would be superseded`);
+    if (flags['dry-run'] !== true && flags.yes !== true) lines.push('Rerun with --yes to supersede these tickets.');
+    return out(lines.join('\n'));
+  }
+  try {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const result = await withLock(root, async () => {
+          const freshLedger = await readLedger(root);
+          if (!freshLedger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
+          const logEvents = await readTicketLog(root);
+          const freshCandidates = supersedeCandidates(freshLedger, logEvents, { before: flags.before, stage: flags.stage });
+          if (!freshCandidates.length) return { count: 0, ids: [] };
+          return applySupersedeStale(root, { before: flags.before, stage: flags.stage, ledger: freshLedger, logEvents });
+        });
+        if (!result.count) return out('no stale tickets to supersede');
+        await refreshPlan(root);
+        return out(`superseded ${result.count} stale ticket(s)`);
+      } catch (error) {
+        if (error.code !== 'scope-busy' || attempt === 4) throw error;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
+  } catch (error) {
+    if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
+    throw error;
+  }
+}
 
 // One-time migration for ledgers made before blockReason existed: a blocked ticket with no reason, no attempts, no retry note and
 // dependencies was blocked by its dependencies (its job was skipped). Marking it `deps` lets it unlock by itself; ready ones unlock now.
@@ -1698,6 +3595,16 @@ async function editTicketFiles(root, ledger, rest, flags) {
       const fresh = await readLedger(root);
       const ticket = fresh.tickets.find(x => x.id === rest[0]);
       if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+      const rootFileNotes = [];
+      let scope = null;
+      let scopeText = '';
+      try {
+        scopeText = await readText(resolveInside(root, fresh.scope?.file ?? DEFAULT_SCOPE_FILE)) ?? '';
+        if (scopeText) scope = parseScope(scopeText);
+      } catch (error) {
+        console.error('[tools/scope-commands.mjs] ticket scope unreadable; the ledger stays editable:', error instanceof SyntaxError ? 'corrupt scope (SyntaxError)' : (error?.code ?? error?.name ?? 'unknown'));
+      }
+      const allowedRootFiles = await rootFilesForProject(root, { scope, scopeText, notes: rootFileNotes });
       const listsEdit = Object.keys(changes).length > 0;
       // The file lists only change before the work runs; a review or done ticket may only add acceptance lines (see below).
       const allowed = listsEdit ? ['proposed', 'todo', 'ready', 'blocked'] : ['proposed', 'todo', 'ready', 'blocked', 'review', 'done'];
@@ -1709,6 +3616,11 @@ async function editTicketFiles(root, ledger, rest, flags) {
       if (flags['add-acceptance'] !== undefined) next.acceptance = [...(next.acceptance ?? []), ...lines(flags['add-acceptance'])];
       const v = validateTicket(next);
       if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+      const repoFiles = await listTrackedRepoFiles(root);
+      const pathPreview = validateTicketPaths(next, { repoFiles, root, priorTicket: ticket, allTickets: fresh.tickets });
+      if (!pathPreview.ok) {
+        return out(`refused:\n${pathPreview.errors.map(err => `  ${formatTicketPathRefusal(ticket.id, err)}`).join('\n')}`, 1);
+      }
       const problems = [];
       const moved = [];
       const sources = [];
@@ -1724,7 +3636,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       for (const key of ['files', 'deletes']) for (const f of next[key] ?? []) {
         const base = f.split('/').pop();
         if (key === 'files' && base.startsWith('.env')) problems.push(`${f} is a reserved name; use env.example.txt for an env template`);
-        else if (key === 'files' && !f.includes('/') && !ROOT_FILE_OK.test(f)) problems.push(`${f} has no folder; give it its real path`);
+        else if (key === 'files' && !f.includes('/') && !ROOT_FILE_OK.test(f) && !allowedRootFiles.has(f)) problems.push(`${f} has no folder; give it its real path`);
         if ((ticket[key] ?? []).includes(f)) continue;
         const pathOwners = fresh.tickets.filter(x => x.id !== ticket.id && x.status !== 'cancelled' && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
         const blockingOwners = pathOwners.filter(isOpenFileOwner);
@@ -1750,6 +3662,11 @@ async function editTicketFiles(root, ledger, rest, flags) {
       if (problems.length) return out(`refused:\n${problems.map(x => `  ${x}`).join('\n')}`, 1);
       const summary = [...Object.keys(changes), ...(acceptanceEdit ? ['acceptance'] : [])].map(k => `  ${k}: ${(ticket[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}  ->  ${(next[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}`).join('\n') + (moved.length ? `\n  moves from ${takeFrom}: ${moved.join(', ')} (${takeFrom} no longer ${moved.every(f => sources.some(x => (x.files ?? []).includes(f))) ? 'writes' : 'owns'} ${moved.length > 1 ? 'them' : 'it'}${sources.some(x => x.status === 'done') ? `; ${sources.filter(x => x.status === 'done').map(x => x.id).join(', ')} is done and its tests are not re-run for ${moved.length > 1 ? 'them' : 'it'}` : ''})` : '');
       if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${isApproved(fresh) ? ' (the approval is renewed over the new lists)' : ''}.`);
+      const pathWiring = applyTicketPathWiring(next, fresh.tickets, { repoFiles, root, priorTicket: ticket });
+      const pathNoteText = [
+        ...(pathWiring.notes ?? []),
+        ...(pathWiring.warnings ?? []).map((warn) => (typeof warn === 'string' ? warn : formatTicketPathWarning(ticket.id, warn))),
+      ];
       const wasApproved = isApproved(fresh);
       fresh.tickets = fresh.tickets.map(x => {
         if (x.id === ticket.id) return next;
@@ -1763,7 +3680,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: touched, before: Object.fromEntries(touched.map(k => [k, ticket[k] ?? []])), after: Object.fromEntries(touched.map(k => [k, next[k] ?? []])), reapproved: wasApproved });
       if (moved.length) await appendLog(root, { event: 'file-move', by: 'owner', from: takeFromList.length === 1 ? takeFromList[0] : takeFromList, to: ticket.id, files: moved, fromStatus: sources.length === 1 ? sources[0].status : Object.fromEntries(sources.map(x => [x.id, x.status])), reapproved: wasApproved });
       await refreshPlan(root);
-      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}`);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}${pathNoteText.length ? `\n${pathNoteText.map(note => `note: ${note}`).join('\n')}` : ''}${rootFileNotes.length ? `\n${rootFileNotes.map(note => `note: ${note}`).join('\n')}` : ''}`);
     });
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
@@ -1774,7 +3691,7 @@ async function setTicketRoute(root, rest, flags) {
   const risk = flags.risk;
   const parsedLane = flags.lane === undefined || flags.lane === 'auto' ? null : parseLane(flags.lane);
   const lane = flags.lane === undefined ? undefined : flags.lane === 'auto' ? 'auto' : laneText(parsedLane) ?? flags.lane;
-  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered'].filter(k => flags[k] !== undefined);
+  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered', 'check-timeout'].filter(k => flags[k] !== undefined);
   if (others.length) return bad(`tickets --lane/--risk cannot be combined with --${others[0]}; run them one at a time`);
   if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) return out('risk must be low, medium or high', 1);
   if (lane !== undefined && lane !== 'auto' && !parsedLane) return out(`lane must be auto or one of ${TICKET_LANE_AGENTS.join(', ')} (optionally agent:model, like claude:opus)`, 1);
@@ -1807,6 +3724,45 @@ async function setTicketRoute(root, rest, flags) {
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
 
+async function setTicketCheckTimeout(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --check-timeout needs one ticket id');
+  const raw = flags['check-timeout'];
+  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered', 'lane', 'risk'].filter(k => flags[k] !== undefined);
+  if (others.length) return bad(`tickets --check-timeout cannot be combined with --${others[0]}; run them one at a time`);
+  const clear = raw === 'auto';
+  let parsed;
+  if (!clear) {
+    parsed = parseCheckTimeoutMs(raw);
+    if (!parsed.ok) return out(parsed.error, 1);
+  }
+  try {
+    return await withLock(root, async () => {
+      const fresh = await readLedger(root);
+      const ticket = fresh.tickets.find(x => x.id === rest[0]);
+      if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+      if (!['proposed', 'todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a proposed, todo, ready or blocked ticket can change its check timeout (send it back with swarm tickets ${ticket.id} --set todo first)`, 1);
+      const next = { ...ticket };
+      if (clear) delete next.checkTimeoutMs;
+      else next.checkTimeoutMs = parsed.value;
+      const v = validateTicket(next);
+      if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+      const before = ticket.checkTimeoutMs ?? null;
+      const after = next.checkTimeoutMs ?? null;
+      if (before === after) return out(`${ticket.id}: nothing to change`);
+      const summary = `  checkTimeoutMs: ${before ?? 'default'}  ->  ${after ?? 'default'}`;
+      const wasApproved = isApproved(fresh);
+      if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${wasApproved ? ' (the approval is renewed over the change)' : ''}.`);
+      fresh.tickets = fresh.tickets.map(x => x.id === ticket.id ? next : x);
+      const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
+      saved.updatedAt = new Date().toISOString();
+      await writeLedger(root, saved);
+      await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: ['checkTimeoutMs'], before: { checkTimeoutMs: before }, after: { checkTimeoutMs: after }, note: flags.note ?? null, reapproved: wasApproved });
+      await refreshPlan(root);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the change).' : ''}`);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+}
+
 // A clean release of held tickets: back to ready with the failure history cleared, so the next wave starts them from the first level.
 // Only tickets whose dependencies are done can be released; a running, done or cancelled ticket is left alone.
 async function releaseTickets(root, ids, flags) {
@@ -1825,13 +3781,31 @@ async function releaseTickets(root, ids, flags) {
         if (t.status === 'todo' && !isApproved(ledger)) { refused.push(`${id}: the ledger is not approved, so a todo ticket cannot be released`); continue; }
         const from = t.status;
         t.status = 'ready';
-        for (const key of ['blockReason', 'attempts', 'escalation', 'retryNote', 'retryHistory', 'runId', 'infraRetries']) delete t[key];
+        for (const key of ['blockReason', 'holdQuestion', 'attempts', 'escalation', 'retryNote', 'retryHistory', 'runId', 'infraRetries']) delete t[key];
         released.push(id);
         logs.push({ event: 'release', by: 'owner', tickets: [id], from, note: flags.note ?? null });
         if (from === 'review') reviewed.push(id);
       }
       if (released.length) { ledger.updatedAt = new Date().toISOString(); await writeLedger(root, ledger); for (const entry of logs) await appendLog(root, entry); await refreshPlan(root); }
       return out([released.length ? `released ${released.length} ticket(s) to ready: ${released.join(', ')}` : 'nothing released', ...(reviewed.length ? [`warning: ${reviewed.join(', ')} were in review: their output will be built again`] : []), ...refused.map(r => `not released: ${r}`)].join('\n'), refused.length ? 1 : 0);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+}
+
+// swarm tickets T-xxxx --note TEXT: owner guidance for the next worker (quoted in the job prompt; does not change retryNote).
+async function ownerNoteCommand(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --note needs one ticket id');
+  try {
+    return await withLock(root, async () => {
+      const ledger = await readLedger(root);
+      const t = ledger.tickets.find(x => x.id === rest[0]);
+      if (!t) return out(`no ticket ${rest[0]}`, 1);
+      if (t.status === 'running') return out(`${t.id} is running: wait for the run to end first`, 1);
+      const saved = applyOwnerNote(t, flags.note);
+      ledger.updatedAt = new Date().toISOString();
+      await writeLedger(root, ledger);
+      await appendLog(root, { event: 'owner-note', by: 'owner', id: t.id, action: saved ? 'set' : 'cleared' });
+      return out(saved ? `${t.id}: owner note saved` : `${t.id}: owner note cleared`);
     });
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
@@ -1846,7 +3820,11 @@ async function retryNoteCommand(root, rest, flags) {
       if (!t) return out(`no ticket ${rest[0]}`, 1);
       if (t.status === 'running') return out(`${t.id} is running: wait for the run to end first`, 1);
       const before = t.retryNote ?? null;
-      if (flags['clear-note'] === true) delete t.retryNote;
+      if (flags['clear-note'] === true) {
+        delete t.retryNote;
+        delete t.ownerNote;
+        delete t.ownerNoteAt;
+      }
       else {
         const text = String(flags['retry-note'] ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/[<>]/g, '').trim().slice(0, 600);
         if (!text) return out('--retry-note needs the new text (use --clear-note to remove it)', 1);
@@ -1905,7 +3883,8 @@ async function doneReviewRefusals(root, ledger, ticket) {
       reasons.push(`Opus security review (${reviewReason}): no passing review on the current code. Run swarm go --scope or swarm scope sync RUN --integrated to queue it, then swarm scope security-review <run id>.`);
     }
   }
-  const rawPointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+  const { readRunnerPointer } = await import('./runner-pointer.mjs');
+  const rawPointer = await readRunnerPointer(root, { allowMissing: true });
   const profile = await readProfile(root);
   if (rawPointer?.profile && !profile) {
     const { errors } = validateProfile(rawPointer.profile);
@@ -1920,7 +3899,9 @@ async function doneReviewRefusals(root, ledger, ticket) {
           const full = path.join(root, f);
           const info = lstatSync(full);
           if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8'));
-        } catch { /* missing */ }
+        } catch (error) {
+          if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] acceptance test source unreadable:', ticket.id, error?.code ?? 'unknown');
+        }
       }
       const hashTests = [...new Set([...(ticket.tests ?? []), ...tests])];
       const hash = await filesHash(root, [...(ticket.files ?? []), ...(ticket.deletes ?? []), ...hashTests]);
@@ -1941,7 +3922,7 @@ async function doneReviewRefusals(root, ledger, ticket) {
 }
 
 async function sensitiveDeliveredRefusals(root, ledger, ticket) {
-  if (ticket.sensitive !== true) return [];
+  if (ticket.sensitive !== true && !securityReviewReason(ticket)) return [];
   const reasons = await doneReviewRefusals(root, ledger, ticket);
   return reasons.filter(r => r.startsWith('Opus security review'));
 }
@@ -2010,17 +3991,39 @@ async function setTicketStatus(root, rest, flags) {
       return out(msg, 1);
     }
   }
+  if (to === 'superseded') {
+    const denied = supersedeOwnerCheck();
+    if (denied) return out(denied, 1);
+  }
   if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
   const confirmation = flags.force === true ? 'force' : flags.yes === true ? 'yes' : null;
   if (!confirmation) return out(`${preview}\nRerun with --yes or --force to apply.`, 1);
+  let holdQuestion;
+  if (to === 'blocked' && flags.question !== undefined) {
+    const text = String(flags.question).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/[<>]/g, '').trim();
+    if (text.length < 1 || text.length > 300) return out('--question must be 1 to 300 characters when blocking', 1);
+    holdQuestion = text;
+  }
   try {
-    const t = await lockedTransition(root, rest[0], to, {
+    let t = await lockedTransition(root, rest[0], to, {
       by: 'owner',
       note: flags.note,
+      ...(holdQuestion !== undefined ? { holdQuestion } : {}),
       actor: ticketActor(),
       source: 'tickets-set',
       confirmation,
     });
+    if (flags.note !== undefined && ['ready', 'todo', 'blocked'].includes(to)) {
+      t = await lockedUpdate(root, async () => {
+        const fresh = await readLedger(root);
+        const ticket = fresh.tickets.find(x => x.id === rest[0]);
+        applyOwnerNote(ticket, flags.note);
+        fresh.updatedAt = new Date().toISOString();
+        await writeLedger(root, fresh);
+        await appendLog(root, { event: 'owner-note', by: 'owner', id: ticket.id, action: ticket.ownerNote ? 'set' : 'cleared', source: 'tickets-set' });
+        return ticket;
+      });
+    }
     await refreshPlan(root);
     return out(`${t.id} is now ${t.status}`);
   } catch (error) {
@@ -2032,6 +4035,7 @@ async function setTicketStatus(root, rest, flags) {
 
 export async function runTicketsCommand(root, args) {
   const { flags, rest } = parseArgs(args);
+  if (rest[0] === 'supersede') return supersedeStaleCommand(root, rest.slice(1), flags);
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   if (flags['clear-note'] === true || flags['retry-note'] !== undefined) return retryNoteCommand(root, rest, flags);
@@ -2040,9 +4044,11 @@ export async function runTicketsCommand(root, args) {
   if (flags.release === true) return releaseTickets(root, rest, flags);
   if (flags.delivered !== undefined) return deliverTicketsCommand(root, rest, flags);
   if (flags.approve === true) return approveProposed(root, rest, flags);
+  if (flags['check-timeout'] !== undefined) return setTicketCheckTimeout(root, rest, flags);
   if (flags.lane !== undefined || (flags.risk !== undefined && rest.length === 1 && flags.set === undefined)) return setTicketRoute(root, rest, flags);
   if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
   if (flags.set !== undefined) return setTicketStatus(root, rest, flags);
+  if (flags.note !== undefined && rest.length === 1) return ownerNoteCommand(root, rest, flags);
   if (rest.length === 1) {
     const t = ledger.tickets.find(x => x.id === rest[0]);
     if (!t) return out(`no ticket ${rest[0]}`, 1);
@@ -2054,7 +4060,36 @@ export async function runTicketsCommand(root, args) {
   return out([`${stats.total} tickets, ${stats.percentDone}% done, ${isApproved(ledger) ? 'approved' : 'not approved'}`, ...list.slice(0, 200).map(row), ...(list.length > 200 ? [`...and ${list.length - 200} more (use --stage or --status)`] : [])].join('\n'));
 }
 
-async function cmdChange(root, { rest, flags }) {
+function changeOrderManualSplitHint(reqIds) {
+  return `\nNew tickets are needed for ${reqIds.join(', ')}: swarm scope split, run it, then swarm scope split --ingest RUN --merge`;
+}
+
+async function autoSplitAfterChangeOrder(root, { scope, hash, text, ledger, needTicketIds, flags }, deps = {}) {
+  const only = new Set(needTicketIds);
+  const layout = await projectLayout(root, scope, await readProfile(root));
+  const manifest = buildSplitManifest(scope, { only, layout, existing: await changeContext(root, ledger.tickets) });
+  await writeFileSafe(root, `${SPLIT_DIR}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
+  let run;
+  try {
+    run = await (deps.runSplit ?? defaultRunSplit)(root, manifest);
+  } catch {
+    return { lines: [changeOrderManualSplitHint(needTicketIds).trim()], exitCode: 0 };
+  }
+  const runId = typeof run?.id === 'string' ? run.id : null;
+  if (!runId) return { lines: [changeOrderManualSplitHint(needTicketIds).trim()], exitCode: 0 };
+  const ingestFlags = {
+    ingest: runId,
+    merge: true,
+    wire: flags.wire,
+    'max-repairs': flags['max-repairs'],
+    'accept-waves': flags['accept-waves'],
+    'accept-new-path': flags['accept-new-path'],
+  };
+  const ingest = await runSplitIngest(root, { scope, hash, text, file: ledger.scope?.file ?? DEFAULT_SCOPE_FILE }, { flags: ingestFlags }, deps);
+  return { lines: ingest.stdout.split('\n').filter(Boolean), exitCode: 0 };
+}
+
+async function cmdChange(root, { rest, flags }, deps = {}) {
   const reason = rest[0];
   if (!reason) return bad('change needs a reason in quotes');
   const ledger = await readLedger(root);
@@ -2083,22 +4118,38 @@ async function cmdChange(root, { rest, flags }) {
   await writeFileSafe(root, '.swarm/project/scope.snapshot.md', cur.text);
   await appendLog(root, { event: 'change-order', id, reason, cancelled: impact.cancel.length, reopened: impact.reopen.length });
   await refreshPlan(root);
-  const need = impact.needTickets.length ? `\nNew tickets are needed for ${impact.needTickets.join(', ')}: swarm scope split, run it, then swarm scope split --ingest RUN --merge` : '';
-  return out(`${summary}\nrecorded ${id}.${need}`);
+  let tail = '';
+  if (impact.needTickets.length) {
+    if (flags['no-split'] === true) {
+      tail = changeOrderManualSplitHint(impact.needTickets);
+    } else {
+      const auto = await autoSplitAfterChangeOrder(root, {
+        scope: cur.scope,
+        hash: cur.hash,
+        text: cur.text,
+        ledger: next,
+        needTicketIds: impact.needTickets,
+        flags,
+      }, deps);
+      tail = auto.lines.length ? `\n${auto.lines.join('\n')}` : '';
+    }
+  }
+  return out(`${summary}\nrecorded ${id}.${tail}`);
 }
 
 export async function runScopeCommand(root, command, args, deps = {}) {
   try {
     const parsed = parseArgs(args);
     if (command === 'tickets') return await runTicketsCommand(root, args);
-    if (command === 'change') return await cmdChange(root, parsed);
+    if (command === 'change') return await cmdChange(root, parsed, deps);
     const [verb, ...more] = args;
     const sub = parseArgs(more);
     if (verb === 'new') return await cmdNew(root, sub, deps);
     if (verb === 'template') return await cmdTemplate(root, sub);
     if (verb === 'check') return await cmdCheck(root, sub);
-    if (verb === 'split') return await cmdSplit(root, sub);
-    if (verb === 'approve') return await cmdApprove(root, sub);
+    if (verb === 'split') return await cmdSplit(root, sub, deps);
+    if (verb === 'approve') return await cmdApprove(root, sub, deps);
+    if (verb === 'gate') return await cmdGate(root, sub);
     if (verb === 'sync') return await cmdSync(root, sub, deps);
     if (verb === 'security-review') return await cmdSecurityReview(root, sub, deps);
     if (verb === 'acceptance-review') return await cmdAcceptanceReview(root, sub, deps);
@@ -2106,6 +4157,7 @@ export async function runScopeCommand(root, command, args, deps = {}) {
     return bad(verb ? `unknown scope command: ${verb}` : 'scope needs a command');
   } catch (error) {
     if (error.code && /^(scope|ticket|ledger|approval)/.test(error.code)) return out(`${error.code}: ${error.message}`, 1);
+    if (error.code === 'ticket-id-collision' || error.code === 'ticket-id-block') return out(error.message, 1);
     throw error;
   }
 }
@@ -2119,7 +4171,7 @@ async function withLock(root, fn) {
     try { handle = await fs.open(lock, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.lstat(lock).catch(() => null);
+      const stat = await fs.lstat(lock).catch(error => { if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] scope lock stat:', error?.code ?? 'unknown'); return null; });
       if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) await fs.rm(lock, { force: true });
       else throw fail('scope-busy', 'another swarm go --scope is starting a wave; try again in a minute');
     }
@@ -2164,7 +4216,7 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     }
     const humans = ready.filter(t => t.type === 'human').length;
     const profile = await readProfile(root);
-    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile), laneModels: (() => { try { return loadLocalConfig().lanes; } catch { return undefined; } })() });
+    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: true, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile), laneModels: (() => { try { return loadLocalConfig().lanes; } catch { return undefined; } })() });
     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
     let ids = manifest.jobs.map(j => j.id);
     if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ready tickets');
@@ -2172,28 +4224,10 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     const unroutable = [];
     // A manifest the runner would refuse must not leave tickets stuck in running: it is validated before any ticket moves.
     if (typeof validate === 'function') {
-      // Existing project tests that mention a ticket's files go into that job's context (so the worker sees what they assert); then it is validated again.
-      for (let pass = 0; ; pass += 1) {
-        try { await validate(manifest); break; } catch (error) {
-          if (error?.code === 'route-exhausted') {
-            const jobId = /for job (\S+?)(?:[;)]| \(|$)/.exec(String(error.message))?.[1];
-            if (jobId && manifest.jobs.some(j => j.id === jobId)) {
-              manifest.jobs = manifest.jobs.filter(j => j.id !== jobId);
-              // anything that waits for the dropped job cannot run in this wave either
-              for (let grew = true; grew;) { grew = false; for (const j of [...manifest.jobs]) if ((j.after ?? []).some(a => unroutable.some(u => u.id === a) || a === jobId)) { manifest.jobs = manifest.jobs.filter(x => x.id !== j.id); unroutable.push({ id: j.id, reason: `waits for ${jobId}, which no lane can take` }); grew = true; } }
-              unroutable.push({ id: jobId, reason: String(error.message) });
-              pass -= 1;
-              if (!manifest.jobs.length) throw fail('scope-nothing', `no ticket of this wave can be routed: ${unroutable.map(u => `${u.id}: ${u.reason}`).join('; ')}`);
-              continue;
-            }
-          }
-          const suggested = error?.details?.suggestedIgnoreTests;
-          if (!suggested || pass >= 2) throw error;
-          for (const job of manifest.jobs) for (const test of (suggested[job.id] ?? []).slice(0, 6)) if (!job.context.includes(test) && !job.outputs.includes(test)) job.context.push(test);
-        }
-      }
+      await finalizeScopeWaveManifest(manifest, { validate, tickets: ready, warnings, unroutable, root });
     }
     ids = manifest.jobs.map(j => j.id);
+    if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ticket of this wave could be prepared');
     for (const u of unroutable) {
       const ticket = ledger.tickets.find(x => x.id === u.id);
       if (ticket && ['ready', 'todo'].includes(ticket.status)) { ticket.status = 'blocked'; ticket.blockReason = `unroutable: ${u.reason.slice(0, 300)}`; }
@@ -2224,7 +4258,9 @@ export async function revertWave(root, ids) {
   for (const id of ids) {
     const ledger = await readLedger(root);
     if (ledger?.tickets.find(t => t.id === id)?.status !== 'running') continue;
-    try { await lockedTransition(root, id, 'ready', { by: 'go', note: 'the wave did not start' }); back.push(id); } catch { /* a ticket that cannot move stays for the owner */ }
+    try { await lockedTransition(root, id, 'ready', { by: 'go', note: 'the wave did not start' }); back.push(id); } catch (error) {
+      console.error('[tools/scope-commands.mjs] could not move ticket back after a wave that did not start:', id, error?.code ?? error?.name ?? 'unknown');
+    }
   }
   if (back.length) await refreshPlan(root);
   return back;

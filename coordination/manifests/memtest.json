@@ -1,0 +1,14 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "memtest",
+   "agent": "cursor", "model": "composer-2.5",
+   "tier": "cheap",
+   "context": ["tools/autopilot-ready-deps.mjs", "tests/autopilot-ready-deps.test.mjs"],
+   "outputs": ["tests/autopilot-ready-deps.test.mjs"],
+   "prompt": "Five tests in tests/autopilot-ready-deps.test.mjs (startScope spawns detached swarm go --scope and unrefs; startScope returns ok false when spawn throws; startScope returns ok false on an asynchronous spawn error; startScope passes cwd as the resolved project root; startScope argv includes --max-jobs and --skip-skeleton when allowed) now fail because the deps factory defaults memoryAware to true and reads the real machine, so a loaded machine holds the start. Fix the tests only: pass memoryAware: false wherever those tests (and the other tests of this file that build the deps) create them, with a single small helper if the file has one place that builds deps. Do not change tools/. Do not weaken any assertion. Add one test that with memoryAware true and an injected hard-pressure machine reader startScope does not spawn and returns result held-memory."
+  }
+ ]
+}

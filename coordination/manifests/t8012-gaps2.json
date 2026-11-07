@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8012-gaps2",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3000000,
+      "outputs": [
+        "tests/board-accuracy-card.test.mjs",
+        "tools/board-data.mjs",
+        "tools/board-inbox.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "coordination/reviews/acc-review-t8012-2.json",
+        "tools/build-progress.mjs",
+        "tools/inbox.mjs",
+        "tools/lanes.mjs",
+        "tools/split-quality.mjs"
+      ],
+      "prompt": "T-8012: make tests/board-accuracy-card.test.mjs cover EVERY field of projectOverview(...).card with its own test and a disk-read oracle (never a board function; it may READ tools/board-inbox.mjs's documented release rule and restate it in the oracle, but must not call ticketReleaseAllowed). Required fields, one test each: card.now.buildingTickets, card.now.checkoutsBuilding, card.now.lastTicketFinishedAt; card.next.ready, card.next.items (ids, titles, command 'swarm tickets ID'); card.blocked.waitingOnTickets, card.blocked.items (ids, waitsOn, and command: 'swarm tickets ID --release' exactly when the release rule applies, else null; fixture must have both cases); card.blocked.needYou and card.blocked.needYouItems (full list with kind and command) built from inbox sources written to disk by the fixture: a human job (command 'swarm --root R done ID' or the exact form nextFor emits), a journal blocker ('swarm --root R resolve ID'), an open decision ('decide ID CHOICE' form), and a proposed ticket; card.slots.machineMax, inUse, byThisProject, byOtherProjects from lanes.json and the local config on disk; card.eta.days, remaining, perDay, doneLast7Days, windowDays, basis (days null when perDay is 0); card.facts.handEditsBlocked24h (events older and newer than 24 h), card.facts.untrackedRuns, card.facts.listHref (exact href), card.facts.checkouts; card.headsUp for the same-file wave collision case, the under-filled waves case, and null for a Finished project. At the top of the test file add a COVERAGE table (a const object mapping every card field path to its test name) and a test that walks JSON keys of a real card and fails if any leaf field path is missing from COVERAGE. Fix tools/board-data.mjs or tools/board-inbox.mjs only if an oracle exposes a real mismatch, and list each fix. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-card.test.mjs tests/board-accuracy-*.test.mjs tests/board-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import board-data or board-inbox for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "validate-reason",
+      "agent": "auto",
+      "prompt": "tests/ignore-tests-reason.test.mjs swarm validate accepts a manifest with ignoreTestsReason and returns it on the job fails: it expects the reason on the job entry of the swarm validate JSON output (expected: shown on validate output) but the entry built in tools/swarm/core-51.mjs (the jobs.push call around line 581 that lists id, agent, model, tier, outputs and so on) does not carry it. Add ignoreTestsReason (the trimmed string) to that job entry when the job has one, and show it in the human readable validate output next to the ignored test count if there is such a line; do not change anything else in that entry. A job without the field produces exactly the same output as before. Write only tools/swarm/core-51.mjs. Keep every existing test passing. No token-shaped literals. ignoreTests reason: tests that reference these files in passing are covered by the full suite run before merge.",
+      "context": [
+        "tools/swarm/core-51.mjs",
+        "tests/ignore-tests-reason.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/swarm/core-51.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/helpers/swarm-source.mjs",
+        "tests/swarm-source-helper.test.mjs"
+      ]
+    }
+  ]
+}

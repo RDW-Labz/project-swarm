@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "fixlockt2",
+      "agent": "auto",
+      "prompt": "tests/server-restart-round2.test.mjs test (9) concurrent restarts serialize on install restart lock is still racy on CI. Cause found: withProcessLock (tools/server-restart.mjs) calls readProcessIdentity(process.pid, { execFileImpl }) BEFORE it acquires the lock, so the test execFileImpl hook (enterCritical plus the first-run gate) fires for the lock own identity read of the test process pid, not inside the critical section: the first run then waits at the gate BEFORE taking the lock and the second run can take it first, so the sleep contention the test asserts depends on timing. Fix the TEST only: in the execFileImpl hook apply enterCritical and the first-run gate ONLY when the ps arguments name the fake old server pid (args include String(fakeOldPid)), never for calls about process.pid (return the normal ps mock for those without touching the gate or the events). Then the first run holds the lock inside its critical section while the second run contends and must call the injected sleep; assert as before (sleep called at least once while contending, enter and exit events alternate, both resolved). Run the test 20 times in a row natively and 5 times in a Linux container (docker run --rm -v THISDIR:/w -w /w node:22 node --import ./tests/_isolate-config.mjs --test tests/server-restart-round2.test.mjs; if docker is unavailable in your sandbox just run it natively 20 times). ignoreTests reason: only this test file changes.",
+      "context": [
+        "tests/server-restart-round2.test.mjs",
+        "tools/server-restart.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/server-restart-round2.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ]
+    }
+  ]
+}

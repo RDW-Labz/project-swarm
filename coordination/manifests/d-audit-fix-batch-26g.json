@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-26g",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 26g (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/board-peers.mjs, tools/ci-local.mjs, tools/load-sync-wait.mjs, tools/models-commands.mjs, tools/project-add.mjs, tools/session-metrics.mjs, tools/ticket-replan.mjs, tools/verify-orb.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/swarm/train3). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/board-peers.mjs\nLogger prefix: console.error('[tools/board-peers.mjs] <short context>:', error?.message ?? error)\n- Line 58 `fs.rm(tmp, { force: true }).catch(() => {})`: LOG-CLEANUP \u2014 this cleanup runs inside an error path that rethrows: bind the cleanup error with a DIFFERENT name than the outer error and console.error it (always); the original error must still be rethrown unchanged.\n\n### tools/ci-local.mjs\nLogger prefix: console.error('[tools/ci-local.mjs] <short context>:', error?.message ?? error)\n- Line 85 `await fs.readFile(...).catch(() => '')`: SILENT-ENOENT \u2014 reads a workflow file just listed by readdir; an empty fallback only drops that file from the local CI plan on a rare TOCTOU race or permission issue.\n\n### tools/load-sync-wait.mjs\nLogger prefix: console.error('[tools/load-sync-wait.mjs] <short context>:', error?.message ?? error)\n- Line 245 `publishProgress().catch(() => {})`: LOG-ALWAYS \u2014 fs.watch callback can't await; no error is expected and a swallowed failure would silently stop marker-count publishing.\n\n### tools/models-commands.mjs\nLogger prefix: console.error('[tools/models-commands.mjs] <short context>:', error?.message ?? error)\n- Line 44 `readFile('docs/state/eval-scores.ndjson') catch /* none yet */`: Outer readFile catch: SILENT-ENOENT, log anything else. If there is an inner per-line JSON.parse catch on the same line: never log for an empty/whitespace-only line; for a non-empty bad line log fixed text 'corrupt eval-scores line (SyntaxError)' \u2014 NEVER error.message or the line text.\n\n### tools/project-add.mjs\nLogger prefix: console.error('[tools/project-add.mjs] <short context>:', error?.message ?? error)\n- Line 21 `const info = await stat(abs).catch(() => null)`: SILENT-ENOENT/EACCES/ENOTDIR \u2014 existence probe of the target path; the next line already throws a clear 'not a directory' error for any null result.\n\n### tools/session-metrics.mjs\nLogger prefix: console.error('[tools/session-metrics.mjs] <short context>:', error?.message ?? error)\n- Line 46 `records.push(JSON.parse(await fs.readFile(path.join(dir, file))))`: SILENT-ENOENT (file removed after readdir). SyntaxError: log fixed text 'corrupt session metric (SyntaxError)' with the file name only \u2014 NEVER error.message. Anything else: console.error with the file name.\n\n### tools/ticket-replan.mjs\nLogger prefix: console.error('[tools/ticket-replan.mjs] <short context>:', error?.message ?? error)\n- Line 238 `const entry = JSON.parse(line)`: LOG-CORRUPT \u2014 split('\\n') always yields an empty last element, so NEVER log for an empty/whitespace-only line. For a non-empty line that fails JSON.parse, console.error the fixed text 'corrupt replan journal line (SyntaxError)' \u2014 NEVER error.message or the line text.\n\n### tools/verify-orb.mjs\nLogger prefix: console.error('[tools/verify-orb.mjs] <short context>:', error?.message ?? error)\n- Line 237 `await app.close().catch(() => {})`: LOG-ALWAYS \u2014 finally-block cleanup of the local fixture preview server; no error is expected on a clean close and a silently failed close can leak a listening port into the next verify-orb run.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/board-peers.mjs",
+        "tools/ci-local.mjs",
+        "tools/load-sync-wait.mjs",
+        "tools/models-commands.mjs",
+        "tools/project-add.mjs",
+        "tools/session-metrics.mjs",
+        "tools/ticket-replan.mjs",
+        "tools/verify-orb.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-peers.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/field-lessons-batch-ai-metrics.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/fixtures/verify-orb/fake-service.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons120-checks.test.mjs",
+        "tests/load-flake.test.mjs",
+        "tests/model-watch.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/ticket-replan.test.mjs",
+        "tests/verify-orb.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

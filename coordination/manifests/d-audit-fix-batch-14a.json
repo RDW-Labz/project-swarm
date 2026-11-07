@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-errors-batch-14a-fixup",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "Small privacy fixup on tools/errors.mjs. Change ONLY these two log lines, nothing else:\n\n1. In ingestErrors, the `.catch((error) => { console.error('[tools/errors.mjs] addTicket failed:', group.fingerprint, error?.message ?? error); return null; })`: addTicket is caller-supplied, so its error can carry unscrubbed text. Replace `error?.message ?? error` with `scrubText(String(error?.message ?? error), 200)` (scrubText is already defined in this same file). Keep everything else identical.\n\n2. In withLock, the stat catch logs `statError?.code ?? statError?.message`. Node fs messages include the absolute path (home dir/username). Change it to log `statError?.code ?? 'unknown'` only.\n\nNo other changes. No unused bindings, no `void error`. Then run: node --test tests/errors.test.mjs and confirm green.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/errors.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/errors.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

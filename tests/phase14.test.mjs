@@ -80,14 +80,18 @@ test('the output overlap check is a set lookup, still refuses a folder and a fil
   assert.doesNotThrow(() => clash('docs-old/a.md', 'docs/a.md'));
 });
 
-test('cacheContext is only for Anthropic jobs, 1-10 unique paths that are in context', () => {
+test('cacheContext is for the Anthropic and local lanes, 1-10 unique paths that are in context', () => {
   const base = { id: 'a', agent: 'anthropic', model: 'claude-haiku-5-5', sensitive: true, prompt: 'x', context: ['c1.md', 'c2.md'], outputs: ['o.txt'] };
   assert.doesNotThrow(() => validateManifest({ version: 1, jobs: [{ ...base, cacheContext: ['c1.md'] }] }));
   assert.doesNotThrow(() => validateManifest({ version: 1, jobs: [(({ model, ...rest }) => ({ ...rest, agent: 'auto', cacheContext: ['c1.md', 'c2.md'] }))(base)] }));
+  assert.doesNotThrow(() => validateManifest({ version: 1, jobs: [{ ...base, id: 'local', agent: 'local', model: 'local:dev2', sensitive: false, cacheContext: ['c1.md'] }] }));
   for (const cacheContext of [[], ['c3.md'], ['c1.md', 'c1.md'], 'c1.md', [5], Array.from({ length: 11 }, (_, n) => `c${n}.md`)]) {
     assert.throws(() => validateManifest({ version: 1, jobs: [{ ...base, cacheContext }] }), /cacheContext/, JSON.stringify(cacheContext));
   }
-  assert.throws(() => validateManifest({ version: 1, jobs: [{ ...base, agent: 'codex', model: 'gpt-6.1-sol', sensitive: undefined, cacheContext: ['c1.md'] }] }), /cacheContext is for the anthropic lane/);
+  const cli = { cursor: 'composer', codex: 'gpt-6.1-sol', claude: 'sonnet', hermes: 'test-model' };
+  for (const agent of ['cursor', 'codex', 'claude', 'hermes']) {
+    assert.throws(() => validateManifest({ version: 1, jobs: [{ ...base, agent, model: cli[agent], sensitive: agent === 'codex' ? undefined : false, cacheContext: ['c1.md'] }] }), /cacheContext is for API lanes/);
+  }
 });
 
 test('a manifest can ask for an adaptive lane, and the setting is validated', () => {

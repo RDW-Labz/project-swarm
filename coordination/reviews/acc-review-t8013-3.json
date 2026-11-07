@@ -1,0 +1,29 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8013",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/watch-assets/board.js:332-504 renderWatchProjectCard (head, percent+bar, Now/Next/Blocked, slotsSentence, ETA, facts, heads-up); tests/board-card-ui.test.mjs: watch project card shows data from projectOverview.card; slotsSentence never claims free slots when all are in use; finished project card is quiet without rows or heads-up",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/watch-assets/board.js:284-302 cardItemList (exact command in code + copy); 412-468 ready/waiting/need-you toggles; 255-261 watchNum (label+title); tests/board-card-ui.test.mjs: ready/waiting/need-you list tests with assertCardListItems and assertCopyButtonsCopyExactCommands; assertNumberElements in fixture card test",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tests/board-card-ui.test.mjs:356-387 watch project card shows data from projectOverview.card (fixture via boardSnapshot/makeBoardFixture, field values asserted in DOM text, assertNumberElements for label+title on metrics)",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

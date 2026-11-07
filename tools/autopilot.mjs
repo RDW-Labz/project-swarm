@@ -1,9 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
+import { closeSync, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
+import { O_NOFOLLOW, O_RDONLY } from 'node:constants';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { stopGuard } from './stop-all.mjs';
 import { matchesFile, ELEVATED_GIT_OPS } from './handbuild.mjs';
 import { runPolicyPass, appendAutoDecision } from './policy-run.mjs';
 import { resolveDailyLimit } from './daily-limit.mjs';
+import { filterGeneratedStatus, formatDirtyListing, integrateCheckoutGitState } from './generated-state.mjs';
+import { planWaveBatch } from './wave-batch.mjs';
+import { isAskRun, isNonIntegratingRun, runHasNoOutputs, runIntegratedFromState } from './run-kind.mjs';
+import { noteAutopilotStep } from './orchestrator-context.mjs';
+import {
+  appendIntegrateBlockerIfNeeded,
+  integrateBlockerFields,
+  integrateBlockerId,
+  integrateBlockerKindFromId,
+  integrateBlockerResolutionEvent,
+  integrateBlockerRunIdFromId,
+  integrateBlockerSuppressed,
+  openBlockerIds,
+} from './journal.mjs';
+import { runNeedsYouTriagePass } from './needs-you-triage.mjs';
+import { readLockOwner, isAlive as defaultIsAlive } from './autopilot-lock.mjs';
+
+/** Pids of go --scope children spawned by this autopilot process (not orphaned predecessors). */
+const spawnedScopeLoopPids = new Set();
 
 const POLICY_PASS_KINDS = new Set([
   'hand-build-request',
@@ -128,6 +151,7 @@ export function pickReadyTickets({ tickets, approvals }) {
 const MINUTE = 60_000;
 const START_READY_MIN_MS = 120_000;
 const START_READY_STALE_MS = 10 * MINUTE;
+export const START_READY_HOLD_BACKOFF_MS = 60_000;
 const MAX_ACTIONS_PER_RUN = 3;
 const MAX_RUNS = 10;
 const RESULT_LIMIT = 500;
@@ -203,16 +227,91 @@ export function autopilotRunFromState(state, directoryName) {
     counts: state.summary?.counts ?? null,
     costUsd: costs.length ? costs.reduce((sum, value) => sum + value, 0) : null,
     pause: state.pause ?? null,
-    integrated: Boolean(state.integratedFiles?.length) || state.integrated === true,
+    integrated: runIntegratedFromState(state),
+    integratedAt: state.integratedAt ?? null,
+    integrationStatus: state.integrationStatus ?? null,
+    handled: state.handled === true,
     integrable: integrableFromJobs(state.jobs),
   };
 }
 
+function runCountsAsIntegrated(run) {
+  if (!run || typeof run !== 'object') return false;
+  if (run.integrationStatus === 'partial' || run.integrationStatus === 'queued') return false;
+  return run.integrated === true;
+}
+
+function retryFailedCounted(events, runId) {
+  return actionEvents(events, 'retry-failed', runId).some(event => !failedResult(event));
+}
+
+function retryRunInFlight(events, runId) {
+  return events.some(e => e && e.kind === 'run' && e.retryOf === runId && e.status === 'running');
+}
+
+function runIsHandled(run, events) {
+  if (run?.handled === true) return true;
+  const id = run?.id;
+  if (!id) return false;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.kind === 'run' && event.id === id && event.handled === true) return true;
+  }
+  return false;
+}
+
+/** Another run already completed the same manifest work (hand rerun / integrated sibling). */
+export function supersedingSuccessfulRun(run, { runs, events, manifest } = {}) {
+  const fp = manifest && typeof manifest === 'object' ? manifestWorkFingerprint(manifest) : null;
+  if (!fp?.jobIds?.length) return false;
+  const list = Array.isArray(runs) ? runs : [];
+  for (const other of list) {
+    if (!other || other.id === run.id) continue;
+    const done = other.status === 'complete' || other.status === 'integrated' || other.integrated === true;
+    if (!done) continue;
+    const otherManifest = runManifest(other, events);
+    if (!otherManifest) continue;
+    const otherFp = manifestWorkFingerprint(otherManifest);
+    if (fingerprintsMatch(fp, otherFp)) return true;
+    if (fp.outputsHash === otherFp.outputsHash && fp.jobIds.length === otherFp.jobIds.length) return true;
+  }
+  return false;
+}
+
 function integrateBlockerRunId(blockerId) {
-  if (typeof blockerId !== 'string') return null;
-  if (blockerId.startsWith('integrate-checkout-')) return blockerId.slice('integrate-checkout-'.length);
-  if (blockerId.startsWith('integrate-')) return blockerId.slice('integrate-'.length);
-  return null;
+  return integrateBlockerRunIdFromId(blockerId);
+}
+
+function runManifest(run, events) {
+  if (run?.manifest && typeof run.manifest === 'object') return run.manifest;
+  const history = Array.isArray(events) ? events.filter(e => e && e.kind === 'run' && e.id === run?.id) : [];
+  const hit = history.find(e => e.manifest && typeof e.manifest === 'object');
+  return hit?.manifest ?? null;
+}
+
+export function runSkipsIntegrateAttention(run, events, { runs, root, readRunFolder } = {}) {
+  if (!run || typeof run !== 'object') return true;
+  if (runCountsAsIntegrated(run)) return true;
+  if (['cancelled', 'abandoned'].includes(run.status)) return true;
+  const manifest = runManifest(run, events);
+  if (isAskRun(run, manifest) && runHasNoOutputs({ id: run.id, jobs: run.jobs })) return true;
+  if (run.integrable === false) return true;
+  if (runHasNoOutputs({ id: run.id, jobs: run.jobs })) {
+    if (run.integrable === true && runHasCompleteJob(run)) return false;
+    return true;
+  }
+  return isNonIntegratingRun(run, manifest);
+}
+
+function runJobCount(run) {
+  if (!run || typeof run !== 'object') return 0;
+  if (Number.isFinite(run.jobCount)) return run.jobCount;
+  const counts = run.counts;
+  if (counts && Number.isFinite(counts.total)) return counts.total;
+  if (counts && Number.isFinite(counts.complete) && Number.isFinite(counts.failed)) {
+    return counts.complete + counts.failed + (Number(counts.running) || 0);
+  }
+  return 1;
 }
 
 function latestBlockerEvent(events, id) {
@@ -304,13 +403,24 @@ export function decide(run, ctx) {
   const reasons = Array.isArray(pause?.reasons) ? pause.reasons.map(String) : [];
   const failedCount = Number(run.counts?.failed) || 0;
 
-  if (run.status === 'complete' && !run.integrated) {
+  if (run.status === 'complete' && !runCountsAsIntegrated(run)) {
+    if (runIsHandled(run, events)) return null;
     if (run.integrable === false) return null;
+    if (runSkipsIntegrateAttention(run, events, { runs: c.runs })) return null;
     const failures = actionEvents(events, 'integrate', id).filter(failedResult);
     if (failures.length) {
       const last = failures[failures.length - 1];
       const reason = typeof last.result === 'string' ? last.result : (last.result?.error ?? 'failed');
-      return { action: 'block', run: id, id: `integrate-${id}`, text: `Integration of run ${id} needs a decision: ${reason}` };
+      const integrateCause = reason;
+      const blockerId = integrateBlockerId('integrate', id, integrateCause, { events });
+      return {
+        action: 'block',
+        run: id,
+        id: blockerId,
+        text: `Integration of run ${id} needs a decision: ${reason}`,
+        integrateKind: 'integrate',
+        integrateCause,
+      };
     }
     return { action: 'integrate', run: id, reason: 'run complete, not integrated' };
   }
@@ -335,9 +445,13 @@ export function decide(run, ctx) {
   }
 
   if (run.status === 'failed') {
-    const retried = actionEvents(events, 'retry-failed', id).length > 0;
+    const manifest = c.manifest ?? runManifest(run, events);
+    if (runIsHandled(run, events)) return null;
+    if (supersedingSuccessfulRun(run, { runs: c.runs, events, manifest })) return null;
+    const retried = retryFailedCounted(events, id);
     const isRetry = events.some(e => e && e.kind === 'run' && e.id === id && e.retryOf);
     if (retried) {
+      if (retryRunInFlight(events, id)) return { action: 'wait', run: id, reason: 'retry run in flight' };
       // The retry is a new run linked by retryOf. If it finished, this original run is handled.
       if (events.some(e => e && e.kind === 'run' && e.retryOf === id && e.status === 'complete')) return null;
       return { action: 'block', run: id, id: `failed-${id}`, text: `Run ${id} still has failed jobs after one retry: swarm inspect ${id} --results` };
@@ -354,7 +468,9 @@ async function safe(fn, fallback) {
   try { return await fn(); } catch { return fallback; }
 }
 
-function startReadyCooldownOpen(memory, nowMs) {
+export function startReadyCooldownOpen(memory, nowMs) {
+  const holdAt = memory.startReadyHoldAt;
+  if (holdAt != null && Number.isFinite(holdAt) && nowMs - holdAt < START_READY_HOLD_BACKOFF_MS) return false;
   const last = memory.startReadyLastAt;
   if (last == null || !Number.isFinite(last)) return true;
   const elapsed = nowMs - last;
@@ -369,23 +485,301 @@ function noteStartReadyLive(memory, nowMs, { live, busy, runs }) {
   if (hasLiveRun || hasBusy) memory.startReadyLastLiveAt = nowMs;
 }
 
+export function integrateCheckoutDirtyFromPorcelain(stdout) {
+  const lines = filterGeneratedStatus(String(stdout ?? '').split('\n'));
+  return lines.some(line => {
+    const code = line.length >= 2 ? line.slice(0, 2) : '';
+    if (code === '??' || code.startsWith('?')) return false;
+    return Boolean(line.trim());
+  });
+}
+
+function jobsFromRun(run, manifest) {
+  const fromManifest = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
+  const raw = run?.jobs;
+  const fromRun = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+  if (!fromManifest.length) return fromRun;
+  if (!fromRun.length) return fromManifest;
+  const seen = new Set(fromManifest.map(j => j?.id).filter(Boolean));
+  return [...fromManifest, ...fromRun.filter(j => j?.id && !seen.has(j.id))];
+}
+
+function jobListFromSaved(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return Object.values(value);
+  return [];
+}
+
+function jobIsComplete(job) {
+  return job && (job.status === 'complete' || job.state === 'complete');
+}
+
+/** Drop absolute paths, `..`, and anything that resolves outside `projectRoot`. */
+export function filterValidIntegrateOutputPaths(paths, projectRoot) {
+  if (!projectRoot || typeof projectRoot !== 'string') {
+    return (Array.isArray(paths) ? paths : []).map(String).filter(p => typeof p === 'string' && p && !path.isAbsolute(p) && !p.split(/[/\\]/).includes('..'));
+  }
+  const rootResolved = path.resolve(projectRoot);
+  const out = [];
+  for (const raw of Array.isArray(paths) ? paths : []) {
+    const rel = String(raw);
+    if (!rel || path.isAbsolute(rel)) continue;
+    const normalized = path.normalize(rel);
+    if (normalized.startsWith('..') || normalized.split(/[/\\]/).includes('..')) continue;
+    const resolved = path.resolve(rootResolved, normalized);
+    if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) continue;
+    out.push(normalized.split(path.sep).join('/'));
+  }
+  return out;
+}
+
+const INTEGRATE_RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MAX_RUN_FOLDER_JSON_BYTES = 2 * 1024 * 1024;
+
+function isValidIntegrateRunId(runId) {
+  return typeof runId === 'string'
+    && runId
+    && !runId.includes('..')
+    && INTEGRATE_RUN_ID_RE.test(runId);
+}
+
+function lstatPathNotSymlink(filePath) {
+  try {
+    const st = lstatSync(filePath);
+    return !st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function readJsonFileNoSymlink(filePath) {
+  let fd;
+  try {
+    fd = openSync(filePath, O_RDONLY | O_NOFOLLOW);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > MAX_RUN_FOLDER_JSON_BYTES) return null;
+    const buf = Buffer.alloc(st.size);
+    if (st.size > 0) readSync(fd, buf, 0, st.size, 0);
+    return JSON.parse(buf.toString('utf8'));
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch (error) {
+        if (error?.code !== 'EBADF') console.error('[tools/autopilot.mjs] readJsonFileNoSymlink close:', error?.message ?? error);
+      }
+    }
+  }
+}
+
+/** Default reader for saved run folder `state.json` / `manifest.json` (never throws). */
+export function defaultReadRunFolderSources(root, runId) {
+  if (!root || !isValidIntegrateRunId(runId)) return { state: null, manifest: null };
+  const swarmDir = path.join(root, '.swarm');
+  const runsDir = path.join(swarmDir, 'runs');
+  if (!lstatPathNotSymlink(swarmDir) || !lstatPathNotSymlink(runsDir)) {
+    return { state: null, manifest: null };
+  }
+  const runDir = path.join(runsDir, runId);
+  if (!lstatPathNotSymlink(runDir)) return { state: null, manifest: null };
+  return {
+    state: readJsonFileNoSymlink(path.join(runDir, 'state.json')),
+    manifest: readJsonFileNoSymlink(path.join(runDir, 'manifest.json')),
+  };
+}
+
+function collectFolderJobOutputs(jobs, { completeOnly } = {}) {
+  const paths = [];
+  const childRunIds = [];
+  for (const job of jobListFromSaved(jobs)) {
+    if (!job || typeof job !== 'object') continue;
+    if (completeOnly && !jobIsComplete(job)) continue;
+    if (Array.isArray(job.outputs) && job.outputs.length) paths.push(...job.outputs.map(String));
+    const childId = job.childRun ?? job.child_run;
+    if (isValidIntegrateRunId(childId)) childRunIds.push(childId);
+  }
+  return { paths, childRunIds };
+}
+
+function runFolderIntegrateOutputPaths(runId, root, readRunFolder, visited = new Set()) {
+  if (!root || !isValidIntegrateRunId(runId) || visited.has(runId)) return [];
+  visited.add(runId);
+  const reader = typeof readRunFolder === 'function' ? readRunFolder : defaultReadRunFolderSources;
+  let sources;
+  try {
+    sources = reader(root, runId);
+  } catch {
+    sources = { state: null, manifest: null };
+  }
+  let state = sources?.state;
+  const manifest = sources?.manifest;
+  if (state && typeof state.id === 'string' && state.id && !isValidIntegrateRunId(state.id)) {
+    state = null;
+  }
+  const fromState = collectFolderJobOutputs(state?.jobs, { completeOnly: true });
+  let paths = [...fromState.paths];
+  const childIds = new Set(fromState.childRunIds);
+  if (!paths.length) {
+    const fromManifest = collectFolderJobOutputs(manifest?.jobs, { completeOnly: false });
+    paths = [...fromManifest.paths];
+    for (const id of fromManifest.childRunIds) childIds.add(id);
+  } else {
+    for (const job of jobListFromSaved(state?.jobs)) {
+      const childId = job?.childRun ?? job?.child_run;
+      if (isValidIntegrateRunId(childId)) childIds.add(childId);
+    }
+  }
+  for (const childId of childIds) {
+    paths.push(...runFolderIntegrateOutputPaths(childId, root, readRunFolder, visited));
+  }
+  return filterValidIntegrateOutputPaths(paths, root);
+}
+
+/** Declared integrate output paths from manifest, run jobs, lead-job child runs, and saved run files. */
+export function runIntegrateOutputPaths(run, events, { runs, root, readRunFolder } = {}) {
+  const manifest = runManifest(run, events);
+  const paths = [];
+  const visitedChildRuns = new Set();
+
+  function collectFromJobs(jobs) {
+    for (const job of Array.isArray(jobs) ? jobs : []) {
+      if (!job || typeof job !== 'object') continue;
+      if (Array.isArray(job.outputs) && job.outputs.length) paths.push(...job.outputs.map(String));
+      const childId = job.childRun ?? job.child_run;
+      if (typeof childId !== 'string' || !childId || visitedChildRuns.has(childId)) continue;
+      visitedChildRuns.add(childId);
+      const child = (Array.isArray(runs) ? runs : []).find(r => r && r.id === childId);
+      if (!child) continue;
+      const childManifest = runManifest(child, events);
+      collectFromJobs(jobsFromRun(child, childManifest));
+    }
+  }
+
+  collectFromJobs(jobsFromRun(run, manifest));
+  let validated = filterValidIntegrateOutputPaths(paths, root);
+  if (!validated.length && root && isValidIntegrateRunId(run?.id)) {
+    validated = runFolderIntegrateOutputPaths(run.id, root, readRunFolder);
+  }
+  return [...new Set(validated)].sort();
+}
+
+function runHasCompleteJob(run) {
+  if (!run || typeof run !== 'object') return false;
+  const complete = Number(run.counts?.complete);
+  if (Number.isFinite(complete) && complete > 0) return true;
+  const raw = run.jobs;
+  const list = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+  return list.some(job => job && (job.status === 'complete' || job.state === 'complete'));
+}
+
+async function defaultGitExec(root, cmd, args, opts) {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+  const { stdout } = await execFileAsync(cmd, args, { encoding: 'utf8', ...opts });
+  return { stdout };
+}
+
+async function resolveIntegrateCheckoutView(root, checkout, outputPaths, deps) {
+  if (typeof deps.integrateCheckoutGitState === 'function') {
+    try {
+      const gitState = await deps.integrateCheckoutGitState(root, { outputPaths });
+      if (gitState && typeof gitState === 'object') return { ...checkout, ...gitState, dirty: false };
+    } catch (error) {
+      console.error('[tools/autopilot.mjs] resolveIntegrateCheckoutView override:', error?.message ?? error);
+    }
+  }
+  try {
+    const exec = typeof deps.gitExecForIntegrate === 'function'
+      ? (cmd, args, opts) => deps.gitExecForIntegrate(root, cmd, args, opts)
+      : (cmd, args, opts) => defaultGitExec(root, cmd, args, opts);
+    const gitState = await integrateCheckoutGitState(root, {
+      exec,
+      runStatus: typeof deps.runIntegrateGitStatus === 'function'
+        ? opts => deps.runIntegrateGitStatus(root, opts)
+        : undefined,
+      outputPaths,
+    });
+    if (gitState) return { ...checkout, ...gitState, dirty: false };
+  } catch (error) {
+    console.error('[tools/autopilot.mjs] resolveIntegrateCheckoutView fallback:', error?.message ?? error);
+  }
+  return checkout;
+}
+
 // Every once-only rule (one retry, one start per wave, no repeated integration) is read from the journal.
 // So the step fails closed: a journal that cannot be read or written means no actions, never a repeat of
 // paid work. `memory` also remembers what this process already did, whatever the journal says.
 // Integration only runs from a swarm/* branch or a linked worktree that is not main/master, and only when
 // there is no uncommitted work. Anything else (or a checkout that cannot be read) becomes a blocker.
-export function integrationBlocker(checkout) {
+export function integrationBlocker(checkout, { outputPaths = [] } = {}) {
   if (!checkout || typeof checkout !== 'object') return 'the checkout could not be inspected';
   const branch = typeof checkout.branch === 'string' ? checkout.branch : '';
-  if (checkout.dirty !== false) return 'the checkout has uncommitted changes (or could not be checked)';
   if (!branch) return 'the checkout is not on a branch';
   if (branch === 'main' || branch === 'master') return `the checkout is on ${branch}`;
-  if (!branch.startsWith('swarm/') && checkout.linkedWorktree !== true) return `the checkout is on ${branch}, not a swarm/* branch or its own worktree`;
+  if (!branch.startsWith('swarm/') && checkout.linkedWorktree !== true) {
+    return `the checkout is on ${branch}, not a swarm/* branch or its own worktree`;
+  }
+  if (checkout.mergeInProgress === true) return 'a merge is in progress in the checkout';
+  if (checkout.cherryPickInProgress === true) return 'a cherry-pick is in progress in the checkout';
+  if (checkout.revertInProgress === true) return 'a revert is in progress in the checkout';
+  if (checkout.rebaseInProgress === true) return 'a rebase is in progress in the checkout';
+  const unmerged = Array.isArray(checkout.unmergedPaths) ? checkout.unmergedPaths : [];
+  if (unmerged.length) {
+    return `the checkout has unmerged paths${formatDirtyListing(unmerged)}`;
+  }
+  const collisions = Array.isArray(checkout.integrateCollisions)
+    ? checkout.integrateCollisions
+    : [];
+  if (collisions.length) {
+    return `the checkout has local changes on integrate output path(s)${formatDirtyListing(collisions)}`;
+  }
+  const trackedDirty = Array.isArray(checkout.integrateTrackedDirty) ? checkout.integrateTrackedDirty : [];
+  if (trackedDirty.length) {
+    return `the checkout has uncommitted tracked changes${formatDirtyListing(trackedDirty.map(e => e.path ?? e))}; commit or move them before integrating`;
+  }
+  if (checkout.dirty !== false) return 'the checkout has uncommitted changes (or could not be checked)';
   return null;
 }
 
 export async function autopilotStep(root, deps, { now = Date.now, memory = new Set(), legacyPlan = false } = {}) {
-  const nowMs = nowValue(now);
+  const nowFn = typeof now === 'function' ? now : () => nowValue(now);
+  const nowMs = nowFn();
+  const mem = memory && typeof memory === 'object' ? memory : {};
+  let pollObserveContext = null;
+  let pollDigestBefore = null;
+  try {
+    if (typeof deps.readyTickets === 'function') {
+      const observeRuns = (await safe(() => deps.loadRuns(root), [])).slice(0, MAX_RUNS);
+      let live = [];
+      let busy = [];
+      let observeDepError = false;
+      if (typeof deps.liveRuns === 'function') {
+        try { live = await deps.liveRuns(root); if (!Array.isArray(live)) live = []; } catch { observeDepError = true; live = []; }
+      }
+      if (typeof deps.busyMarkers === 'function') {
+        try { busy = await deps.busyMarkers(); if (!Array.isArray(busy)) busy = []; } catch { observeDepError = true; busy = []; }
+      }
+      pollObserveContext = { live, busy, runs: observeRuns, depError: observeDepError };
+      if (!observeDepError) noteStartReadyLive(mem, nowMs, pollObserveContext);
+    }
+    const pollSnapshot = await buildAutopilotPollDigest(root, deps, {
+      now: nowFn, legacyPlan, memory: mem, observeContext: pollObserveContext,
+    });
+    pollDigestBefore = pollSnapshot?.digest ?? null;
+    const storedDigest = pollDigestBefore ? await readAutopilotPollDigest(root) : null;
+    if (pollSnapshot?.idle && pollDigestBefore && storedDigest !== null && storedDigest === pollDigestBefore) {
+      return {
+        actions: [],
+        blocked: [],
+        idle: true,
+        stepWroteJournal: false,
+        pollUnchanged: true,
+      };
+    }
+  } catch (error) {
+    console.error('[tools/autopilot.mjs] autopilot poll digest:', error?.message ?? error);
+  }
   let loadedEvents;
   try { loadedEvents = await deps.readJournal(root); }
   catch (error) { return { actions: [], blocked: [], idle: true, error: `journal-unreadable: ${String(error?.message ?? error).slice(0, 200)}` }; }
@@ -397,6 +791,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
   const actions = [];
   const blocked = [];
   const perRun = new Map();
+  let stepWroteJournal = false;
   // Tickets that were only waiting on dependencies become ready again, whatever else happens this pass.
   if (typeof deps.unlockTickets === 'function') {
     const unlocked = await safe(() => deps.unlockTickets(root), []);
@@ -407,10 +802,54 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     }
   }
 
-  async function write(event) {
+  async function write(event, { incidental = false } = {}) {
+    if (!incidental) stepWroteJournal = true;
     try { await deps.appendEvent(root, event); }
     catch (error) { journalBroken ??= `journal-unwritable: ${String(error?.message ?? error).slice(0, 200)}`; }
     events.push({ ...event, ts: new Date(nowMs).toISOString() });
+  }
+
+  async function resolveIntegrateBlockersForRun(runId, { resolvedBy, integrateCause = null, allowPartial = false, force = false } = {}) {
+    const runRecord = runs.find(r => r.id === runId);
+    if (!force && !allowPartial && runRecord && !runCountsAsIntegrated(runRecord)) return;
+    for (const integrateKind of ['integrate', 'integrate-checkout']) {
+      const candidates = events.filter(event => event?.kind === 'blocker' && event.resolved !== true
+        && (event.integrateRun === runId || integrateBlockerRunIdFromId(event.id) === runId)
+        && (integrateBlockerKindFromId(event.id) === integrateKind || event.integrateKind === integrateKind));
+      for (const prior of candidates) {
+        const kind = prior.integrateKind ?? integrateBlockerKindFromId(prior.id);
+        if (!kind) continue;
+        const cause = integrateCause ?? prior.integrateCause ?? prior.text ?? '';
+        await write(integrateBlockerResolutionEvent(prior, { integrateKind: kind, integrateRun: runId, integrateCause: cause, resolvedBy }));
+      }
+    }
+  }
+
+  async function raiseIntegrateBlocker(draft) {
+    const integrateKind = draft.integrateKind;
+    const integrateRun = draft.integrateRun ?? draft.run;
+    const integrateCause = draft.integrateCause ?? draft.text ?? '';
+    const id = draft.id ?? integrateBlockerId(integrateKind, integrateRun, integrateCause);
+    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause }, { now: nowFn })) return false;
+    if (openBlockerIds(events).has(id)) return false;
+    const payload = {
+      kind: 'blocker',
+      id,
+      text: draft.text,
+      ...integrateBlockerFields({ integrateKind, integrateRun, integrateCause }),
+    };
+    if (typeof deps.appendIntegrateBlockerIfNeeded === 'function') {
+      let out;
+      try { out = await deps.appendIntegrateBlockerIfNeeded(root, payload, { now: nowFn }); }
+      catch { return false; }
+      if (!out?.appended) return false;
+      events.push({ ...payload, ts: new Date(nowMs).toISOString() });
+      blocked.push(id);
+      return true;
+    }
+    await write(payload);
+    blocked.push(id);
+    return true;
   }
 
   async function execute(decision) {
@@ -425,7 +864,15 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     try {
       if (decision.action === 'integrate') {
         const out = await deps.integrate(root, runId);
-        await write({ kind: 'integration', run: runId, status: 'complete', ...(Number.isFinite(out?.files) ? { files: out.files } : {}) });
+        const integrationIncomplete = out?.status === 'partial' || out?.integrationStatus === 'partial' || out?.integrationStatus === 'queued' || out?.integrationStatus === 'failed-check';
+        const integrationComplete = !integrationIncomplete;
+        await write({
+          kind: 'integration',
+          run: runId,
+          status: integrationComplete ? 'complete' : 'partial',
+          ...(Number.isFinite(out?.files) ? { files: out.files } : {}),
+        });
+        if (integrationComplete) await resolveIntegrateBlockersForRun(runId, { resolvedBy: 'integrate', force: true });
       } else if (decision.action === 'resume') await deps.resume(root, runId);
       else if (decision.action === 'retry-failed') {
         const out = await deps.retryFailed(root, runId);
@@ -448,44 +895,93 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (last?.status === run.status) continue;
     const manifest = history.find(e => e.manifest)?.manifest;
     const retryOf = history.find(e => e.retryOf)?.retryOf;
-    await write({ kind: 'run', id: run.id, status: run.status, ...(run.counts ? { counts: run.counts } : {}), ...(Number.isFinite(run.costUsd) ? { costUsd: run.costUsd } : {}), ...(manifest ? { manifest } : {}), ...(retryOf ? { retryOf } : {}) });
+    await write({ kind: 'run', id: run.id, status: run.status, ...(run.counts ? { counts: run.counts } : {}), ...(Number.isFinite(run.costUsd) ? { costUsd: run.costUsd } : {}), ...(manifest ? { manifest } : {}), ...(retryOf ? { retryOf } : {}) }, { incidental: true });
+    if (runCountsAsIntegrated(run)) {
+      await resolveIntegrateBlockersForRun(run.id, { resolvedBy: 'integrate' });
+    } else if (['cancelled', 'abandoned'].includes(run.status)) {
+      await resolveIntegrateBlockersForRun(run.id, { resolvedBy: run.status === 'cancelled' ? 'cancel' : 'abandoned', allowPartial: true });
+    }
   }
+
+  const integrateCtx = { runs, root, readRunFolder: deps.readRunFolder };
 
   if (!journalBroken) {
     const open = openIds(events);
     for (const run of runs) {
-      if (run.integrable !== false) continue;
+      const nonIntegrating = run.integrable === false
+        || runSkipsIntegrateAttention(run, events, integrateCtx)
+        || (run.status === 'failed' && !runHasCompleteJob(run))
+        || ['cancelled', 'abandoned'].includes(run.status);
+      if (!nonIntegrating) continue;
       for (const id of open) {
         if (integrateBlockerRunId(id) !== run.id) continue;
+        const kind = integrateBlockerKindFromId(id);
+        if (kind !== 'integrate' && kind !== 'integrate-checkout') continue;
         const prior = latestBlockerEvent(events, id);
-        await write({ kind: 'blocker', id, resolved: true, text: prior?.text ?? '' });
+        await write(integrateBlockerResolutionEvent(prior ?? { id, text: '' }, {
+          integrateKind: kind ?? 'integrate',
+          integrateRun: run.id,
+          integrateCause: prior?.integrateCause ?? prior?.text ?? '',
+          resolvedBy: 'non-integrable',
+        }));
       }
     }
   }
 
   for (const run of runs) {
     if (journalBroken) break;
+    if (runSkipsIntegrateAttention(run, events, integrateCtx)) continue;
     const count = perRun.get(run.id) ?? 0;
     if (count >= MAX_ACTIONS_PER_RUN) continue;
-    const decision = decide(run, { now: nowMs, events, plan });
+    const decision = decide(run, { now: nowMs, events, plan, manifest: runManifest(run, events), runs });
     if (!decision || decision.action === 'wait') continue;
     if (decision.action === 'block') {
-      if (!openIds(events).has(decision.id)) {
+      if (decision.integrateKind) {
+        await raiseIntegrateBlocker({
+          id: decision.id,
+          text: decision.text,
+          integrateKind: decision.integrateKind,
+          integrateRun: decision.run,
+          integrateCause: decision.integrateCause ?? decision.text,
+        });
+      } else if (!openIds(events).has(decision.id)) {
         await write({ kind: 'blocker', id: decision.id, text: decision.text });
         blocked.push(decision.id);
       }
       continue;
     }
     if (decision.action === 'integrate') {
+      if (runSkipsIntegrateAttention(run, events, integrateCtx) || run.integrable === false) continue;
+      const outputPaths = runIntegrateOutputPaths(run, events, integrateCtx);
+      const manifest = runManifest(run, events);
+      const jobs = jobsFromRun(run, manifest);
+      const hasIntegratableJobs = integrableFromJobs(jobs)
+        || (run.integrable === true && runHasCompleteJob(run));
+      if (hasIntegratableJobs && outputPaths.length === 0) {
+        const text = `Run ${run.id} is complete but not integrated: integratable jobs are present but no output paths could be resolved from the run manifest or job state. Inspect the run and fix job outputs, then run: swarm integrate ${run.id}`;
+        await raiseIntegrateBlocker({
+          id: `integrate-checkout-${run.id}`,
+          text,
+          integrateKind: 'integrate-checkout',
+          integrateRun: run.id,
+          integrateCause: 'integratable jobs have no declared output paths',
+        });
+        continue;
+      }
       let checkout = null;
       try { checkout = await deps.checkout(root); } catch { checkout = null; }
-      const why = integrationBlocker(checkout);
+      const checkoutView = await resolveIntegrateCheckoutView(root, checkout, outputPaths, deps);
+      const why = integrationBlocker(checkoutView, { outputPaths });
       if (why) {
-        const id = `integrate-checkout-${run.id}`;
-        if (!openIds(events).has(id)) {
-          await write({ kind: 'blocker', id, text: `Run ${run.id} is complete but not integrated: ${why}. Move to a swarm/* branch with a clean tree, then run: swarm integrate ${run.id}` });
-          blocked.push(id);
-        }
+        const integrateCause = why;
+        const text = `Run ${run.id} is complete but not integrated: ${why}. Move to a swarm/* branch with a clean tree, then run: swarm integrate ${run.id}`;
+        await raiseIntegrateBlocker({
+          id: `integrate-checkout-${run.id}`,
+          text,
+          integrateKind: 'integrate-checkout',
+          integrateRun: run.id,
+          integrateCause,
+        });
         continue;
       }
     }
@@ -613,20 +1109,24 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (!depError && typeof deps.pendingApprovals === 'function') {
       try { approvalList = await deps.pendingApprovals(root); } catch { depError = true; approvalList = []; }
     }
-    const { startable } = pickReadyTickets({
+    const { startable, held } = pickReadyTickets({
       tickets: Array.isArray(ticketList) ? ticketList : [],
       approvals: Array.isArray(approvalList) ? approvalList : [],
     });
     let live = [];
     let busy = [];
     let capRoom = true;
-    if (!depError && typeof deps.liveRuns === 'function') {
+    if (pollObserveContext?.depError) depError = true;
+    if (!depError && pollObserveContext) {
+      live = Array.isArray(pollObserveContext.live) ? pollObserveContext.live : [];
+      busy = Array.isArray(pollObserveContext.busy) ? pollObserveContext.busy : [];
+    } else if (!depError && typeof deps.liveRuns === 'function') {
       try {
         live = await deps.liveRuns(root);
         if (!Array.isArray(live)) live = [];
       } catch { depError = true; live = []; }
     }
-    if (!depError && typeof deps.busyMarkers === 'function') {
+    if (!depError && !pollObserveContext && typeof deps.busyMarkers === 'function') {
       try {
         busy = await deps.busyMarkers();
         if (!Array.isArray(busy)) busy = [];
@@ -635,7 +1135,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (!depError && typeof deps.capRoom === 'function') {
       try { capRoom = await deps.capRoom(root); } catch { depError = true; capRoom = false; }
     }
-    if (!depError) noteStartReadyLive(memory, nowMs, { live, busy, runs });
+    if (!depError) noteStartReadyLive(mem, nowMs, { live, busy, runs });
 
     const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
     const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
@@ -648,34 +1148,113 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         await write({ kind: 'action', action: 'start-ready', reason, result: 'dependency-error' });
         actions.push({ action: 'start-ready', ok: false, result: 'dependency-error', reason });
       } else if (cooldownOpen && !hasLiveRun && !hasBusy && capRoom !== false && typeof deps.startScope === 'function') {
-        const ids = startable.map(t => t.id).slice(0, 8);
+        let workerSlots = null;
+        if (typeof deps.workerSlots === 'function') {
+          try { workerSlots = await deps.workerSlots(root); } catch { workerSlots = null; }
+        }
+        const freeSlots = Number.isInteger(workerSlots?.free) ? workerSlots.free
+          : (Number.isInteger(workerSlots?.max) ? workerSlots.max : null);
+        let doneTicketIds = new Set();
+        if (typeof deps.readTickets === 'function') {
+          const allTickets = await safe(() => deps.readTickets(root), []);
+          doneTicketIds = new Set((Array.isArray(allTickets) ? allTickets : []).filter(t => t?.status === 'done').map(t => t.id));
+        } else {
+          doneTicketIds = new Set((Array.isArray(ticketList) ? ticketList : []).filter(t => t?.status === 'done').map(t => t.id));
+        }
+        const heldIds = new Set((held ?? []).map(t => t.id));
+        let waveSettings = { skipSkeleton: false, maxJobs: freeSlots ?? 1 };
+        if (typeof deps.autopilotStartReadySettings === 'function') {
+          waveSettings = await safe(() => deps.autopilotStartReadySettings(root, { freeSlots }), waveSettings);
+        }
+        const slotLimit = Number.isInteger(waveSettings?.maxJobs) && waveSettings.maxJobs > 0
+          ? waveSettings.maxJobs
+          : (Number.isInteger(freeSlots) && freeSlots > 0 ? freeSlots : 1);
+        const waveTickets = planWaveBatch(startable, { slots: slotLimit, doneTicketIds, heldIds });
+        const ids = waveTickets.map(t => t.id).slice(0, 8);
         const reason = `${startable.length} startable ticket(s)${ids.length ? `: ${ids.join(', ')}` : ''}`;
         let ok = true;
         let result = 'ok';
         try {
-          const out = await deps.startScope({ root });
-          ok = out?.ok !== false;
-          if (ok) {
-            result = out?.result ?? 'ok';
-            memory.startReadyLastAt = nowMs;
-          } else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
+          const readScopeLoopLock = typeof deps.readScopeLoopLock === 'function'
+            ? deps.readScopeLoopLock
+            : rootArg => readLockOwner(rootArg, 'scope-loop');
+          const isAliveCheck = typeof deps.isAlive === 'function' ? deps.isAlive : defaultIsAlive;
+          const lockOwner = await safe(() => readScopeLoopLock(root), null);
+          const orphanedScopeLoop = lockOwner
+            && Number.isInteger(lockOwner.pid)
+            && lockOwner.pid > 0
+            && isAliveCheck(lockOwner.pid)
+            && !spawnedScopeLoopPids.has(lockOwner.pid);
+          if (orphanedScopeLoop) {
+            ok = true;
+            result = 'held-orphaned-scope-loop';
+          } else {
+            if (typeof deps.waitBeforeLaunchingWork === 'function') await deps.waitBeforeLaunchingWork(root);
+            const out = await deps.startScope({
+              root,
+              ticketIds: waveTickets.map(t => t.id),
+              maxJobs: waveTickets.length || slotLimit,
+              skipSkeleton: waveSettings?.skipSkeleton === true,
+              batched: waveTickets.length > 1,
+            });
+            ok = out?.ok !== false;
+            if (ok) {
+              result = out?.result ?? 'ok';
+              if (Number.isInteger(out?.pid) && out.pid > 0) spawnedScopeLoopPids.add(out.pid);
+              if (result === 'held-memory') memory.startReadyHoldAt = nowMs;
+              else memory.startReadyLastAt = nowMs;
+            } else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
+          }
         } catch (error) {
           ok = false;
           result = String(error?.message ?? error).slice(0, RESULT_LIMIT);
         }
-        await write({ kind: 'action', action: 'start-ready', reason, result });
+        if (ok && waveTickets.length > 1) {
+          await write({ kind: 'note', text: `batched ${waveTickets.length} tickets into one wave` }, { incidental: true });
+        }
+        const startReadyIncidental = ok && (result === 'held-memory' || result === 'held-orphaned-scope-loop');
+        await write({ kind: 'action', action: 'start-ready', reason, result }, { incidental: startReadyIncidental });
         actions.push({ action: 'start-ready', ok, result, reason });
       }
     }
   }
 
   if (deps.policyPass) {
-    try { await executePolicyPass(root, deps, { now: nowMs }); } catch { /* policy pass never stops autopilot */ }
+    try { await executePolicyPass(root, deps, { now: nowMs }); } catch (error) {
+      console.error('[tools/autopilot.mjs] policy pass:', error?.message ?? error);
+    }
   }
 
-  if (typeof deps.notify === 'function') { try { await deps.notify(root); } catch { /* a notifier never stops the loop */ } }
+  if (!journalBroken) {
+    try { await runNeedsYouTriagePass(root, deps, { now: nowFn }); } catch (error) {
+      console.error('[tools/autopilot.mjs] needs-you triage:', error?.message ?? error);
+    }
+  }
 
-  return { actions, blocked, idle: actions.length === 0 && blocked.length === 0, ...(journalBroken ? { error: journalBroken } : {}) };
+  if (typeof deps.notify === 'function') {
+    try { await deps.notify(root); } catch (error) {
+      console.error('[tools/autopilot.mjs] notify:', error?.message ?? error);
+    }
+  }
+
+  if (!journalBroken) {
+    try {
+      const pollSnapshot = await buildAutopilotPollDigest(root, deps, {
+        now: nowFn, legacyPlan, memory: mem, observeContext: pollObserveContext,
+      });
+      if (pollSnapshot?.digest) await writeAutopilotPollDigest(root, pollSnapshot.digest);
+    } catch (error) {
+      console.error('[tools/autopilot.mjs] write poll digest:', error?.message ?? error);
+    }
+  }
+
+  return {
+    actions,
+    blocked,
+    idle: actions.length === 0 && blocked.length === 0,
+    ...(stepWroteJournal ? { stepWroteJournal } : {}),
+    ...(journalBroken ? { error: journalBroken } : {}),
+  };
 }
 
 async function defaultSleep(ms, signal) {
@@ -687,20 +1266,234 @@ async function defaultSleep(ms, signal) {
 
 export const MIN_INTERVAL_MS = 5000;
 
+const AUTOPILOT_POLL_DIGEST_FILE = path.join('.swarm', 'autopilot', 'last-poll-digest');
+
+function stableDigest(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function autopilotPollSnapshotIdle(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  if (payload.wave) return false;
+  for (const run of Array.isArray(payload.runs) ? payload.runs : []) {
+    if ((run.journalStatus ?? null) !== (run.status ?? null)) return false;
+    const action = run.decision?.action;
+    if (action && action !== 'wait') return false;
+  }
+  const startReady = payload.startReady;
+  if (startReady && !startReady.depError && startReady.startable > 0
+    && startReady.cooldownOpen && !startReady.hasLiveRun && !startReady.hasBusy && startReady.capRoom) {
+    return false;
+  }
+  return true;
+}
+
+function journalEventFinger(events) {
+  const list = Array.isArray(events) ? events : [];
+  return list.map(event => {
+    if (!event || typeof event !== 'object') return null;
+    const out = { kind: event.kind };
+    if (event.id !== undefined) out.id = event.id;
+    if (event.status !== undefined) out.status = event.status;
+    if (event.action !== undefined) out.action = event.action;
+    if (event.run !== undefined) out.run = event.run;
+    if (event.resolved !== undefined) out.resolved = event.resolved;
+    if (event.wave !== undefined) out.wave = event.wave;
+    if (event.integrateKind !== undefined) out.integrateKind = event.integrateKind;
+    if (event.integrateRun !== undefined) out.integrateRun = event.integrateRun;
+    return out;
+  });
+}
+
+export async function readAutopilotPollDigest(root) {
+  try {
+    const text = await fs.readFile(path.join(root, AUTOPILOT_POLL_DIGEST_FILE), 'utf8');
+    const digest = text.trim();
+    return /^[a-f0-9]{64}$/.test(digest) ? digest : null;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    return null;
+  }
+}
+
+export async function writeAutopilotPollDigest(root, digest) {
+  if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) return;
+  const dir = path.join(root, '.swarm', 'autopilot');
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(root, AUTOPILOT_POLL_DIGEST_FILE);
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, `${digest}\n`, { encoding: 'utf8', mode: 0o600 });
+  await fs.rename(tmp, file);
+}
+
+/** Stable digest of autopilot inputs and pending decisions (no side effects). */
+export async function buildAutopilotPollDigest(root, deps, { now = Date.now, legacyPlan = false, memory = null, observeContext = null } = {}) {
+  const nowMs = typeof now === 'function' ? now() : nowValue(now);
+  let events = [];
+  try { events = await deps.readJournal(root); } catch { return null; }
+  const eventList = Array.isArray(events) ? events : [];
+  const loadedRuns = await safe(() => deps.loadRuns(root), []);
+  const runs = (Array.isArray(loadedRuns) ? loadedRuns : []).slice(0, MAX_RUNS);
+  const plan = await safe(() => deps.readPlan(root), null);
+  const open = openIds(eventList);
+  const runParts = [];
+  for (const run of runs) {
+    const history = eventList.filter(e => e && e.kind === 'run' && e.id === run.id);
+    const last = history[history.length - 1];
+    const decision = decide(run, {
+      now: nowMs,
+      events: eventList,
+      plan,
+      manifest: runManifest(run, eventList),
+      runs,
+    });
+    runParts.push({
+      id: run.id,
+      status: run.status ?? null,
+      integrated: run.integrated === true,
+      integrable: run.integrable,
+      counts: run.counts ?? null,
+      pause: run.pause ?? null,
+      journalStatus: last?.status ?? null,
+      decision: decision
+        ? {
+          action: decision.action,
+          run: decision.run ?? null,
+          id: decision.id ?? null,
+          integrateKind: decision.integrateKind ?? null,
+        }
+        : null,
+    });
+  }
+  let startReady = null;
+  if (typeof deps.readyTickets === 'function') {
+    let ticketList = [];
+    let approvalList = [];
+    let depError = false;
+    try { ticketList = await deps.readyTickets(root); } catch { depError = true; ticketList = []; }
+    if (!depError && typeof deps.pendingApprovals === 'function') {
+      try { approvalList = await deps.pendingApprovals(root); } catch { depError = true; approvalList = []; }
+    }
+    const { startable, held } = pickReadyTickets({
+      tickets: Array.isArray(ticketList) ? ticketList : [],
+      approvals: Array.isArray(approvalList) ? approvalList : [],
+    });
+    let live = [];
+    let busy = [];
+    let capRoom = true;
+    const observed = observeContext && typeof observeContext === 'object' ? observeContext : null;
+    if (observed?.depError) depError = true;
+    if (!depError && observed && Array.isArray(observed.live)) {
+      live = observed.live;
+    } else if (!depError && typeof deps.liveRuns === 'function') {
+      try { live = await deps.liveRuns(root); if (!Array.isArray(live)) live = []; } catch { depError = true; }
+    }
+    if (!depError && observed && Array.isArray(observed.busy)) {
+      busy = observed.busy;
+    } else if (!depError && typeof deps.busyMarkers === 'function') {
+      try { busy = await deps.busyMarkers(); if (!Array.isArray(busy)) busy = []; } catch { depError = true; }
+    }
+    if (!depError && typeof deps.capRoom === 'function') {
+      try { capRoom = await deps.capRoom(root); } catch { depError = true; capRoom = false; }
+    }
+    const mem = memory && typeof memory === 'object' ? memory : {};
+    const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
+    const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
+    startReady = {
+      depError,
+      startable: startable.length,
+      held: (held ?? []).length,
+      hasLiveRun,
+      hasBusy,
+      capRoom: capRoom !== false,
+      cooldownOpen: startReadyCooldownOpen(mem, nowMs),
+      lastAt: mem.startReadyLastAt ?? null,
+      lastLiveAt: mem.startReadyLastLiveAt ?? null,
+    };
+  }
+  const wave = legacyPlan ? nextWave(eventList, plan) : null;
+  let unlockTickets = null;
+  if (typeof deps.readTickets === 'function') {
+    const tickets = await safe(() => deps.readTickets(root), []);
+    unlockTickets = stableDigest(
+      (Array.isArray(tickets) ? tickets : []).map(t => ({
+        id: t?.id ?? null,
+        status: t?.status ?? null,
+        blockedBy: t?.blockedBy ?? null,
+        dependsOn: t?.dependsOn ?? t?.deps ?? null,
+      })).sort((a, b) => String(a.id).localeCompare(String(b.id))),
+    );
+  }
+  let policyPass = null;
+  const policyCfg = deps.policyPass;
+  if (policyCfg && typeof policyCfg === 'object' && typeof policyCfg.loadRules === 'function') {
+    const rules = await safe(() => policyCfg.loadRules(root), null);
+    if (rules != null) {
+      const listOpen = policyCfg.openRequests ?? policyCfg.listOpenRequests;
+      if (typeof listOpen === 'function') {
+        const items = await safe(() => listOpen(root), []);
+        policyPass = stableDigest(
+          filterPolicyPassItems(items).map(item => ({ kind: item.kind, id: item.id ?? null })).sort((a, b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`)),
+        );
+      }
+    }
+  }
+  let notify = null;
+  if (typeof deps.pendingNotifications === 'function') {
+    const pending = await safe(() => deps.pendingNotifications(root), []);
+    notify = stableDigest(Array.isArray(pending) ? pending : []);
+  } else {
+    notify = stableDigest(
+      runs.map(r => ({ id: r.id, status: r.status ?? null, unblocks: r.unblocks ?? null })),
+    );
+  }
+  const triage = stableDigest({
+    failed: runs.filter(r => r.status === 'failed').map(r => ({
+      id: r.id,
+      counts: r.counts ?? null,
+      handled: r.handled === true,
+    })),
+    openTriageBlockers: [...open].filter(id => id.startsWith('triage-')).sort(),
+  });
+  const payload = {
+    v: 1,
+    legacyPlan: Boolean(legacyPlan),
+    events: journalEventFinger(eventList),
+    openBlockers: [...open].sort(),
+    runs: runParts,
+    wave: wave?.id ?? null,
+    startReady,
+    unlockTickets,
+    policyPass,
+    notify,
+    triage,
+  };
+  return { digest: stableDigest(payload), idle: autopilotPollSnapshotIdle(payload), payload };
+}
+
 export async function runAutopilot(root, deps, { intervalMs = 30000, once = false, maxSteps = Infinity, signal, sleep = defaultSleep, now = Date.now, legacyPlan = false } = {}) {
   const results = [];
   const memory = new Set();
   const wait = Math.max(MIN_INTERVAL_MS, Number(intervalMs) || MIN_INTERVAL_MS);
   while (!signal?.aborted && results.length < maxSteps) {
     // The panic button (swarm stop --all): a loop that is still alive stops at the next step instead of starting more work.
-    if (await stopGuard(root).catch(() => null)) { results.push({ action: 'stopped', note: 'stopped: swarm stop --all marker present' }); break; }
+    if (await stopGuard(root).catch((error) => {
+      console.error('[tools/autopilot.mjs] stopGuard check:', error?.message ?? error);
+      return null;
+    })) { results.push({ action: 'stopped', note: 'stopped: swarm stop --all marker present' }); break; }
     let step;
     try {
-      try { await deps.busy?.begin?.(); } catch { /* marker must never stop the loop */ }
+      try { await deps.busy?.begin?.(); } catch (error) {
+        console.error('[tools/autopilot.mjs] busy begin:', error?.message ?? error);
+      }
       step = await autopilotStep(root, deps, { now, memory, legacyPlan });
     } finally {
-      try { await deps.busy?.end?.(); } catch { /* marker must never stop the loop */ }
+      try { await deps.busy?.end?.(); } catch (error) {
+        console.error('[tools/autopilot.mjs] busy end:', error?.message ?? error);
+      }
     }
+    if (once && step && !step.stepWroteJournal) step.stepWroteJournal = false;
+    noteAutopilotStep(root, step, { once });
     results.push(step);
     // A broken journal ends the loop: nothing it does could be remembered across steps by anyone else.
     if (step.error) break;

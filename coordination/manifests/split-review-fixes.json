@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "jobs": [
+    {
+      "id": "T-8019",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tools/wiring.mjs",
+        "tests/scope-split-guards.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/init-profile.mjs",
+        "tools/ticket-manifest.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-ingest-owns-tests.test.mjs",
+        "tests/scope-root-files.test.mjs",
+        "tests/wiring-build-owns.test.mjs"
+      ],
+      "prompt": "Ticket T-8019 (owner bug, atlas stage S3): the splitter put tests in a LATER ticket/stage than the code they test (T-0055 tests for T-0053/T-0054), breaking R-008 and failing every wave with 'Missing context' (the worker dispatch refuses context files that do not exist yet). Fix split ingest (tools/scope-commands.mjs ingest path around ticketsFromStageLists and orderTestsAfterBuild/addWiringDeps in tools/wiring.mjs): (1) a test ticket must be in the SAME stage as the build ticket(s) whose module files it tests (match by its tests/context naming the build ticket's files, or its scopeRefs) and must dependsOn those build tickets (same or later wave inside the stage); a test ticket placed in a later stage than the code it tests is repaired by moving it into the build ticket's stage with dependsOn added and a note 'moved T-x into stage S with the code it tests', or rejected per ticket (the T-8008 per-ticket rejection) when the build ticket cannot be found. (2) Context entries must exist in the repo at ticket start (git-tracked file list the ingest already reads) or be produced (files) by a ticket in its dependsOn chain; otherwise drop that context entry with a note 'dropped context X: it does not exist yet and no earlier ticket creates it'. (3) Never assign always-protected files to worker tickets: ALWAYS_PROTECTED in tools/init-profile.mjs ('.git/', '.swarm/', '.project-swarm.json', 'coordination/checks.json') plus the project profile's protected paths (use the existing protected-path helper the codebase uses; see protectedPathHit usage): a ticket whose files include one is rewritten so the protected file is removed from its files and a separate type 'human' owner-window ticket ('Owner commit window: edit <file> (<reason from the ticket>)') is added that the original ticket dependsOn when it needs the change, with a note. Tests in tests/scope-split-guards.test.mjs drive the ingest with temp fixtures: a later-stage test ticket is moved (or rejected when unmatched); a non-existing context entry is dropped while a dependsOn-produced one is kept; a ticket writing coordination/checks.json gets the file removed and an owner-window human ticket; and the rest of the split ingests. Keep tests/scope-ingest-*.test.mjs, tests/scope-root-files.test.mjs and tests/wiring-build-owns.test.mjs passing. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/scope-split-guards.test.mjs tests/scope-ingest-*.test.mjs tests/scope-root-files.test.mjs tests/wiring-build-owns.test.mjs` and `node tools/check-package.mjs`. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test with temp fixtures as existing tests in context do.",
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-recorder-lanes.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-approve-managers.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-ingest-acceptance.test.mjs",
+        "tests/scope-ingest-sensitive.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs",
+        "tests/wiring.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import these modules for unrelated behavior; the coordinator runs the full suite after integration."
+    },
+    {
+      "id": "T-8020",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/scope-loop.mjs",
+        "tools/acceptance.mjs",
+        "tests/acceptance-review-skip.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/ticket-target-worktree.test.mjs",
+        "tools/tickets.mjs"
+      ],
+      "prompt": "Ticket T-8020 (owner bug): an acceptance review that cannot be generated or started for one ticket (its files live in a different worktree, the review manifest cannot be built, or the review run fails to start for any reason) currently stalls the whole wave in tools/scope-loop.mjs (recordReview / queueResumeReviews ~225-250 and the wave review path) and tools/acceptance.mjs. Fix: catch per-ticket review-generation and review-start failures; for THAT ticket append a ticket note ('acceptance review skipped: <reason>; run it by hand with swarm scope acceptance-review after the wave') and a named non-blocking warning ('acceptance-review-skipped: T-x: <reason>') in the wave result; the ticket stays in review (never marked done without a review) and the rest of the wave proceeds and completes; never retry it in a loop within the same wave. Tests in tests/acceptance-review-skip.test.mjs with injected deps: a wave with two tickets in this checkout and one whose files are in a different worktree completes the two, records the warning and the note for the third, and the loop does not stall or spin; a review-start exception for one ticket is handled the same way. Keep tests/scope-loop.test.mjs and tests/ticket-target-worktree.test.mjs passing. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/acceptance-review-skip.test.mjs tests/scope-loop.test.mjs tests/ticket-target-worktree.test.mjs` and `node tools/check-package.mjs`. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test with temp fixtures as existing tests in context do.",
+      "ignoreTests": [
+        "tests/acceptance-review-worktree.test.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/acceptance.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/human-progress.test.mjs",
+        "tests/practice-tooling.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-loop-review-stall.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import these modules for unrelated behavior; the coordinator runs the full suite after integration."
+    },
+    {
+      "id": "T-8021",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/board-data.mjs",
+        "tests/board-accuracy-activity.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tools/project-spend.mjs"
+      ],
+      "prompt": "Ticket T-8021: the board card's lastTicketFinishedAt reads only the selected ledger's log, so project-swarm shows 2026-10-21 06:02 while tickets finish in the roadmap-build worktree's ledger (a family ledger). Make lastTicketFinishedAt the newest ticket-done time across the tickets.log (and ledger history) of EVERY family member: main folder, every linked worktree and scratch worktree (worktreeFamily(root, { all: true }) in tools/project-spend.mjs), falling back to run job finishedAt for ticket ids as today. Add a test to tests/board-accuracy-activity.test.mjs whose expected value is computed by reading every family tickets.log from disk: the newest done transition lives only in a linked worktree's ledger and the card shows it. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-activity.test.mjs tests/board-accuracy-*.test.mjs`. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test with temp fixtures as existing tests in context do.",
+      "ignoreTests": [
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-card-ui.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress-untracked-filter.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-idle-words.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import these modules for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

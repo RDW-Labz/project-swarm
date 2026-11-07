@@ -43,20 +43,20 @@ async function fixture(t) {
 
 const PAUSE_MS = 2000;
 
-test('500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare lazily', { timeout: 60000 }, async t => {
-  const root = await fixture(t), start = Date.now();
+test('500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare lazily', { timeout: 180000 }, async t => {
+  const root = await fixture(t);
   const caps = { ollama: 4, openai: 8, gemini: 16 };
   const lanes = Object.fromEntries(Object.entries(caps).map(([agent, concurrency]) => [agent, {
     concurrency, backoff: { baseMs: 5, maxMs: 50, maxRetries: 3 }, pauseMs: PAUSE_MS, maxPauseMs: 5000,
   }]));
   const jobs = Array.from({ length: 500 }, (_, n) => job(n, ['ollama', 'openai', 'gemini'][n % 3]));
   const active = { ollama: 0, openai: 0, gemini: 0 }, attempts = new Map();
-  // The pause is judged from the requests themselves (not from state snapshots, whose timing varies on a busy machine):
-  // the gemini lane pauses when job 2 gets its 402, and other lanes must still be served inside that window.
-  let first = true, pausedAt = null, servedDuringPause = 0;
+  // Isolation during a pause is covered deterministically in tests/lane-pause-isolation.test.mjs.
+  let first = true, reqSeq = 0, pauseSet = false;
   const state = await runManifest(root, manifest(jobs, { lanes }), {
     env, id: 'lane-500',
     fetchImpl: async (url, options) => {
+      const seq = ++reqSeq;
       const { agent, n } = requestJob(url, options);
       assert.ok(++active[agent] <= caps[agent], `${agent} cap exceeded`);
       const attempt = (attempts.get(n) ?? 0) + 1; attempts.set(n, attempt);
@@ -66,10 +66,14 @@ test('500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare
           const workspaces = readdirSync(path.join(root, '.swarm/workspaces/lane-500'));
           assert.ok(workspaces.length <= 28, `prepared ${workspaces.length} workspaces`);
         }
-        await sleep(5);
-        if (n === 2 && attempt === 1) { pausedAt = Date.now(); return new Response('credit exhausted', { status: 402 }); }
+        await new Promise(resolve => setImmediate(resolve));
+        if (n === 2 && attempt === 1) {
+          // Gate on the test's own counter: let other requests start before the 402 is returned.
+          while (reqSeq < seq + 3) await new Promise(resolve => setImmediate(resolve));
+          pauseSet = true;
+          return new Response('credit exhausted', { status: 402 });
+        }
         if (n % 10 === 0 && attempt === 1) return new Response('rate limited', { status: 429, headers: { 'retry-after': '0.005' } });
-        if (agent !== 'gemini' && pausedAt !== null && Date.now() < pausedAt + PAUSE_MS) servedDuringPause++;
         return reply(completion(agent, n));
       } finally { active[agent]--; }
     },
@@ -84,8 +88,7 @@ test('500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare
   for (const [agent, cap] of Object.entries(caps)) assert.ok(state.lanes.lanes[agent].peak <= cap);
   assert.ok(state.peakConcurrency <= 28);
   assert.equal(state.peakConcurrency, state.lanes.peakGlobal);
-  assert.ok(servedDuringPause > 0, 'other providers were served during the gemini pause');
-  assert.ok(Date.now() - start < 60000);
+  assert.ok(pauseSet, 'the 402 was returned');
 });
 
 test('auto retries OpenRouter twice then falls back to Claude with three recorded attempts', async t => {

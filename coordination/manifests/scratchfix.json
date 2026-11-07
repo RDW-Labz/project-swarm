@@ -1,0 +1,30 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "scratchfix",
+   "agent": "auto",
+   "prompt": "Swarm plumbing bug: a Cursor job fails with 'Coordinator failed: ENOTEMPTY: directory not empty, rmdir .../swarm-cursor/<run>-<job>/swarm-test-tmp-XXXX' (seen twice on T-0090). In tools/swarm/core-71.mjs the scratch directory cleanup (the fs.rm of scratchDir near line 186) throws when a test process the worker started is still writing into it, and the exception fails the whole job even though the work completed. Make scratch cleanup best-effort: pass maxRetries 5 and retryDelay 200 to fs.rm, and if it still throws, record the message in the job's cleanupError field (the field already exists) and carry on; the job status must not change because of cleanup. Do the same for the codex scratch path if it shares the code. Add tests in tests/scratch-cleanup.test.mjs: a scratch dir that a background writer keeps refilling for a short time is removed after retries; a dir that cannot be removed (make the parent read-only on a temp dir, skip the test on a platform where that does not work) leaves the job complete with cleanupError set. Keep tests/cursor-adapter.test.mjs, tests/codex-adapter.test.mjs, tests/cursor-claims.test.mjs and tests/lanes-run.test.mjs passing.",
+   "context": [
+    "tools/swarm/core-71.mjs",
+    "tests/cursor-adapter.test.mjs",
+    "tests/codex-adapter.test.mjs",
+    "tests/cursor-claims.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-71.mjs",
+    "tests/scratch-cleanup.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/b7-review-fixes.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/lifecycle-list-shared.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ],
+   "ignoreTestsReason": "adapter tests in context; full suite before merge"
+  }
+ ]
+}

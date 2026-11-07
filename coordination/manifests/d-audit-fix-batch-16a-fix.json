@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-16a-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 16a fixup (from Opus re-review of PR #438). Edit ONLY tools/project-commands.mjs. Logging only.\n\nreadLedger (tools/tickets.mjs:210) returns null for a missing ledger and rethrows a corrupt ledger's JSON.parse SyntaxError as is. V8's SyntaxError message includes a slice of the file text, so ledger contents can reach stderr.\nChange the two readLedger(...).catch((error) => { console.error(...); return null; }) handlers (currentBrief ~line 113, pending worktree ~line 264) so that:\n- error?.code === 'ENOENT' stays silent;\n- a SyntaxError logs only 'corrupt ledger (SyntaxError)', NEVER error.message;\n- anything else logs error?.message ?? error as now (keep wtRoot in the second one).\nKeep `return null;`. If the file already has a helper for the cap-raise path's 'corrupt file (SyntaxError)' masking, reuse the same wording. Change nothing else.\n\nThen run: node --import ./tests/_isolate-config.mjs --test the tests that import project-commands (grep tests/ for project-commands) and confirm green. One-line summary.",
+      "context": [
+        "tools/tickets.mjs"
+      ],
+      "outputs": [
+        "tools/project-commands.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/handoff-regenerate.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

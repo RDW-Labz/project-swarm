@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-core2-batch-12b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 12b (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/swarm/core-2.mjs' section. Edit ONLY tools/swarm/core-2.mjs. Visibility only: do NOT change control flow, return values, throws, or user-facing messages.\n\nNo logger exists in this file. Use: console.error('[tools/swarm/core-2.mjs] <short context>:', error?.message ?? error)\n\nFlagged lines and what to do:\n1. Line 58 `catch { /* skip unreadable/corrupt state */ }` reading .swarm/runs/<id>/state.json: missing (ENOENT/ENOTDIR) or corrupt JSON (error instanceof SyntaxError) are the EXPECTED cases; stay silent for those. Log anything else. Keep skipping exactly as today.\n2. Line 84 `catch { /* not a file: treat the value itself as the list */ }` in resolveLicensesFlag: the value is often a bare comma list, not a path. Expected codes: ENOENT, ENOTDIR, EISDIR, ENAMETOOLONG; stay silent for those. Log anything else (e.g. EACCES on a real file the user meant). text stays null either way.\n3. Line 169 `catch { /* try the next candidate */ }` in resolvePathCwdThenRoot: ENOENT/ENOTDIR are expected (stay silent). Log anything else, still try the next candidate. The final throw stays unchanged.\n4. Line 180 `readLedger(root).catch(() => null)` in ticketForBudgetFailure: bind and log (keep evaluating to null).\n5. Line 183 `addCiFixTicket(...).catch(() => null)`: a budget failure's fix ticket was silently NOT created. Log UNCONDITIONALLY, including result.id, and keep evaluating to null.\n6. Line 199 `}catch{/* version stays unknown */}` in the unknown-command message builder: bind and log, version stays 'unknown'. The returned message is unchanged.\n\nDo NOT touch line 53's `catch { continue; }` or any other catch. Do not refactor, reformat, rename, or change exports. Keep existing comments.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run the tests that cover this file (grep tests/ for core-2.mjs / resolvePathCwdThenRoot / resolveLicensesFlag / ticketForBudgetFailure / 'Unknown command') and confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/swarm/core-2.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/swarm-source-helper.test.mjs"
+      ],
+      "ignoreTestsReason": "these reference core modules generically or through CLI entry points; covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8013",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/watch-assets/board.js:332-505 renderWatchProjectCard (head name/machine/swarm version 338-349, percent+meter 365-381, Now/Next/Blocked rows 382-469, slotsSentence 304-322/423-426, ETA words+title math 427-437, facts 471-491, heads-up row 497-504); tools/watch-assets/swarm-ui.css:257-292. tests/board-card-ui.test.mjs: watch project card shows data from projectOverview.card; slotsSentence never claims free slots when all are in use; finished project card is quiet without rows or heads-up.",
+          "gap": "Fixture test does not assert project name, machine host, installed version string, or heads-up copy when card.headsUp is set (removal would not fail CI)."
+        },
+        {
+          "n": 2,
+          "met": false,
+          "evidence": "tools/watch-assets/board.js:412-468 toggles + cardItemList(284-302) with per-item command; watchNum/toggle labels+titles 255-261,414-464. tests/board-card-ui.test.mjs: watch project card waiting list opens…; watch project card need-you list opens…; assertNumberElements in watch project card shows data…",
+          "gap": "Ready tickets: watch project card lists show exact commands for ready tickets never clicks the ready toggle or asserts list open/copy (unlike waiting and need-you tests); no test would fail if ready toggle stopped revealing the list."
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tests/board-card-ui.test.mjs: watch project card shows data from projectOverview.card (makeBoardFixture + boardSnapshot, numeric fields vs p.card, assertNumberElements for label+title on every .watch-num and .watch-card-toggle).",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

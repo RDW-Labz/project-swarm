@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-scan",
+      "agent": "auto",
+      "prompt": "Build tools/split-scan.mjs, the scanner for the tools/swarm.mjs split (a pure move, no behavior change). It reads JavaScript source text (an ES module, about 9500 lines, no parser library available) and exports scanModule(text) returning { items, imports, exports, order } where every top-level item is one of: function declaration (async, generator, export), class, const/let/var statement (including destructuring and multiple declarators), import statement, export-from or export-list statement, or an expression statement; each item has { kind, names (declared identifiers), exported (bool), start, end (character offsets, the span includes the leading comment block directly attached above it and the trailing newline, never the blank line separating items), startLine, endLine, text, uses (set of identifier names the item references that are not declared inside it, found with a real tokenizer) }. The tokenizer must handle: line and block comments, single and double quoted strings with escapes, template literals with nested ${} expressions (nesting to any depth), regular expression literals versus division (decide by the previous significant token), numeric literals, shebang line, optional chaining and spread, object property keys and member accesses (an identifier after a dot or a question-dot is not a reference; an object literal key before a colon is not a reference unless shorthand), labels, destructuring defaults, arrow functions, and getters or setters. Scope handling: collect parameters, local declarations (let, const, var, function, class, catch parameters, for-loop heads) per function or block so locals shadow top-level names; if unsure, over-approximate uses (report the name) but never under-approximate. Also export dependencyGraph(items) giving for each item the names of other top-level items it uses, and a function topLevelNameIndex(items) mapping every declared name to its item. Be deterministic. Add tests/split-scan.test.mjs with fixture sources covering every case above (at least 40 assertions), and a test that scans the real tools/swarm.mjs and checks: the concatenation of all item texts and the gaps between them equals the original text exactly (lossless round trip), every export statement name is found in some item, no item overlaps another, and the scan finishes in under 5 seconds. No dependencies: plain node:fs, node:path, node:test, node:assert only. No token-shaped literals. Do not edit tools/swarm.mjs. ignoreTests reason: only new files are written.",
+      "context": [
+        "tools/swarm.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs"
+      ],
+      "timeoutMs": 2700000
+    }
+  ]
+}

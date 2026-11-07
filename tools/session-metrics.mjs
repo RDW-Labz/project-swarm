@@ -43,7 +43,11 @@ export async function readSessionMetrics(root, { kinds } = {}) {
     try { files = await fs.readdir(dir); } catch { continue; }
     for (const file of files) {
       if (!file.endsWith('.json')) continue;
-      try { records.push(JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'))); } catch { /* skip unreadable/corrupt */ }
+      try { records.push(JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'))); } catch (error) {
+        if (error?.code === 'ENOENT') { /* file removed after readdir */ }
+        else if (error instanceof SyntaxError) console.error('[tools/session-metrics.mjs] corrupt session metric (SyntaxError):', file);
+        else console.error('[tools/session-metrics.mjs] read session metric:', file, error?.message ?? error);
+      }
     }
   }
   return records.sort((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0));

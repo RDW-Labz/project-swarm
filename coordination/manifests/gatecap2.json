@@ -1,0 +1,36 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "jobs": [
+  {
+   "id": "gaterr",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Create a new standalone module tools/gate-rerun.mjs (ES module, no dependencies, not wired anywhere) and its test tests/gate-rerun.test.mjs (node:test, fake spawn, no network, no real browsers). Purpose: when a merge-queue or integrate gate check fails, nothing records the assertion or stack. The module provides: (1) parseFailedTests(output, kind): returns up to 50 failing test ids from pytest output (lines starting with FAILED or ERROR; the id is the text before ' - ') or node:test TAP output ('not ok N - name' lines, with the file from a nearby 'location:' line when present); kind is 'pytest' | 'node-test' | 'auto' (auto detects from the text). (2) buildRerunArgv(argv, failed, kind): returns a new argv that re-runs only those tests: for pytest keep the argv up to and including the pytest invocation (python -m pytest or pytest), drop -q and any path or {affected} arguments, add '-rA', '-p', 'no:cacheprovider' and the failing ids; for node-test keep the node prefix flags, add --test-name-pattern per failed name and the failing files; return null when it cannot build a safe rerun. (3) async rerunFailed({argv, cwd, env, failed, kind, timeoutMs, spawnImpl, maxBytes}): runs the rerun argv with spawnImpl (default child_process.spawn, detached, never a shell), on timeout (default 120000 ms) kills the process group with SIGTERM then SIGKILL after a short wait, keeps at most maxBytes (default 65536) of combined output (the tail), redacts values of environment variables whose names match KEY|TOKEN|SECRET|PASSWORD|PAT, and any 'Bearer ...' or 'sk-...' string, and returns {ok, exitCode, signal, timedOut, tail, argv}. Tests: parsing both kinds, argv building for both kinds and null for unsafe input, timeout kill with a fake child, trimming and redaction. Do not edit any other file.",
+   "context": [
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/gate-rerun.mjs",
+    "tests/gate-rerun.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  },
+  {
+   "id": "gatefp",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Create a new standalone module tools/gate-fingerprint.mjs (ES module, no dependencies, not wired anywhere) and its test tests/gate-fingerprint.test.mjs (node:test, temp folders, no network). Purpose: compare the environment a gate check ran in with the worker's. The module provides: (1) gateEnvFingerprint({cwd, env, ports, concurrency, timeoutMs, cleanedDirs, browserPath, node}): a plain object with cwd, an allowlist of environment values (HOME, PATH, TZ, LANG, CI, NODE_OPTIONS, PLAYWRIGHT_BROWSERS_PATH, SWARM_PORT_BASE, VIRTUAL_ENV), the sorted list of every other environment variable NAME only (never values), ports, concurrency, timeoutMs, cleanedDirs, browserPath and the node version. (2) diffFingerprints(a, b): {same: boolean, differences: [{field, a, b}]} comparing every field, each allowlist value, and the extra variable names. (3) async saveGateCapture(runDir, ticketId, capture): writes JSON to <runDir>/gate-failures/<ticketId>.json (ticketId must match /^[A-Za-z0-9._-]{1,64}$/ else throw; refuse a symlinked folder or file; folder mode 0o700, file 0o600; atomic write through a temp file and rename; keep the file under 256 KB by trimming a 'tail' string field) and return the path. Tests: the fingerprint never contains a secret value, diff output, same fingerprints are same, safe-path and symlink refusal, ticketId validation, trimming. Do not edit any other file.",
+   "context": [
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/gate-fingerprint.mjs",
+    "tests/gate-fingerprint.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}

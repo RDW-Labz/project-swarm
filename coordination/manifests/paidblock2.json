@@ -1,0 +1,48 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "paidblock2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "sensitive": true,
+   "prompt": "Routing defense in depth for the paid-lane pause (owner order). In tools/job-types.mjs the job type presets list the paid anthropic lane BEFORE cursor (API_WORK_TYPES = local, anthropic, cursor; test route local, codex, anthropic, hermes, cursor; review anthropic, cursor; docs local, anthropic, hermes, cursor). Reorder every preset route so the free or flat-rate lanes come first and anthropic is always LAST: build and fix use local, cursor, anthropic; test uses local, cursor, codex, hermes, anthropic; review uses cursor, anthropic; docs uses local, cursor, hermes, anthropic; research, merge and lead stay as they are; keep every lane that is in a route today, only change the order (update the comment above API_WORK_TYPES to say the paid lane is last and is skipped while paused). In tools/router.mjs typeRouteAgents must also drop an agent whose lane is paused in the resolved lanes (use laneConfigPaused as the candidate filter in routeJob does) so a paused lane is removed from the typed list itself, not only later; the cheap order and fallback chain must never place anthropic or openrouter before cursor, codex or hermes. Tests in tests/job-type-route-order.test.mjs: for every preset in JOB_TYPES that lists anthropic, anthropic comes after cursor; routeJob with lanes where anthropic and openrouter are paused never returns anthropic or openrouter for any preset type, cheap or mid tier, sensitive true or false, even with injected failures on cursor (it must then fall to the next free lane or throw route-exhausted, never to a paused paid lane); with anthropic unpaused and cursor failing twice it may still use anthropic. Update any existing test that asserts the old order. Do not change caps or any other behaviour. No credential-looking literals. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/job-types.mjs",
+    "tools/router.mjs",
+    "tools/lanes.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/job-types.mjs",
+    "tools/router.mjs",
+    "tests/job-type-route-order.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/anthropic-lane.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/batch-c-eval.test.mjs",
+    "tests/cap-reroute.test.mjs",
+    "tests/gpu.test.mjs",
+    "tests/job-types.test.mjs",
+    "tests/lesson-37-eval.test.mjs",
+    "tests/local-lane-cache-context.test.mjs",
+    "tests/local-lane-probe.test.mjs",
+    "tests/local-lane-review.test.mjs",
+    "tests/local-lane.test.mjs",
+    "tests/paid-lane-paused.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/router-ready.test.mjs",
+    "tests/router.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/split-repair.test.mjs",
+    "tests/tunnel.test.mjs"
+   ]
+  }
+ ]
+}

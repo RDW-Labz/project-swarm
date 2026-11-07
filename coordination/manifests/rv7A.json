@@ -1,0 +1,51 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rv7A",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/autopilot.mjs",
+    "tests/autopilot-integrate-clean.test.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot.mjs",
+    "tests/autopilot-integrate-clean.test.mjs"
+   ],
+   "prompt": "Fix one review finding, tests added to tests/autopilot-integrate-clean.test.mjs. In tools/autopilot.mjs runIntegrateOutputPaths returns an empty list for normal go --scope runs, because the production run summaries (tools/brief.mjs loadRuns as wrapped in tools/swarm.mjs, and most journal run events) carry only integrable and counts, with no jobs and no manifest object; as a result autopilot itself and the triage integrate handler would raise a 'no declared output paths' owner blocker instead of integrating, and unattended auto-integration would stop. Fix: when the summary and the journal events give no output paths, read them from the run's own files under <root>/.swarm/runs/<runId>/ (state.json jobs[].outputs for jobs whose status is complete, and manifest.json jobs[].outputs as a second source; also child-run outputs of lead jobs), through an injectable reader (default reads the files; refuse symlinks, never throw: an unreadable file means no paths), validate that every path is relative, inside the project and without '..', and drop the rest. The empty-outputs refusal then fires only when the run folder also yields none. Add tests with a temp run folder shaped like a real production state.json (jobs array with id, status, outputs) and a manifest.json: paths are found from state.json, from manifest.json when state has none, a symlinked or unreadable state file gives none, paths with .. or absolute paths are dropped, and a run whose summary has only integrable and counts still integrates (no owner blocker) when the run folder has outputs. Keep every existing test passing (tests/autopilot-*.test.mjs, tests/needs-you-triage.test.mjs).",
+   "ignoreTests": [
+    "tests/autopilot-blocker-resolved.test.mjs",
+    "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-ledger-only.test.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-no-outputs.test.mjs",
+    "tests/autopilot-policy-pass.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autopilot.test.mjs",
+    "tests/b7-review-fixes.test.mjs",
+    "tests/brain-commands.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/generated-state.test.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/ledger-merge.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/safety-commands.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/wave-batch.test.mjs"
+   ]
+  }
+ ]
+}

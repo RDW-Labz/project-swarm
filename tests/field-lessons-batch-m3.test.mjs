@@ -2,6 +2,7 @@
 // Batch M, job m3-scrub: row #197-followup (no product literal in a public repo; project
 // specifics arrive via tools/local-config.mjs) and row #185-part (an OpenRouter incomplete reply
 // names its finish_reason).
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
