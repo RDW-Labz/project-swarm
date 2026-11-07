@@ -27,6 +27,7 @@ import { zeroTestGuard } from '../zero-tests.mjs';
 import { expandCheckArgv, expandRootArgv } from './checks.mjs';
 import { promptPathCovered } from './context.mjs';
 import { detectAfterCycle, fail, lastFailureLines, reviewSourcePath, syntheticDiff, validateOutputCap } from './core-1.mjs';
+import { applyReviewEscalation, validReviewFailures } from '../review-escalation.mjs';
 import { normalizeManifestMetadata, relative, runCheck, unknownJobFieldMessage, validateRunIdle } from './core-11.mjs';
 import { lastTopLevelObject, originForCheck, parseContextGlob, safePath, validateMutantsArray } from './core-21.mjs';
 import { CHECK_ERRORED_STATUSES, CHECK_NAME, CLEANABLE_DIRS, CLI_AGENTS, ID, MAX_CONTEXT, MAX_FILE, NON_SENSITIVE_ONLY_AGENTS, PROMPT_PATH_RE, SANDBOX_ONLY_RE, TIERS } from './patterns.mjs';
@@ -152,6 +153,7 @@ async function mutantReviewTexts(root, overlay = new Map()) {
 
 export function validateManifest(manifest, { outputJobIds = null, env = process.env, allowOpenRouterCodeOutputs } = {}) {
   normalizeManifestMetadata(manifest);
+  applyReviewEscalation(manifest, env);
   if (!manifest || typeof manifest !== 'object') fail('Manifest is missing');
   if (manifest.version !== 1) fail('Manifest requires version: 1');
   if (!Array.isArray(manifest.jobs)) fail('Manifest jobs must be an array');
@@ -334,6 +336,7 @@ export function validateManifest(manifest, { outputJobIds = null, env = process.
     if (job.tier !== undefined && !TIERS.includes(job.tier)) fail(`Unknown tier: ${job.tier}`);
     if (job.tierReason !== undefined && (typeof job.tierReason !== 'string' || job.tierReason.length > 2000)) fail('Invalid tierReason');
     if (job.tier === 'expensive' && !job.tierReason?.trim()) fail(`expensive tier requires a non-empty tierReason: ${job.id}`);
+    if (!validReviewFailures(job.reviewFailures)) fail(`Job ${job.id}: reviewFailures must be an integer 0–50`);
     if (typeof job.prompt !== 'string' || !job.prompt.trim() || job.prompt.length > 100000) fail(`Invalid prompt: ${job.id}`);
     if (!Array.isArray(job.context) || !Array.isArray(job.outputs) || job.context.length > 100 || job.outputs.length > 100) fail('context and outputs must be explicit arrays of at most 100 files');
     if (job.scope !== undefined || job.outputDirs !== undefined) {
@@ -435,7 +438,7 @@ export function validateManifest(manifest, { outputJobIds = null, env = process.
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'ignoreTestsReason', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'dependencies', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf', 'hard'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'ignoreTestsReason', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'dependencies', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf', 'hard', 'reviewFailures'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
     if (job.batch !== undefined && typeof job.batch !== 'boolean') fail(`Job ${job.id}: batch must be true or false`, 'batch-invalid');
     if (job.hard !== undefined && typeof job.hard !== 'boolean') fail(`Job ${job.id}: hard must be true or false`, 'hard-invalid');

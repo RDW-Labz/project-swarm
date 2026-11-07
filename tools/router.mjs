@@ -3,6 +3,7 @@
 import { isBookkeepingJob, isRestrictedForOpenRouter, openrouterAllowsCodeOutputs } from './openrouter.mjs';
 import { prefersLocalLane } from './job-types.mjs';
 import { LANE_AGENTS } from './lanes.mjs';
+import { needsOpusFix } from './review-escalation.mjs';
 import {
   LOCAL_MODEL_PREFIX,
   parseLocalModel,
@@ -96,7 +97,7 @@ const laneModel = (job, agent, lanes, failures = {}, endpointHealth = () => ({ s
     return typeof lanes.local?.model === 'string' ? lanes.local.model : null;
   }
   if (agent === 'anthropic') {
-    if (needsAnthropicOpus(job)) return ANTHROPIC_OPUS_MODEL;
+    if (needsAnthropicOpus(job) || needsOpusFix(job)) return ANTHROPIC_OPUS_MODEL;
     if (needsAnthropicSonnet(job, failures) || job.tier === 'mid') return ANTHROPIC_MID_MODEL;
     return lanes.anthropic.model;
   }
@@ -155,7 +156,11 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), en
   const order = [...new Set([...(hardCodex ? ['codex'] : []), ...(useRented ? RENTED_FIRST : []), ...localFirst, ...typed.filter(agent => !localFirst.includes(agent)), ...(useRented ? RENTED_AFTER : []), ...cheapOrder])];
   let reason = hardCodex ? 'hard ticket: codex first' : 'cheapest healthy lane';
   let candidates;
-  if (job.tier === 'expensive' && job.type !== 'review') {
+  if (needsOpusFix(job)) {
+    reason = `fix after ${job.reviewFailures} failed reviews: Opus`;
+    candidates = ['anthropic', 'claude'].filter(agent => configured(agent) && !laneConfigPaused(agent, lanes)
+      && !(failures[agent] >= 2) && accepted(agent));
+  } else if (job.tier === 'expensive' && job.type !== 'review') {
     reason = 'tier expensive';
     candidates = configured('claude') && laneReady('claude') !== false && !(failures.claude >= 2) && accepted('claude') ? ['claude'] : [];
   } else {
