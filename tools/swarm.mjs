@@ -3275,6 +3275,7 @@ async function mainInner() {
     // Run from an installed version (<install>/versions/<v>-<hash>/tools/swarm.mjs) it checks that version;
     // --install names another install root, whose current/ is checked.
     const rest=args.slice(1);
+    if(rest.includes('--help')||rest.includes('-h')){process.stdout.write('Usage: swarm verify-install [--install DIR] [--json] [VERSION_DIR]\nChecks that the installed swarm files match the build they were installed from (its install manifest). Exit 1 on any changed, missing or extra file.\n');return;}
     const {runVerifyInstallCommand}=await import('./verify-install.mjs');
     const installed=path.basename(path.dirname(ownRoot))==='versions';
     const res=await runVerifyInstallCommand(installed&&!rest.includes('--install')?[...rest,ownRoot]:rest,{installRoot:installed?path.dirname(path.dirname(ownRoot)):ownRoot});
