@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { packagingChangeWarnings } from './packaging-check.mjs';
 import { loadLocalConfig } from './local-config.mjs';
 import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
+import { decideSelfReview, readyOnOpenComment } from './ship-ready.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -1399,6 +1400,7 @@ export const SHIP_USAGE = [
   `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
   'git-ignored-fixture: only existing ignored paths; --exempt git-ignored-fixture:<file>=<reason>.',
   'check-hit-swarm-dir: ignores check lines whose path starts with .swarm/ and reports their count.',
+  'Ready on open: the swarm ship path runs local tests and an Opus self-review before pr create; HIGH findings block.',
   'Prints one JSON result naming its runId (or branch for --branch); exit 0 when merged, held or ready.',
 ].join('\n') + '\n';
 
@@ -1520,6 +1522,14 @@ export async function ship(options) {
     // E2: `--preflight` runs every pre-push content guard in one pass and reports every failure
     // instead of pushing; it never reaches the push/PR steps below.
     preflight = false,
+    // bot-fleet#84: the swarm command (shipRun/shipBranch) always sets requireReadyOnOpen and
+    // passes the real self-review hook. ship() itself leaves the hook off so existing direct
+    // callers/tests keep their exec scripts. A HIGH result still blocks; omitting the hook is
+    // not a skip on the swarm path.
+    requireReadyOnOpen = false,
+    runSelfReview,
+    postReadyNote,
+    fileFollowups,
   } = options;
 
   let repo = options.repo;
@@ -1963,6 +1973,42 @@ export async function ship(options) {
     if (!ci.ok) return { ...base, status: 'refused', reason: `ci-local-failed: ${ci.failed} (${ci.command}) failed locally, so no PR was opened: ${ci.tail}` };
   }
 
+  // Ready on open: tests already ran above; the Opus self-review of this diff must pass (or
+  // only MEDIUM follow-ups) before anything is pushed or a PR is opened. The official Opus
+  // grader and RED TEAM still run on the published head after open.
+  if (requireReadyOnOpen === true && typeof runSelfReview !== 'function') {
+    return { ...base, status: 'refused', code: 'self-review-missing', reason: 'self-review-missing: ship cannot open a PR without an Opus self-review' };
+  }
+  let selfReview = null;
+  if (typeof runSelfReview === 'function') {
+    try {
+      selfReview = decideSelfReview(await runSelfReview({
+        root, repo, exec, env, home, payload, checks, integratedFiles, sha,
+      }));
+    } catch (error) {
+      return {
+        ...base,
+        status: 'self-review-failed',
+        code: 'self-review-unavailable',
+        reason: `self-review-unavailable: ${error?.message ?? error}`,
+      };
+    }
+    base.selfReview = {
+      ok: Boolean(selfReview.ok),
+      model: selfReview.model ?? null,
+      lane: selfReview.lane ?? null,
+      findings: selfReview.findings ?? [],
+    };
+    if (!selfReview.ok) {
+      return {
+        ...base,
+        status: 'self-review-failed',
+        code: selfReview.code ?? 'self-review-high',
+        reason: selfReview.reason ?? 'self-review-high: HIGH finding',
+      };
+    }
+  }
+
   let pushRes = await exec('git', ['push', 'origin', `HEAD:refs/heads/${payload.head}`], { cwd: root });
   if (pushRes.code !== 0) {
     // Field lesson 150: only a non-fast-forward-shaped rejection is a candidate for a lease push;
@@ -2007,6 +2053,30 @@ export async function ship(options) {
   }
   base.pr = pr.number;
   base.url = pr.html_url;
+
+  let followupIssues = [];
+  if (selfReview?.ok && selfReview.medium?.length && typeof fileFollowups === 'function') {
+    try {
+      const filed = await fileFollowups({
+        exec, root, repo, pr: pr.number, url: pr.html_url, findings: selfReview.medium,
+      });
+      followupIssues = filed?.issues ?? [];
+      if (followupIssues.length) base.selfReview = { ...base.selfReview, followups: followupIssues.map(issue => issue.number) };
+    } catch (error) {
+      base.warnings.push(`ready-on-open-followups-failed: ${error?.message ?? error}`);
+    }
+  }
+  if (selfReview?.ok && typeof postReadyNote === 'function') {
+    try {
+      const noteBody = readyOnOpenComment({ checks, review: selfReview, issues: followupIssues });
+      const noteRes = await postReadyNote({ exec, root, repo, pr: pr.number, body: noteBody });
+      if (noteRes && noteRes.code !== 0) {
+        base.warnings.push(`ready-on-open-comment-failed: ${firstStderrLine(noteRes.stderr || noteRes.stdout)}`);
+      }
+    } catch (error) {
+      base.warnings.push(`ready-on-open-comment-failed: ${error?.message ?? error}`);
+    }
+  }
 
   // One poll-to-settle pass; called again after a flaky rerun (field lesson #178) to re-check the
   // same PR/sha without repeating the push/PR-create steps above. Returns either a terminal ship()

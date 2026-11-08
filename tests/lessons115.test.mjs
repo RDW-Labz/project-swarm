@@ -11,6 +11,7 @@ import { ship, renderChecks } from '../tools/ship.mjs';
 import { runManifest, integrateRun, shipRun, inspectResults, redcheckRun, validateManifest, parseShipFlags, parseGoFlags, updateInstall } from '../tools/swarm.mjs';
 import { codexMessage, codexDoctor, CODEX_FLAGS, git } from '../tools/codex-adapter.mjs';
 import { extraCliMessage } from '../tools/cli-adapters.mjs';
+import { silentReadyOnOpenHooks } from '../tools/ship-ready.mjs';
 
 const execFileAsync = promisify(execFile);
 const CLI = new URL('../tools/swarm.mjs', import.meta.url).pathname;
@@ -58,7 +59,7 @@ async function shipping(t, overrides = {}) {
     }
     assert.fail(`Unexpected command: ${cmd} ${args}`);
   };
-  return { root, calls, sleeps, options: { root, payloadPath, exec, runChecks: async () => [], sleep: async ms => sleeps.push(ms), now: () => 0, ...overrides.options } };
+  return { root, calls, sleeps, options: { root, payloadPath, exec, runChecks: async () => [], sleep: async ms => sleeps.push(ms), now: () => 0, ...silentReadyOnOpenHooks, ...overrides.options } };
 }
 
 test('L1 mutation section warns without manifest mutants and still ships', async t => {

@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process';
 import { ship } from '../tools/ship.mjs';
 import { shipBranch, parseShipFlags, shipRun, runManifest, integrateRun } from '../tools/swarm.mjs';
 import { git } from '../tools/codex-adapter.mjs';
+import { silentReadyOnOpenHooks } from '../tools/ship-ready.mjs';
 
 async function tmp(t, prefix) {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
@@ -216,7 +217,7 @@ describe('#243: swarm.mjs shipBranch/shipRun pass flags.rerunFlaky through undef
       throw new Error(`unexpected exec: ${file} ${args.join(' ')}`);
     };
     const flags = parseShipFlags(['--branch', 'feature-branch', '--pr', payloadPath]);
-    const result = await shipBranch(root, flags, { exec, sleep: async () => {} });
+    const result = await shipBranch(root, flags, { exec, sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.notEqual(result.status, 'ci-failed', JSON.stringify(result));
     assert.equal(result.status, 'merged', JSON.stringify(result));
     const rerunCalls = calls.filter(c => c.file === 'gh' && c.args[0] === 'run' && c.args[1] === 'rerun');
@@ -261,7 +262,7 @@ describe('#243: swarm.mjs shipBranch/shipRun pass flags.rerunFlaky through undef
       if (file === 'gh' && args[0] === 'run') return args[1] === 'view' ? ok(WINDOWS_LOG) : ok('');
       throw new Error(`unexpected exec: ${file} ${args.join(' ')}`);
     };
-    const result = await shipRun(root, state.id, { payloadPath, requireSections: [], merge: true }, { exec, sleep: async () => {} });
+    const result = await shipRun(root, state.id, { payloadPath, requireSections: [], merge: true }, { exec, sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.notEqual(result.status, 'ci-failed', JSON.stringify(result));
     assert.equal(result.status, 'merged', JSON.stringify(result));
     const rerunCalls = calls.filter(c => c.file === 'gh' && c.args[0] === 'run' && c.args[1] === 'rerun');

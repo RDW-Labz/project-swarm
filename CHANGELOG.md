@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.167.38
+
+Ready on open: tests and an Opus self-review run before a swarm ship opens a PR (bot-fleet#84).
+- The swarm `ship` / `ship --branch` path runs local checks and an Opus-style self-review of the diff after ci-local and before push or `pr create`;
+- Failed tests or a HIGH self-review finding refuse the ship (`checks-failed` / `self-review-failed`) and leave nothing pushed;
+- MEDIUM findings become GitHub issues, not blockers; the opened PR gets a short note naming the tests that ran, that the self-review passed, and the model/lane used;
+- The official Opus grader and RED TEAM still run on the published head after open; this preflight is not a substitute;
+- Spend stays on DeepSeek/OpenRouter first ($5/job and $5/day caps) with Cursor plan models as fallback; no extra paid Opus call;
+- Tests cover tests-failed and HIGH self-review blocking PR create;
+- Version 1.167.38.
+
 ## 1.167.37
 
 Train 9 hotfix: the Cockpit ticket-stack stage list sorts numerically.

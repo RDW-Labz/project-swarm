@@ -12,6 +12,7 @@ import os from 'node:os';
 import { missingSections, ship, resolveToolchainBin, resolveUv } from '../tools/ship.mjs';
 import { shipBranch, parseShipFlags } from '../tools/swarm.mjs';
 import { git } from '../tools/codex-adapter.mjs';
+import { silentReadyOnOpenHooks } from '../tools/ship-ready.mjs';
 
 async function tmp(t, prefix) {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
@@ -137,7 +138,7 @@ describe('L175: ship --check resolves a bare check argv[0] (toolchains dir, then
       throw new Error(`unexpected exec: ${file} ${args.join(' ')}`);
     };
     const flags = parseShipFlags(['--branch', 'feature-branch', '--pr', payloadPath, '--no-merge', '--check', JSON.stringify(['swarm-test-no-such-tool-175', '--version'])]);
-    const result = await shipBranch(root, flags, { exec, sleep: async () => {} });
+    const result = await shipBranch(root, flags, { exec, sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.equal(result.checks[0].status, 'cannot-run');
     assert.match(result.checks[0].hint, /cannot-run: swarm-test-no-such-tool-175 not found \(tried/);
     assert.ok(!calls.some(c => c.file === 'swarm-test-no-such-tool-175'), 'the unresolvable program must never be spawned');

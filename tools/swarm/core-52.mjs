@@ -7,6 +7,7 @@ import { portBlockFor, resolvePortBlock } from '../ports.mjs';
 import { MODEL_RATES } from '../rates.mjs';
 import { rollupRun } from '../reports.mjs';
 import { gitIgnoredFixtureWarnings, parsePrPayload, resolveGhAndGit, ship, SHIP_DEFAULTS, TEST_FILE_RE } from '../ship.mjs';
+import { defaultFileFollowups, defaultPostReadyNote, defaultRunSelfReview } from '../ship-ready.mjs';
 import { loadSwarmEnv } from '../swarm-env.mjs';
 import { digest, execFileAsync, fail, inventedHashesIn, normalizeChangedEntry, programOnPath, summarizeRun } from './core-1.mjs';
 import { displayResult, expectedWorkspaceFor, highestSemver, runCheck, undeclaredPersistedFieldWarnings } from './core-11.mjs';
@@ -333,7 +334,7 @@ async function monitorView(root, id) {
 // given --check argvs run like manifest checks (env file and port block included), and every
 // other ship rule (needs-a-human hold, --require-section, lock check, test binary gate,
 // packaging build check) applies to the branch's own diff against its base.
-export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipExec, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now, shipImpl = ship } = {}) {
+export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipExec, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now, shipImpl = ship, runSelfReview, postReadyNote, fileFollowups } = {}) {
   root = await fs.realpath(root);
   // Field lesson #187: every refusal (even one this function returns itself, before ship() ever
   // runs) names --branch, so a ship --branch attempt is always recoverable from its own result.
@@ -420,10 +421,14 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
     // own env file so neither one silently drops the other's PATH/vars.
     runChecks: async ({ env: checkEnv } = {}) => (await runChecks(root, checks, changedFiles, [], spawnImpl, { noFlakeCheck: flags.noFlakeCheck, portBase, extraEnv: { ...swarmEnv, ...checkEnv } })).checks,
     exec, sleep,
+    requireReadyOnOpen: true,
+    runSelfReview: runSelfReview ?? defaultRunSelfReview,
+    postReadyNote: postReadyNote ?? defaultPostReadyNote,
+    fileFollowups: fileFollowups ?? defaultFileFollowups,
   });
 }
 
-export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipExec, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now, env, keyExec, shipImpl = ship } = {}) {
+export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipExec, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now, env, keyExec, shipImpl = ship, runSelfReview, postReadyNote, fileFollowups } = {}) {
   root = await fs.realpath(root);
   // Field lesson 118: a missing gh/git must refuse before any check runs, not surface partway
   // through ship() as a confusing push/PR failure. Same result shape as ship()'s own early refusal.
@@ -506,6 +511,10 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     // manifest check calling which("uv") finds it here too, not only on the base re-run.
     runChecks: async ({ env: checkEnv } = {}) => (await runChecks(root, checks, state.integratedFiles ?? [], state.integratedNewFiles ?? [], spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck: flags.noFlakeCheck, portBase, preChecks: manifest.preChecks ?? [], extraEnv: { ...(await loadSwarmEnv(root)).env, ...checkEnv } })).checks,
     exec, sleep,
+    requireReadyOnOpen: true,
+    runSelfReview: runSelfReview ?? defaultRunSelfReview,
+    postReadyNote: postReadyNote ?? defaultPostReadyNote,
+    fileFollowups: fileFollowups ?? defaultFileFollowups,
   });
 }
 
