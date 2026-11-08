@@ -17,6 +17,7 @@ import os from 'node:os';
 import { ship } from '../tools/ship.mjs';
 import { shipBranch, parseShipFlags } from '../tools/swarm.mjs';
 import { git } from '../tools/codex-adapter.mjs';
+import { silentReadyOnOpenHooks } from '../tools/ship-ready.mjs';
 
 async function tmp(t, prefix) {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
@@ -90,7 +91,7 @@ describe('L177(a)/(b): ship --checks-from-ci reads CI\'s own run: steps as check
     }, 'ship should accept --checks-from-ci (optionally with a path)');
 
     const { exec } = fakeShipExec({ branch: 'feature-branch' });
-    const result = await shipBranch(root, flags, { exec, sleep: async () => {} });
+    const result = await shipBranch(root, flags, { exec, sleep: async () => {}, ...silentReadyOnOpenHooks });
 
     assert.ok(
       result.warnings.some(w => w.startsWith('check-not-in-ci: check-1')),
@@ -119,7 +120,7 @@ describe('L177(a)/(b): ship --checks-from-ci reads CI\'s own run: steps as check
     const payloadPath = await writePayload(root, { title: 't', head: 'feature-branch', base: 'main', body: 'b' });
     const flags = parseShipFlags(['--branch', 'feature-branch', '--pr', payloadPath, '--no-merge', '--checks-from-ci', '--check', JSON.stringify([process.execPath, '-e', 'process.exit(0)'])]);
     const { exec } = fakeShipExec({ branch: 'feature-branch' });
-    const result = await shipBranch(root, flags, { exec, sleep: async () => {} });
+    const result = await shipBranch(root, flags, { exec, sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.ok(result.warnings.some(w => w === 'checks-from-ci: .github/workflows/ci.yml not found'));
   });
 });

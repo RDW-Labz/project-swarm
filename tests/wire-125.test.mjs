@@ -15,6 +15,7 @@ import {
 } from '../tools/swarm.mjs';
 import { normalizeScoutReport, renderScoutMarkdown } from '../tools/scout.mjs';
 import { git } from '../tools/codex-adapter.mjs';
+import { silentReadyOnOpenHooks } from '../tools/ship-ready.mjs';
 
 const execFileAsync = promisify(execFile);
 const CLI = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
@@ -87,7 +88,7 @@ describe('#187: ship --help, and runId/branch reach ship() from shipRun/shipBran
     const payloadPath = path.join(root, 'pr.json');
     await fs.writeFile(payloadPath, JSON.stringify({ title: 't', head: 'slice', base: 'main', body: 'b' }));
     const flags = parseShipFlags(['--branch', 'slice', '--pr', payloadPath, '--no-merge']);
-    const result = await shipBranch(root, flags, { exec: fakeGhGitExec(), sleep: async () => {}, now: () => 0 });
+    const result = await shipBranch(root, flags, { exec: fakeGhGitExec(), sleep: async () => {}, now: () => 0, ...silentReadyOnOpenHooks });
     assert.equal(result.status, 'ready', JSON.stringify(result));
     assert.equal(result.branch, 'slice');
   });
@@ -115,7 +116,7 @@ describe('#187: ship --help, and runId/branch reach ship() from shipRun/shipBran
     const payloadPath = path.join(root, 'pr.json');
     await fs.writeFile(payloadPath, JSON.stringify({ title: 't', head: 'main', base: 'main', body: 'b' }));
     const flags = parseShipFlags(['--pr', payloadPath, '--no-merge']);
-    const result = await shipRun(root, id, flags, { exec: fakeGhGitExec(), sleep: async () => {}, now: () => 0 });
+    const result = await shipRun(root, id, flags, { exec: fakeGhGitExec(), sleep: async () => {}, now: () => 0, ...silentReadyOnOpenHooks });
     assert.equal(result.status, 'ready', JSON.stringify(result));
     assert.equal(result.runId, id);
   });
@@ -162,7 +163,7 @@ describe("#192: checks ship spawns get the toolchains bin dir on PATH, both via 
       throw new Error(`unexpected exec: ${file} ${args.join(' ')}`);
     };
     const flags = parseShipFlags(['--pr', payloadPath, '--no-merge']);
-    const result = await shipRun(root, state.id, flags, { exec, sleep: async () => {}, now: () => 0 });
+    const result = await shipRun(root, state.id, flags, { exec, sleep: async () => {}, now: () => 0, ...silentReadyOnOpenHooks });
     assert.equal(result.status, 'ready', JSON.stringify(result));
     const seenPath = await fs.readFile(pathFile, 'utf8');
     assert.ok(seenPath.startsWith(`${path.join(toolchains, 'bin')}:`), seenPath);

@@ -615,7 +615,7 @@ test('parseShipFlags maps every flag to ship() options and rejects an unknown fl
 
 test('shipExitCode is 0 only for merged/held/ready, and 1 for every refusal or failure status', () => {
   for (const status of ['merged', 'held', 'ready']) assert.equal(shipExitCode(status), 0);
-  for (const status of ['refused', 'checks-failed', 'ci-failed', 'no-ci', 'timeout', 'merge-failed']) assert.equal(shipExitCode(status), 1);
+  for (const status of ['refused', 'checks-failed', 'ci-failed', 'no-ci', 'timeout', 'merge-failed', 'self-review-failed']) assert.equal(shipExitCode(status), 1);
 });
 
 test('shipRun refuses a completed run that has not yet been integrated', async t => {

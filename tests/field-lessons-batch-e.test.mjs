@@ -16,6 +16,7 @@ import { codexMessage, git } from '../tools/codex-adapter.mjs';
 import { ship } from '../tools/ship.mjs';
 import { loadSwarmEnv, validateSwarmEnv, envPrintText, gitGuardScript, NO_STASH_LINE, checkNeedsEnvWarnings } from '../tools/swarm-env.mjs';
 import { packagingKeyChanges, packagingWithoutBuildCheckWarning, isBuildArgv } from '../tools/packaging-check.mjs';
+import { silentReadyOnOpenHooks } from '../tools/ship-ready.mjs';
 
 const execFileAsync = promisify(execFile);
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'swarm.mjs');
@@ -399,7 +400,7 @@ describe('L164: ship --branch ships a finished branch that has no swarm run', ()
     const root = await branchRepo(t);
     const calls = [];
     const flags = parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root), '--require-section', 'Checks', '--check', JSON.stringify([process.execPath, '-e', 'process.exit(0)'])]);
-    const result = await shipBranch(root, flags, { exec: fakeExec(calls), sleep: async () => {} });
+    const result = await shipBranch(root, flags, { exec: fakeExec(calls), sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.equal(result.status, 'merged', result.reason ?? '');
     assert.deepEqual(result.checks.map(c => [c.name, c.status]), [['check-1', 'passed']]);
     assert.ok(calls.some(c => c.file === 'git' && c.args[0] === 'push' && c.args.includes('HEAD:refs/heads/slice-5')));
@@ -411,19 +412,19 @@ describe('L164: ship --branch ships a finished branch that has no swarm run', ()
   test('the needs-a-human hold, required sections, a failing check and a wrong checkout all apply', async t => {
     const root = await branchRepo(t);
     const passing = JSON.stringify([process.execPath, '-e', 'process.exit(0)']);
-    const held = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root, { body: '**needs review** first\n\n## Checks\n<!-- swarm:checks -->\n' }), '--check', passing]), { exec: fakeExec([]), sleep: async () => {} });
+    const held = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root, { body: '**needs review** first\n\n## Checks\n<!-- swarm:checks -->\n' }), '--check', passing]), { exec: fakeExec([]), sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.equal(held.status, 'held');
-    const missing = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root), '--require-section', 'Mutation check', '--check', passing]), { exec: fakeExec([]), sleep: async () => {} });
+    const missing = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root), '--require-section', 'Mutation check', '--check', passing]), { exec: fakeExec([]), sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.equal(missing.status, 'refused');
     assert.match(missing.reason, /missing sections: Mutation check/);
-    const red = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root), '--check', JSON.stringify([process.execPath, '-e', 'process.exit(1)'])]), { exec: fakeExec([]), sleep: async () => {} });
+    const red = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root), '--check', JSON.stringify([process.execPath, '-e', 'process.exit(1)'])]), { exec: fakeExec([]), sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.equal(red.status, 'checks-failed');
-    const elsewhere = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root)]), { exec: fakeExec([], { branch: 'main' }), sleep: async () => {} });
+    const elsewhere = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root)]), { exec: fakeExec([], { branch: 'main' }), sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.equal(elsewhere.status, 'refused');
     assert.match(elsewhere.reason, /is not checked out/);
-    const mismatch = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root, { head: 'other' })]), { exec: fakeExec([]), sleep: async () => {} });
+    const mismatch = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root, { head: 'other' })]), { exec: fakeExec([]), sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.match(mismatch.reason, /does not match --branch slice-5/);
-    const unchecked = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root)]), { exec: fakeExec([]), sleep: async () => {} });
+    const unchecked = await shipBranch(root, parseShipFlags(['--branch', 'slice-5', '--pr', await writePayload(root)]), { exec: fakeExec([]), sleep: async () => {}, ...silentReadyOnOpenHooks });
     assert.ok(unchecked.warnings.some(w => w.startsWith('no-checks:')));
     assert.throws(() => parseShipFlags(['--pr', 'x.json', '--check', passing]), /--check is only for ship --branch/);
   });
