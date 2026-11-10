@@ -3,8 +3,17 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { routeJob } from './router.mjs';
 import { FAILURE_STATUSES } from './failure-regression.mjs';
+import { projectSwarmHome } from './state-guard.mjs';
+
+// The lane quality check looks at recent runs only: a lane that failed days ago (an outage, a bug since
+// fixed) must not stay ruled out forever. Runs before the current install also do not count: installing
+// a fix starts the history fresh.
+export const PASS_RATE_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+const swarmHome = ({ env = process.env, home = os.homedir() } = {}) => (env?.SWARM_HOME ? path.resolve(env.SWARM_HOME) : projectSwarmHome(home, env ?? {}));
 
 const PASS_STATUS = 'complete';
 const IGNORED_STATUSES = new Set(['cancelled', 'held']);
@@ -26,13 +35,34 @@ export function isProviderLimitFailure(job) {
   return PROVIDER_LIMIT_RE.test(jobFailureText(job));
 }
 
-export function lanePassRates(runStates) {
+const toMs = value => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const ms = typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) ? ms : null;
+};
+
+// When a job happened: its own finish or start time, else the run's, else the run folder's epoch-ms prefix.
+export function jobTimeMs(job, state, runName) {
+  for (const value of [job?.finishedAt, job?.startedAt, state?.finishedAt, state?.startedAt]) {
+    const ms = toMs(value);
+    if (ms != null) return ms;
+  }
+  const prefix = /^(\d{12,14})-/.exec(String(runName ?? ''));
+  return prefix ? Number(prefix[1]) : null;
+}
+
+// since (ms): only jobs at or after it count; a job with no known time does not count then.
+export function lanePassRates(runStates, { since = null } = {}) {
   const rates = {};
   if (!runStates || typeof runStates !== 'object' || Array.isArray(runStates)) return rates;
 
-  for (const state of Object.values(runStates)) {
+  for (const [runName, state] of Object.entries(runStates)) {
     const jobs = Array.isArray(state?.jobs) ? state.jobs : [];
     for (const job of jobs) {
+      if (since != null) {
+        const at = jobTimeMs(job, state, runName);
+        if (at == null || at < since) continue;
+      }
       const agent = typeof job?.agent === 'string' ? job.agent.trim() : '';
       const status = typeof job?.status === 'string' ? job.status.trim() : '';
       if (!agent || IGNORED_STATUSES.has(status)) continue;
@@ -64,14 +94,12 @@ export function routingFailures(rates, { minSamples = 5, failBelow = 0.5 } = {})
   return failures;
 }
 
-export function routeWithPassRates(job, routeOptions = {}, runStates, thresholds) {
-  const observed = routingFailures(lanePassRates(runStates), thresholds);
-  const existing = routeOptions?.failures ?? {};
-  const failures = { ...existing };
-  for (const [agent, count] of Object.entries(observed)) {
-    failures[agent] = Math.max(Number(existing[agent]) || 0, count);
-  }
-  return routeJob(job, { ...routeOptions, failures });
+export function routeWithPassRates(job, routeOptions = {}, runStates, thresholds, { since = null } = {}) {
+  const rates = lanePassRates(runStates, { since });
+  const passFailures = routingFailures(rates, thresholds);
+  return routeWithQualityFallback(failures => routeJob(job, { ...routeOptions, failures }), {
+    baseFailures: routeOptions?.failures ?? {}, passFailures, rates,
+  }).route;
 }
 
 export async function readRunStates(root, { readdir, readFile }) {
@@ -133,23 +161,99 @@ export function readRunStatesSync(root, { readdirSync, readFileSync } = fs) {
   return runStates;
 }
 
-const passRateFailuresCache = new Map();
+// When this swarm build was installed: `swarm install` and a rollback both re-point
+// ~/.project-swarm/current, so the link's own time is the install time. null when unknown.
+export function installedAtMs({ env = process.env, home = os.homedir(), lstatSync = fs.lstatSync } = {}) {
+  try {
+    const ms = lstatSync(path.join(swarmHome({ env, home }), 'current')).mtimeMs;
+    return Number.isFinite(ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
 
-export function passRateFailuresFor(root, deps = {}) {
+// Start of the counted history: 48 hours ago, or the install time when that is later.
+export function passRateSince({ now = Date.now(), installedAt = null, windowMs = PASS_RATE_WINDOW_MS } = {}) {
+  const windowStart = now - windowMs;
+  return Number.isFinite(installedAt) && installedAt > windowStart ? installedAt : windowStart;
+}
+
+const passRateCache = new Map();
+
+// { failures, rates, since } for a project root, read once per process.
+export function passRateSummaryFor(root, deps = {}) {
   let resolved;
   try {
     resolved = path.resolve(root ?? process.cwd());
-    if (passRateFailuresCache.has(resolved)) return passRateFailuresCache.get(resolved);
+    if (passRateCache.has(resolved)) return passRateCache.get(resolved);
     const fsDeps = deps?.fs ?? deps;
     const states = readRunStatesSync(resolved, {
       readdirSync: fsDeps?.readdirSync ?? fs.readdirSync,
       readFileSync: fsDeps?.readFileSync ?? fs.readFileSync,
     });
-    const failures = routingFailures(lanePassRates(states));
-    passRateFailuresCache.set(resolved, failures);
-    return failures;
+    const now = typeof deps?.now === 'function' ? deps.now() : Date.now();
+    const installedAt = deps?.installedAt !== undefined ? deps.installedAt : installedAtMs({ env: deps?.env, home: deps?.home });
+    const since = passRateSince({ now, installedAt });
+    const rates = lanePassRates(states, { since });
+    const summary = { failures: routingFailures(rates), rates, since };
+    passRateCache.set(resolved, summary);
+    return summary;
   } catch {
-    if (resolved) passRateFailuresCache.set(resolved, {});
-    return {};
+    const empty = { failures: {}, rates: {}, since: null };
+    if (resolved) passRateCache.set(resolved, empty);
+    return empty;
   }
+}
+
+export function passRateFailuresFor(root, deps = {}) {
+  return passRateSummaryFor(root, deps).failures;
+}
+
+// Lanes the quality check ruled out, healthiest first (highest pass rate, then most passes).
+export function healthiestFirst(passFailures = {}, rates = {}) {
+  return Object.keys(passFailures)
+    .filter(agent => passFailures[agent] >= 2)
+    .sort((a, b) => (rates[b]?.rate ?? 0) - (rates[a]?.rate ?? 0) || (rates[b]?.passed ?? 0) - (rates[a]?.passed ?? 0) || (a < b ? -1 : 1));
+}
+
+// When the quality check alone leaves no lane, route to the healthiest ruled-out lane instead of failing.
+// route(failures) is the router; baseFailures are this run's real failures (never lifted).
+// Returns { route, fallback: { agent, rate, passed, total } | null }; rethrows when no lane can take it.
+export function routeWithQualityFallback(route, { baseFailures = {}, passFailures = {}, rates = {} } = {}) {
+  const merged = { ...baseFailures };
+  for (const [agent, count] of Object.entries(passFailures)) merged[agent] = Math.max(Number(baseFailures[agent]) || 0, count);
+  try {
+    return { route: route(merged), fallback: null };
+  } catch (error) {
+    if (error?.code !== 'route-exhausted') throw error;
+    for (const agent of healthiestFirst(passFailures, rates)) {
+      if ((Number(baseFailures[agent]) || 0) >= 2) continue;
+      try {
+        const lifted = { ...merged, [agent]: Number(baseFailures[agent]) || 0 };
+        const picked = route(lifted);
+        const r = rates[picked.agent] ?? {};
+        const ratePct = r.rate == null ? '?' : `${Math.round(r.rate * 100)}%`;
+        return {
+          route: { ...picked, reason: `${picked.reason}; lane-quality fallback: every lane was under the pass-rate bar, using the healthiest (${picked.agent}, ${ratePct} of ${r.total ?? 0} jobs)` },
+          fallback: { agent: picked.agent, rate: r.rate ?? null, passed: r.passed ?? 0, total: r.total ?? 0 },
+        };
+      } catch (inner) {
+        if (inner?.code !== 'route-exhausted') throw inner;
+      }
+    }
+    throw error;
+  }
+}
+
+export function laneQualityAlertsFile({ env = process.env, home = os.homedir() } = {}) {
+  return path.join(swarmHome({ env, home }), 'alerts', 'lane-quality.jsonl');
+}
+
+// One line per fallback, read by bot-fleet's Fleet health. Never throws.
+export function recordLaneQualityAlert(alert, { env = process.env, home = os.homedir(), now = Date.now } = {}) {
+  try {
+    const file = laneQualityAlertsFile({ env, home });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${JSON.stringify({ at: new Date(now()).toISOString(), kind: 'lane-quality-fallback', ...alert })}\n`);
+  } catch {}
 }

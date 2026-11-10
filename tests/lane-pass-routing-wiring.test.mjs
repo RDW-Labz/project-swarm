@@ -34,8 +34,8 @@ function projectWithRuns(states) {
   return root;
 }
 
-function failedCursorState() {
-  return { jobs: [{ agent: 'cursor', status: 'failed' }] };
+function failedCursorState(at = Date.now()) {
+  return { jobs: [{ agent: 'cursor', status: 'failed', finishedAt: new Date(at).toISOString() }] };
 }
 
 test('pickJobRoute uses lane pass rates from the project root', () => {
@@ -64,4 +64,32 @@ test('pickJobRoute preserves explicit failures using the maximum count', () => {
 
   assert.equal(result.agent, 'codex');
   assert.equal(result.model, 'codex-test');
+});
+
+test('failures older than 48 hours no longer rule a lane out (the Nov 7-8 incident)', () => {
+  const old = Date.now() - 72 * 60 * 60 * 1000;
+  const states = {};
+  for (let i = 0; i < 8; i += 1) {
+    for (const agent of ['cursor', 'codex', 'anthropic']) states[`old-${agent}-${i}`] = { jobs: [{ agent, status: 'failed', finishedAt: new Date(old).toISOString() }] };
+  }
+  const result = pickJobRoute(autoJob, lanes, { root: projectWithRuns(states) });
+  assert.equal(result.agent, 'cursor');
+  assert.doesNotMatch(result.reason, /fallback/);
+});
+
+test('pickJobRoute falls back to the healthiest lane and raises an alert when every lane is ruled out', () => {
+  const now = new Date().toISOString();
+  const states = {};
+  for (let i = 0; i < 5; i += 1) {
+    states[`c-${i}`] = { jobs: [{ agent: 'cursor', status: 'failed', finishedAt: now }] };
+    states[`x-${i}`] = { jobs: [{ agent: 'codex', status: i < 2 ? 'complete' : 'failed', finishedAt: now }] };
+    states[`a-${i}`] = { jobs: [{ agent: 'anthropic', status: i < 1 ? 'complete' : 'failed', finishedAt: now }] };
+  }
+  const alerts = [];
+  const result = pickJobRoute({ ...autoJob, id: 'lead-1' }, lanes, { root: projectWithRuns(states), onLaneQualityFallback: a => alerts.push(a) });
+  assert.equal(result.agent, 'codex');
+  assert.match(result.reason, /lane-quality fallback/);
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].lane, 'codex');
+  assert.equal(alerts[0].job, 'lead-1');
 });
