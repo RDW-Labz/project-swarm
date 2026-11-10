@@ -802,20 +802,35 @@ export function brainHostList(brain) {
   return [...new Set([brain?.host, ...(Array.isArray(brain?.hosts) ? brain.hosts : []), brain?.tailscaleHost].filter(Boolean))];
 }
 
-export async function refreshBrainAddress({ env = process.env, home = os.homedir(), now = Date.now } = {}) {
+const LAN_IPV4 = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)\d{1,3}\.\d{1,3}(?:\.\d{1,3})?$/;
+
+// Brain addresses, most stable first: the Mac's .local name (follows a new LAN IP), then today's LAN IP, then
+// Tailscale. A LAN IP the brain no longer has (the old .169) is dropped; names and Tailscale IPs are kept.
+export function brainAddressList(pointer, addresses = {}) {
+  const ip = addresses.ip;
+  const stale = host => Boolean(ip) && LAN_IPV4.test(host) && host !== ip;
+  const primary = addresses.mdnsHost ?? ip ?? pointer?.host;
+  const hosts = [...new Set([primary, ip, addresses.tailscaleHost, pointer?.host, ...(Array.isArray(pointer?.hosts) ? pointer.hosts : []), pointer?.tailscaleHost].filter(Boolean))].filter(host => !stale(host));
+  return { host: primary, hosts };
+}
+
+export async function refreshBrainAddress({ env = process.env, home = os.homedir(), now = Date.now, addresses: getAddresses = () => localAddresses({ run: defaultRun }) } = {}) {
   const pointerFile = brainPointerFile({ env, home });
   const pointer = await readBrainPointer({ file: pointerFile, env, home }).catch(() => null);
   if (!pointer) return null;
-  const addresses = await localAddresses({ run: defaultRun });
-  const current = addresses.ip ?? pointer.host;
-  const hosts = [...new Set([current, pointer.host, ...(Array.isArray(pointer.hosts) ? pointer.hosts : []), addresses.tailscaleHost, pointer.tailscaleHost].filter(Boolean))];
-  if (current === pointer.host && hosts.length === brainHostList(pointer).length) return pointer;
-  const next = { ...pointer, host: current, hosts, ...(addresses.tailscaleHost ? { tailscaleHost: addresses.tailscaleHost } : {}) };
-  await writeBrainPointer(next, { file: pointerFile, env, home });
+  const addresses = await getAddresses();
+  const { host: current, hosts } = brainAddressList(pointer, addresses);
+  const same = current === pointer.host && JSON.stringify(hosts) === JSON.stringify(brainHostList(pointer));
+  let next = pointer;
+  if (!same) {
+    next = { ...pointer, host: current, hosts, ...(addresses.tailscaleHost ? { tailscaleHost: addresses.tailscaleHost } : {}) };
+    await writeBrainPointer(next, { file: pointerFile, env, home });
+  }
   try {
     const registry = await readRegistry({ file: machinesFile({ env, home }), env, home });
-    if (registry.brain && registry.machines[registry.brain]) {
-      registry.machines[registry.brain] = { ...registry.machines[registry.brain], host: current, ip: current, ...(addresses.tailscaleHost ? { tailscaleHost: addresses.tailscaleHost } : {}), updatedAt: new Date(now()).toISOString() };
+    const entry = registry.brain ? registry.machines[registry.brain] : null;
+    if (entry && (entry.host !== current || JSON.stringify(entry.hosts ?? []) !== JSON.stringify(hosts) || (addresses.ip && entry.ip !== addresses.ip))) {
+      registry.machines[registry.brain] = { ...entry, host: current, hosts, ...(addresses.ip ? { ip: addresses.ip } : {}), ...(addresses.tailscaleHost ? { tailscaleHost: addresses.tailscaleHost } : {}), updatedAt: new Date(now()).toISOString() };
       await writeRegistry(registry, { file: machinesFile({ env, home }), env, home });
     }
   } catch {}

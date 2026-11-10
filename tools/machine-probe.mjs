@@ -103,13 +103,20 @@ export function firstIp(output) {
   return undefined;
 }
 
-export async function localAddresses({ run = defaultRun } = {}) {
+// A Mac's Bonjour name (<LocalHostName>.local) follows it when the router hands out a new LAN IP.
+export function mdnsHostName(output) {
+  const name = String(output ?? '').trim();
+  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(name) ? `${name}.local` : undefined;
+}
+
+export async function localAddresses({ run = defaultRun, platform = os.platform() } = {}) {
   const darwin = (await runSafe(run, 'sh', ['-c', 'ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true'])).stdout;
   const linux = (await runSafe(run, 'sh', ['-c', "hostname -I 2>/dev/null | tr ' ' '\\n' | grep -v '^127\\.' | head -1"])).stdout;
   const ip = firstIp(darwin) ?? firstIp(linux);
   const ts = await runSafe(run, 'tailscale', ['ip', '-4']);
   const tailscaleHost = firstIp(ts.stdout);
-  return { ...(ip ? { ip } : {}), ...(tailscaleHost ? { tailscaleHost } : {}) };
+  const mdnsHost = platform === 'darwin' ? mdnsHostName((await runSafe(run, 'scutil', ['--get', 'LocalHostName'])).stdout) : undefined;
+  return { ...(ip ? { ip } : {}), ...(tailscaleHost ? { tailscaleHost } : {}), ...(mdnsHost ? { mdnsHost } : {}) };
 }
 
 export function parseLanCLIs(pathList) {

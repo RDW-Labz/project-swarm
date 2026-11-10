@@ -7,7 +7,7 @@ import { cursorLaunchArgs, parseCursorOutput, resolveCursorEnvelope } from '../c
 import { loadLocalConfig } from '../local-config.mjs';
 import { estimateCostFromTranscript } from '../rates.mjs';
 import { routeJob } from '../router.mjs';
-import { passRateFailuresFor } from '../lane-pass-routing.mjs';
+import { passRateSummaryFor, recordLaneQualityAlert, routeWithQualityFallback } from '../lane-pass-routing.mjs';
 import { findPrivateNameHitsInText, githubRepo, loadPrivateNames, repoVisibility } from '../ship.mjs';
 import { expandRootArgv } from './checks.mjs';
 import { claudeArgs, declaresDependencies, digest, execFileAsync, extraCliResult, fail, lastFailureLines, namedTestPaths, pathContains, redactSecrets, setupFailedResult, stopChild, transcriptLastActivity } from './core-1.mjs';
@@ -563,13 +563,23 @@ export async function privateNamesDispatchGuard(root, manifest, { exec = execFil
 
 function pickJobRoute(job, lanes, options = {}) {
   const root = routingRootFor(options);
-  const passFailures = options.passRateFailures ?? passRateFailuresFor(root);
-  const failures = { ...(options.failures ?? {}) };
-  for (const agent of new Set([...Object.keys(lanes ?? {}), ...Object.keys(options.failures ?? {}), ...Object.keys(passFailures ?? {})])) {
-    failures[agent] = Math.max(options.failures?.[agent] ?? 0, passFailures?.[agent] ?? 0);
+  const summary = options.passRateFailures ? { failures: options.passRateFailures, rates: options.passRates ?? {} } : passRateSummaryFor(root);
+  const passFailures = summary.failures ?? {};
+  const { editInPlaceOnly = false, passRateFailures: _pf, passRates: _pr, onLaneQualityFallback, ...routeOptions } = options;
+  // The lane quality check (recent pass rates) never leaves a job with no lane: when it rules out every
+  // lane, the healthiest of them takes the job and Fleet health gets an alert.
+  const { route, fallback } = routeWithQualityFallback(failures => routeJob(job, { lanes, ...routeOptions, failures, accepts }), {
+    baseFailures: options.failures ?? {}, passFailures, rates: summary.rates ?? {},
+  });
+  if (fallback) {
+    const alert = { root: root ?? null, job: job.id, lane: fallback.agent, rate: fallback.rate, passed: fallback.passed, total: fallback.total };
+    console.error(`lane-quality-fallback: every lane was under the pass-rate bar for job ${job.id}; using the healthiest lane ${fallback.agent}`);
+    if (typeof onLaneQualityFallback === 'function') onLaneQualityFallback(alert);
+    else recordLaneQualityAlert(alert);
   }
-  const { editInPlaceOnly = false, ...routeOptions } = options;
-  return routeJob(job, { lanes, ...routeOptions, failures, accepts: candidate => {
+  return route;
+
+  function accepts(candidate) {
     if (editInPlaceOnly && API_AGENTS.includes(candidate.agent)) return false;
     if (candidate.after && isWorktreeWriter(candidate)) return false;
     try {
@@ -579,7 +589,7 @@ function pickJobRoute(job, lanes, options = {}) {
       );
       return true;
     } catch { return false; }
-  } });
+  }
 }
 
 export function resolveAskRoute(options = {}, config = {}) {

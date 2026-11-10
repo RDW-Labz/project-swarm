@@ -18,13 +18,13 @@ const lanes = {
 
 const env = { HOME: os.tmpdir(), PATH: process.env.PATH };
 
-function writeClaudeFailureRuns(root, count) {
+function writeClaudeFailureRuns(root, count, finishedAt = new Date().toISOString()) {
   for (let index = 0; index < count; index += 1) {
     const dir = path.join(root, '.swarm', 'runs', `fail-${index}`);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, 'state.json'),
-      `${JSON.stringify({ jobs: [{ agent: 'claude', status: 'failed' }] })}\n`,
+      `${JSON.stringify({ jobs: [{ agent: 'claude', status: 'failed', finishedAt }] })}\n`,
       'utf8',
     );
   }
@@ -73,12 +73,24 @@ test('validateProject ignores cwd pass-rate failures when routing for a differen
   assert.equal(result.routes[0].model, 'opus');
 });
 
-test('validateProject exhausts claude when failures live in the project root', async t => {
+test('recent failures in the project root no longer leave the job unroutable: the healthiest lane takes it', async t => {
   const projectRoot = await tempProject();
   writeClaudeFailureRuns(projectRoot, 6);
   t.after(async () => fs.promises.rm(projectRoot, { recursive: true, force: true }));
 
   const bad = await unroutableJobs(projectRoot, expensiveAutoManifest(), { env });
-  assert.deepEqual(bad.map(entry => entry.id), ['T-expensive']);
-  assert.match(bad[0].reason, /route-exhausted/);
+  assert.deepEqual(bad, []);
+  const result = await validateProject(projectRoot, expensiveAutoManifest(), { env });
+  assert.equal(result.routes[0].agent, 'claude');
+  assert.match(result.routes[0].reason, /lane-quality fallback/);
+});
+
+test('failures older than 48 hours in the project root do not count', async t => {
+  const projectRoot = await tempProject();
+  writeClaudeFailureRuns(projectRoot, 6, new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString());
+  t.after(async () => fs.promises.rm(projectRoot, { recursive: true, force: true }));
+
+  const result = await validateProject(projectRoot, expensiveAutoManifest(), { env });
+  assert.equal(result.routes[0].agent, 'claude');
+  assert.doesNotMatch(result.routes[0].reason ?? '', /fallback/);
 });
