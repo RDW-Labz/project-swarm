@@ -184,6 +184,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-28 | - | hangguard: withHangGuard races runManifest against a timer; denied-kill hang comment; self-test for | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | t2money: status blocked: tests/api-workers.test.mjs must assert day cap $20 (lines 18–22, 24–25); fi | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | t2reviewgaps: B16: delete-only branch in cmdSync now uses the same security-review gate as the norma | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-10 | - | worker-e2e-pro64-2: complete | claude | sonnet | pass | 20,162 | $0.02 |
 
 ## Daily summary
 
@@ -205,4 +206,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
 | 2026-10-28 | claude | 1 | 1 | 0 | 1,097,737 | $1.50 |
 | 2026-10-28 | cursor | 12 | 11 | 1 | 0 | subscription |
-| **total** | all | 180 | 164 | 16 | 15,891,798 | $28.54 (incl. estimates) |
+| 2026-11-10 | claude | 1 | 1 | 0 | 20,162 | $0.02 |
+| **total** | all | 181 | 165 | 16 | 15,911,960 | $28.56 (incl. estimates) |

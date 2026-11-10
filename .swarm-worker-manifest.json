@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "worker-e2e-pro64-2",
+      "agent": "claude",
+      "model": "sonnet",
+      "prompt": "Create the file docs/state/worker-e2e-pro64.md. It must contain exactly one line: 'pro64 worker e2e ok'. Change only that file.",
+      "context": [
+        "README.md"
+      ],
+      "outputs": [
+        "docs/state/worker-e2e-pro64.md"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}
