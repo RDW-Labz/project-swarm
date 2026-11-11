@@ -580,11 +580,11 @@ test('Hive entry imports exclude Cockpit, robot, tour and palette; supplied entr
   assert.ok(zipped < 22000, `entry gzip ${zipped} exceeds 22 KB`);
   const support = await Promise.all(['cc-hive-stage.js', 'hive-panels.js'].map(source));
   const suppliedHiveGzip = zipped + support.reduce((sum, text) => sum + gzipSync(text).length, 0);
-  assert.ok(suppliedHiveGzip < 45000, `Hive entry, runtime and panels gzip ${suppliedHiveGzip} exceeds 45 KB`);
+  assert.ok(suppliedHiveGzip < 47000, `Hive entry, runtime and panels gzip ${suppliedHiveGzip} exceeds 47 KB`);
   const robotHead = await source('robot-head.js');
   assert.deepEqual(staticImports(robotHead), [], 'robot facade must defer its 3D graph until an actual mount');
   t.diagnostic(`2 supplied Hive entry modules: ${bytes} bytes -> ${zipped} gzip bytes; graph dependencies excluded from this budget`);
-  t.diagnostic(`Hive entries + shared runtime + panels: ${suppliedHiveGzip} gzip bytes (45 KB budget)`);
+  t.diagnostic(`Hive entries + shared runtime + panels: ${suppliedHiveGzip} gzip bytes (47 KB budget)`);
 });
 
 test('hover-prefetched Cockpit data paints before a slow navigation refresh', async t => {

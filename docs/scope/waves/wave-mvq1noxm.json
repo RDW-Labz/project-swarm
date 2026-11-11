@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0320",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0320: Mount Hive overview on the Command Center route\nR-068 The Hive overview shows the swarm at a glance.\n  - A central brain entity sits in the layout with one node per project around it showing status colour, percent done, tickets building, needs-you count, and machine label from real data.\n  - A top stat strip shows projects, agents live, tickets done today, and needs you with labelled figures only.\n  - A category legend (building, blocked, needs you, done) uses consistent colours across nodes and the legend chips.\n  - Bottom panels show a plain-word live event log, lanes and who is working, what the swarm saved (relays avoided, retries, time), and a throughput chart fed from the event store.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: /command-center shows the Hive with stat strip, nodes, legend and panels\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- Keep a worker's own failure reason next to the job record, and never let a later generic message stand in for a blocked envelope. [build, redaction, secrets, worker-output]\n- Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing. [build, manifest, path-safety]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/watch-assets/command-center.js"
+      ],
+      "acceptance": [
+        "/command-center shows the Hive with stat strip, nodes, legend and panels"
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "--test-concurrency=4",
+        "--test-timeout=600000",
+        "tests/*.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}

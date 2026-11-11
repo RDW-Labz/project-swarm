@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "T-0457",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0457: Lane returns after 2 healthy checks and flapping lanes back off longer\nR-083 Routing uses lane health and reroutes without stuck jobs.\n  - A down lane gets no new jobs; its share goes to the next cheapest healthy lane in the existing cost order; a degraded lane stays routable with lower weight.\n  - A job already running on a lane that goes down is retried on another lane; a test with a fake lane going down proves no job stays running.\n  - A lane returns after 2 healthy checks in a row; flapping lanes back off for longer before they are re-added.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: A lane is re-added only after 2 healthy checks in a row and a flapping lane waits longer each time\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- An updater must run the installer of the version it installs, in a fresh process, not the code already loaded. [build, installer, release, tool, updater]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/self-manage/recovery.mjs"
+      ],
+      "acceptance": [
+        "A lane is re-added only after 2 healthy checks in a row and a flapping lane waits longer each time"
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "--test-concurrency=4",
+        "--test-timeout=600000",
+        "tests/*.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}

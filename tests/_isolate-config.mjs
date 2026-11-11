@@ -23,6 +23,8 @@ process.env.SWARM_REAL_CONFIG = currentConfig;
 const isolateDir = fs.mkdtempSync(path.join(testTmpBase, 'swarm-test-isolate-'));
 const isolatedConfigPath = path.join(isolateDir, 'config.json');
 process.env.SWARM_CONFIG = isolatedConfigPath;
+// Never read the developer's fleet machine names/roles in tests.
+process.env.SWARM_MACHINES_LOCAL = path.join(isolateDir, 'machines.local.json');
 
 // Paid launches now resolve the machine daily limit from SWARM_CONFIG; keep suite jobs from
 // hitting the real default ($5 stop) unless a test sets its own limit explicitly.

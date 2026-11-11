@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "concurrency": 10,
+  "jobs": [
+    {
+      "id": "T-0288",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0288: OpenAPI contract for the Command Center shared data layer\nR-066 Command Center views read one shared data layer with real labelled numbers only.\n  - Hive and Project Cockpit import the same board data module; a unit test asserts both views resolve identical values for projects, agents live, and needs-you counts.\n  - Every number rendered in Command Center views has a visible label and a hover explanation citing its source field; numbers without a trusted source are omitted from the DOM.\n  - Board accuracy tests from S4 extend to Hive stat strip and Cockpit counters; CI fails with exit non-zero when a displayed figure disagrees with the ledger by more than one ticket or $0.01 spend.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Generated mock must satisfy its own contract tests; contract tickets should emit OpenAPI. [contracts, mock-drift, openapi]\n- Every build ticket must pass the project typecheck and lint (and build when cheap) before it is done; a failure goes back to the worker with the errors. [lint, quality-gate, tests-not-run, typecheck]\n- Every ticket needs a test-run step against local Supabase/npm before it counts as done. [database, tests-not-run, verification]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "contracts/watch-s4-ops.json"
+      ],
+      "outputs": [
+        "contracts/command-center.json"
+      ],
+      "acceptance": [],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "contracts/watch-s4-ops.json",
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0291",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0291: Classic tab wrapper that holds the existing Swarm Watch views\nR-067 Everything Swarm Watch has today stays.\n  - Current Swarm Watch views move under a Classic tab; no existing route is removed from the router.\n  - A Playwright test requests each pre-upgrade Swarm Watch path and asserts HTTP 200 and a non-empty main landmark.\n  - Build progress, deploy tracking, and owner action panels from S4 still render under Classic with the same data contracts.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Current Swarm Watch views render under a Classic tab\n- AC2: No existing route is removed from the router\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing. [build, manifest, path-safety]\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- Derive the repo from the git remote instead of trusting a stale flag, and explain a redirect as a possible rename. [build, manifest]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/watch-assets/classic-tab.js"
+      ],
+      "acceptance": [
+        "Current Swarm Watch views render under a Classic tab",
+        "No existing route is removed from the router"
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0307",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0307: Glitch effect wrapper with duration, concurrency and reduced-motion limits\nR-075 Signature glitch style uses PowerGlitch within strict limits.\n  - Glitch-in on first load and on Hive→Cockpit switches; brain flickers on event bursts; hover glitch on project names, ticket ids, and robot heads; CountUp updates get a brief glitch; needs-you chips glitch once then stay still; failures and rate limits use stronger red or amber glitch; section headings glitch reveal on scroll into view.\n  - Each burst lasts under 400 ms, never loops continuously, never runs on text actively updating, and at most 3 glitches run at once; all effects disable when `prefers-reduced-motion` is set.\n  - `npm test -- tests/command-center-glitch-limits.test.mjs` exits 0 and asserts burst duration, concurrency cap, and reduced-motion off state.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Each burst lasts under 400 ms and at most 3 glitches run at once\n- AC2: All effects disable under prefers-reduced-motion\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- Run a toolchain sync once, outside the sandbox, before the worker starts, and grant the narrow extra reads that a synced toolchain actually needs to find itself. [build, manifest, sandbox, worker-output]\n- Point toolchains at a stable, non-temp directory, and flag it plainly whenever one still resolves under the temp dir. [build, manifest, path-safety]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/watch-assets/cc-glitch.js"
+      ],
+      "acceptance": [
+        "Each burst lasts under 400 ms and at most 3 glitches run at once",
+        "All effects disable under prefers-reduced-motion"
+      ],
+      "timeoutMs": 600000,
+      "dependencies": [
+        "powerglitch"
+      ],
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "T-0311",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0311: Skippable first-visit guided tour with Replay tour in Help\nR-077 A first-visit guided tour explains the Command Center.\n  - On first visit a skippable tour highlights the Hive, Project Cockpit, colour legend, and command palette in plain language.\n  - Help menu includes Replay tour, which restarts the tour without clearing completion for other users.\n  - Tour steps are reachable by keyboard and dismiss with Escape.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Tour highlights Hive, Cockpit, legend and palette and is dismissed with Escape\n- AC2: Replay tour restarts without clearing other users completion\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- Let a research brief name any readable path, read-only, while still keeping a copy for provenance and refusing early on a path that cannot be read. [build, manifest, path-safety]\n- An updater must run the installer of the version it installs, in a fresh process, not the code already loaded. [build, installer, release, tool, updater]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/watch-assets/cc-tour.js"
+      ],
+      "acceptance": [
+        "Tour highlights Hive, Cockpit, legend and palette and is dismissed with Escape",
+        "Replay tour restarts without clearing other users completion"
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "--test-concurrency=4",
+        "--test-timeout=600000",
+        "tests/*.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}

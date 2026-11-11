@@ -1,0 +1,525 @@
+diff --git a/tools/acceptance.mjs b/tools/acceptance.mjs
+index f67a410..f2dc63d 100644
+--- a/tools/acceptance.mjs
++++ b/tools/acceptance.mjs
+@@ -3,6 +3,7 @@
+ import { verdictLine } from './review-text.mjs';
+ import fs from 'node:fs/promises';
+ import path from 'node:path';
++import { expandTicketRefs } from './ticket-refs.mjs';
+ 
+ const NL = String.fromCharCode(10);
+ 
+@@ -178,6 +179,12 @@ export function evaluate({ ticket, cov, record, filesHash, testsPassed, accepted
+           evidence: item.by.file + ': ' + item.by.title,
+         };
+       }
++      // A line a test covers but that test has not been seen passing (no verify block, or it did not run): a recorded review pass for the same code stands in for it,
++      // otherwise the ticket could never be done and the review the sync asks for would count for nothing (found by the first live go --scope run).
++      const reviewed = recorded.find((e) => e && e.n === item.n);
++      if (reviewed && reviewed.verdict === 'pass') {
++        return { n: item.n, line: item.line, by: 'review', verdict: 'pass', evidence: typeof reviewed.evidence === 'string' ? reviewed.evidence : '' };
++      }
+       return {
+         n: item.n,
+         line: item.line,
+@@ -206,12 +213,12 @@ export function evaluate({ ticket, cov, record, filesHash, testsPassed, accepted
+   return { state, lines, missing, failing };
+ }
+ 
+-export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude' } = {}) {
++export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude', tickets = [] } = {}) {
+   const list = arr(items);
+   const context = [];
+   for (const item of list) {
+     const ticket = item.ticket ?? {};
+-    const paths = [...arr(ticket.files), ...arr(ticket.tests), ...arr(ticket.context)];
++    const paths = expandTicketRefs([...arr(ticket.files), ...arr(ticket.tests), ...arr(ticket.context)], tickets);
+     for (const p of paths) {
+       if (typeof p === 'string' && !p.startsWith('.env') && !p.includes('..') && !context.includes(p)) {
+         context.push(p);
+diff --git a/tools/completion.mjs b/tools/completion.mjs
+index 1acc9f8..f56b165 100644
+--- a/tools/completion.mjs
++++ b/tools/completion.mjs
+@@ -57,6 +57,7 @@ export const COMMANDS = [
+   command('projects', 'The projects on this machine (listed on the Swarm Watch board): list, add, remove.', 'none', ''),
+   command('history', 'The machine-wide history of projects, stages, runs, PRs, merges, lessons and spend: filter, search, CSV.', 'none', '--project --kind --q --from --to --limit --csv --backfill'),
+   command('models', 'Model watch: new open coding models that fit our GPUs and new API versions, into the inbox; compare models from eval runs.', 'none', '--force --json'),
++  command('with-concurrency', 'Run one swarm command with machineConcurrency set to N, and put the old value back when it ends (Ctrl-C, crash or kill included).', 'none', ''),
+   command('remote', 'Show the Swarm Watch board on your phone over Tailscale (your tailnet only, never the public internet): on, off, status, show, rotate.', 'none', ''),
+   command('phone', 'Answer decisions and approve proposed tickets from your phone through a private GitHub repo (GitHub app notifications).', 'none', '--repo --dry-run'),
+   command('time', 'Log your own hours on this project (private; used for quotes), and the automatic estimate.', 'none', '--date --through --days'),
+diff --git a/tools/concurrency-guard.mjs b/tools/concurrency-guard.mjs
+new file mode 100644
+index 0000000..31fe8b9
+--- /dev/null
++++ b/tools/concurrency-guard.mjs
+@@ -0,0 +1,116 @@
++// SPDX-License-Identifier: Apache-2.0
++// swarm with-concurrency N -- COMMAND...: run one swarm command with `machineConcurrency` set to N, and put the old value back when it ends. Always: normal exit, an error,
++// Ctrl-C, a kill, a crash of the wrapper itself (a small watcher process restores it when the wrapper dies), and the next swarm command after a power cut (a leftover marker whose
++// owner is gone is restored first thing).
++// The marker file sits next to the config and names the value to put back. It is restored only if the config still holds the value this guard set: a value the owner changed in the
++// meantime is never overwritten.
++import fs from 'node:fs';
++import path from 'node:path';
++import { spawn } from 'node:child_process';
++import { fileURLToPath } from 'node:url';
++import { resolveConfigPath } from './local-config.mjs';
++
++const SELF = fileURLToPath(import.meta.url);
++const SWARM = path.join(path.dirname(SELF), 'swarm.mjs');
++export const GUARD_USAGE = 'Usage: swarm with-concurrency N -- COMMAND [ARGS...]   (N is 1 to 2048; the command is a swarm command; the old value is put back when it ends, whatever happens)';
++const MIN = 1, MAX = 2048;
++
++export const markerPath = configFile => path.join(path.dirname(configFile), 'concurrency-restore.json');
++const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
++
++function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
++function writeJsonAtomic(file, value, mode = 0o600) {
++  fs.mkdirSync(path.dirname(file), { recursive: true });
++  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
++  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode });
++  fs.renameSync(tmp, file);
++}
++
++/** Puts the value back if a marker says to. Synchronous and idempotent (it is also what runs on the way out). Returns what it did. */
++export function restore(configFile) {
++  const marker = readJson(markerPath(configFile));
++  if (!marker || typeof marker !== 'object') { fs.rmSync(markerPath(configFile), { force: true }); return { restored: false, reason: 'no marker' }; }
++  const config = readJson(configFile);
++  let result;
++  if (config && typeof config === 'object' && !Array.isArray(config) && config.machineConcurrency === marker.set) {
++    if (marker.previous === null || marker.previous === undefined) delete config.machineConcurrency; else config.machineConcurrency = marker.previous;
++    writeJsonAtomic(configFile, config, 0o600);
++    result = { restored: true, to: marker.previous ?? null };
++  } else result = { restored: false, reason: 'the value was changed meanwhile: left as it is' };
++  fs.rmSync(markerPath(configFile), { force: true });
++  return result;
++}
++
++/** Called at the start of every swarm command: a marker whose owner is gone is restored. */
++export function restoreIfStale(configFile) {
++  try {
++    const marker = readJson(markerPath(configFile));
++    if (!marker) return null;
++    if (alive(marker.pid)) return null;
++    return restore(configFile);
++  } catch { return null; }
++}
++
++export function apply(configFile, value, { pid = process.pid, now = Date.now } = {}) {
++  if (!Number.isInteger(value) || value < MIN || value > MAX) throw Object.assign(new Error(`${GUARD_USAGE}`), { code: 'guard-usage' });
++  const stale = restoreIfStale(configFile);
++  const existing = readJson(markerPath(configFile));
++  if (existing && alive(existing.pid)) throw Object.assign(new Error(`another guarded run (process ${existing.pid}) has machineConcurrency set to ${existing.set}; wait for it or stop it`), { code: 'guard-busy' });
++  const config = readJson(configFile);
++  if (config === null) throw Object.assign(new Error(`${configFile} is missing or is not valid JSON: not changed`), { code: 'guard-config' });
++  if (!config || typeof config !== 'object' || Array.isArray(config)) throw Object.assign(new Error(`${configFile} is not a JSON object: not changed`), { code: 'guard-config' });
++  const previous = Object.hasOwn(config, 'machineConcurrency') ? config.machineConcurrency : null;
++  // The marker first: if anything fails after this, the next command restores it.
++  writeJsonAtomic(markerPath(configFile), { previous, set: value, pid, at: new Date(now()).toISOString() });
++  writeJsonAtomic(configFile, { ...config, machineConcurrency: value }, 0o600);
++  return { previous, set: value, staleRestored: stale?.restored ?? false };
++}
++
++/** The watcher: waits for `pid` to die, then restores. Runs as its own process so a crash or SIGKILL of the wrapper cannot leave the value changed. */
++function watch(pid, configFile) {
++  const timer = setInterval(() => {
++    if (alive(pid)) return;
++    clearInterval(timer);
++    try { const marker = readJson(markerPath(configFile)); if (marker && marker.pid === pid) restore(configFile); } catch { /* the next command restores it */ }
++    process.exit(0);
++  }, 300);
++}
++
++/** Runs `swarm ARGS` with the value set; resolves with the child's exit code once the value is back. `spawnImpl` and `startWatcher` are replaceable for tests. */
++export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, startWatcher = true, stdio = 'inherit', now = Date.now }) {
++  const applied = apply(configFile, value, { now });
++  let watcher = null;
++  if (startWatcher) { watcher = spawn(process.execPath, [SELF, '--watch', String(process.pid), configFile], { detached: true, stdio: 'ignore', env }); watcher.unref(); }
++  let done = false;
++  const finish = () => { if (done) return; done = true; try { restore(configFile); } catch { /* the next command restores it */ } };
++  const onExit = () => finish();
++  process.on('exit', onExit);
++  const child = spawnImpl(process.execPath, [SWARM, ...args], { stdio, env });
++  const forward = signal => () => { try { child.kill(signal); } catch { /* already gone */ } };
++  const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(sig => [sig, forward(sig)]);
++  for (const [sig, h] of handlers) process.on(sig, h);
++  const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, sig) => resolve(c ?? (sig ? 128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig] ?? 1) : 1))); });
++  for (const [sig, h] of handlers) process.off(sig, h);
++  finish();
++  process.off('exit', onExit);
++  try { watcher?.kill('SIGTERM'); } catch { /* it exits on its own once the pid is gone */ }
++  return { code, applied };
++}
++
++export async function runWithConcurrency(argv, { env = process.env } = {}) {
++  const cut = argv.indexOf('--');
++  const value = Number(argv[0]);
++  if (cut !== 1 || cut === argv.length - 1 || !/^\d+$/.test(argv[0] ?? '') || value < MIN || value > MAX) return { stdout: `${GUARD_USAGE}\n`, exitCode: 2 };
++  const rest = argv.slice(cut + 1);
++  if (rest[0] === 'with-concurrency') return { stdout: 'with-concurrency cannot wrap itself\n', exitCode: 2 };
++  try {
++    const { code, applied } = await runGuarded({ value, args: rest, env });
++    process.stderr.write(`machineConcurrency was ${applied.previous ?? 'unset'}, set to ${applied.set} for this command, and is back to ${applied.previous ?? 'unset'}.\n`);
++    return { stdout: '', exitCode: code };
++  } catch (error) {
++    if (String(error.code ?? '').startsWith('guard-')) return { stdout: `${error.message}\n`, exitCode: 1 };
++    throw error;
++  }
++}
++
++if (process.argv[1] === SELF && process.argv[2] === '--watch') watch(Number(process.argv[3]), process.argv[4]);
+diff --git a/tools/lanes.mjs b/tools/lanes.mjs
+index 18bd255..d639f36 100644
+--- a/tools/lanes.mjs
++++ b/tools/lanes.mjs
+@@ -20,6 +20,8 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
+   adaptive: agent === 'rented' ? Object.freeze({ min: 1, start: 4 }) : null,
+ })])));
+ 
++// The claude lane also takes the models for tier "mid" and tier "expensive" jobs (the router falls back to `model`).
++const CLAUDE_TIER_FIELDS = Object.freeze(['midModel', 'expensiveModel']);
+ function invalid(agent, field, reason) {
+   return Object.assign(new Error(`lanes-invalid: ${agent}.${field} ${reason}`), { code: 'lanes-invalid' });
+ }
+@@ -42,6 +44,7 @@ function validate(agent, lane) {
+     integer(agent, 'adaptive.min', lane.adaptive.min, 1, lane.concurrency);
+     integer(agent, 'adaptive.start', lane.adaptive.start, lane.adaptive.min, lane.concurrency);
+   }
++  for (const field of CLAUDE_TIER_FIELDS) if (Object.hasOwn(lane, field) && lane[field] !== null && (typeof lane[field] !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/.test(lane[field]))) throw invalid(agent, field, 'must be null or a valid model name');
+   if (lane.model !== null && (typeof lane.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/.test(lane.model))) {
+     throw invalid(agent, 'model', 'must be null or a valid model name');
+   }
+@@ -64,7 +67,7 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
+       if (!LANE_AGENTS.includes(agent)) throw invalid(agent, 'agent', 'is unknown');
+       if (!object(override)) throw invalid(agent, 'value', 'must be an object');
+       for (const [field, value] of Object.entries(override)) {
+-        if (!Object.hasOwn(LANE_DEFAULTS[agent], field)) throw invalid(agent, field, 'is unknown');
++        if (!Object.hasOwn(LANE_DEFAULTS[agent], field) && !(agent === 'claude' && CLAUDE_TIER_FIELDS.includes(field))) throw invalid(agent, field, 'is unknown');
+         if (field === 'backoff') {
+           if (!object(value)) throw invalid(agent, field, 'must be an object');
+           for (const [key, entry] of Object.entries(value)) {
+@@ -135,7 +138,20 @@ function validStore(store) {
+   return true;
+ }
+ 
+-export async function withLaneStore(fn, { dir = lanesDir(), now = Date.now, isAlive = pidAlive, timeoutMs = 10000 } = {}) {
++// Callers in this process go through one queue per store, so a thousand workers starting or stopping at once do not all poll the lock file: one of them holds the file lock at a time and
++// the rest wait their turn here (found by the 1,000-worker practice run: cancelling 1,000 workers made them time out on lanes.lock). The file lock still keeps other processes out.
++const storeQueues = new Map();
++export function withLaneStore(fn, options = {}) {
++  const dir = options.dir ?? lanesDir();
++  const previous = storeQueues.get(dir) ?? Promise.resolve();
++  const turn = previous.then(() => withLaneStoreFile(fn, { ...options, dir }));
++  const tail = turn.catch(() => {});
++  storeQueues.set(dir, tail);
++  tail.then(() => { if (storeQueues.get(dir) === tail) storeQueues.delete(dir); });
++  return turn;
++}
++
++async function withLaneStoreFile(fn, { dir = lanesDir(), now = Date.now, isAlive = pidAlive, timeoutMs = 10000 } = {}) {
+   const lock = path.join(dir, 'lanes.lock'), file = path.join(dir, 'lanes.json');
+   const host = os.hostname(), started = Date.now();
+   await fs.mkdir(dir, { recursive: true });
+diff --git a/tools/router.mjs b/tools/router.mjs
+index 3ce818a..9ef64d3 100644
+--- a/tools/router.mjs
++++ b/tools/router.mjs
+@@ -23,17 +23,26 @@ export function rentedContractProblem(job, contract = job?.contract) {
+   return null;
+ }
+ 
+-// Code jobs: Haiku first, then Cursor, then Codex; the Claude subscription only after 2 failures.
++// Code jobs: the flat-rate subscriptions first (Cursor, then Codex: a job there costs nothing extra), then paid Haiku; the Claude subscription only after 2 failures or for tier
++// "expensive". A lane that is paused (rate limit, out of credit) is skipped, so work falls to the next lane on its own.
+ // Hermes is not in this order: it runs only where a job type names it (research). OpenRouter runs
+ // only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive. The order comes
+ // from the lane benchmark (docs/state/lane-benchmark.md).
+-export const CHEAP_ORDER = Object.freeze(['anthropic', 'cursor', 'codex', 'openrouter']);
++export const CHEAP_ORDER = Object.freeze(['cursor', 'codex', 'anthropic', 'openrouter']);
+ export const ROUTE_ORDER = Object.freeze([...CHEAP_ORDER, 'claude']);
+ 
+ // The Anthropic lane's model follows the job's tier: the lane model (Haiku) by default, Sonnet for
+ // tier "mid". Opus is never picked here; it needs an explicit anthropic job with tier "expensive".
+ const ANTHROPIC_MID_MODEL = 'claude-sonnet-5-5';
+-const laneModel = (job, agent, lanes) => (agent === 'anthropic' && job.tier === 'mid' ? ANTHROPIC_MID_MODEL : lanes[agent].model);
++// The Claude subscription lane has three tiers: `model` is the everyday one, `expensiveModel` (default: `model`) serves tier "expensive" jobs, `midModel` serves tier "mid".
++const laneModel = (job, agent, lanes) => {
++  if (agent === 'anthropic' && job.tier === 'mid') return ANTHROPIC_MID_MODEL;
++  if (agent === 'claude') {
++    if (job.tier === 'expensive') return lanes.claude.expensiveModel ?? lanes.claude.model;
++    if (job.tier === 'mid' && lanes.claude.midModel) return lanes.claude.midModel;
++  }
++  return lanes[agent].model;
++};
+ 
+ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract, ready = 0 } = {}) {
+   if (job?.agent !== 'auto') {
+diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
+index 8b34a71..e8c2128 100644
+--- a/tools/scope-commands.mjs
++++ b/tools/scope-commands.mjs
+@@ -26,6 +26,7 @@ import { validateProfile, protectedPathHit, isSecretPath, isExampleFile } from '
+ import { ensureGitignore } from './gitignore-defaults.mjs';
+ import { workTreeFingerprint } from './work-tree.mjs';
+ import { otherManagerLockfile } from './ticket-manifest.mjs';
++import { loadLocalConfig } from './local-config.mjs';
+ import { doneEvidence, ticketTests, failedRunChecks } from './verify-config.mjs';
+ import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
+ import { nextStep, sizeTicket } from './escalation.mjs';
+@@ -1231,9 +1232,12 @@ async function cmdSync(root, { rest, flags }) {
+       if (integrated && !integrated.has(t.id)) { notIntegrated.push(t.id); continue; }
+       // The test files a ticket names must exist in the tree: a ticket whose tests were never written is not done, whatever the suite says.
+       const namedTests = ['build', 'test', 'migration'].includes(t.type) ? [...new Set([...(t.tests ?? []), ...ticketTests(t)])].filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f) && !(t.deletes ?? []).includes(f)) : [];
+-      const missingAll = namedTests.filter(f => !existsSync(path.join(root, f)));
+-      // A test file another ticket owns is that ticket's to write: while it is not done, this ticket waits (no retry, no attempt).
++      // A ticket that comes after this one (it depends on it, directly or through others) can never be waited for: its files are written later, so they are not this ticket's to find.
++      const laterIds = new Set();
++      for (let grew = true; grew;) { grew = false; for (const o of ledger.tickets) if (!laterIds.has(o.id) && o.id !== t.id && (o.dependsOn ?? []).some(d => d === t.id || laterIds.has(d))) { laterIds.add(o.id); grew = true; } }
+       const ownerOf = f => ledger.tickets.find(o => o.id !== t.id && o.status !== 'cancelled' && ((o.files ?? []).includes(f) || (o.type === 'test' && (o.tests ?? []).includes(f))));
++      const missingAll = namedTests.filter(f => !existsSync(path.join(root, f)) && !laterIds.has(ownerOf(f)?.id));
++      // A test file another ticket owns is that ticket's to write: while it is not done, this ticket waits (no retry, no attempt).
+       const waiting = missingAll.filter(f => { const o = ownerOf(f); return o && o.status !== 'done'; });
+       if (waiting.length) { unverified.push(`${t.id} (waiting for ${[...new Set(waiting.map(f => ownerOf(f).id))].join(', ')} to write ${waiting.join(', ')}; not retried)`); continue; }
+       const missingTests = missingAll;
+@@ -1365,7 +1369,7 @@ async function cmdSync(root, { rest, flags }) {
+     let accLine = null;
+     if (accNeed.length) {
+       if (`acc-review-${rest[0]}`.length > 60) return out(`run id ${rest[0]} is too long for an acceptance review job id (at most ${60 - 'acc-review-'.length} characters)`, 1);
+-      const manifest = acceptanceManifest(rest[0], accNeed.map(x => ({ ticket: x.ticket, uncovered: x.lines })), { model: profile?.acceptance?.model ?? 'sonnet' });
++      const manifest = acceptanceManifest(rest[0], accNeed.map(x => ({ ticket: x.ticket, uncovered: x.lines })), { model: profile?.acceptance?.model ?? 'sonnet', tickets: ledger.tickets });
+       // A fresh token goes into the review prompt and the hashes file: a review run counts only for the sync that wrote this exact manifest.
+       const nonce = randomBytes(12).toString('hex');
+       for (const job of manifest.jobs) job.prompt = `${job.prompt}\n\nReview token (copy nothing, it only identifies this request): ${nonce}`;
+@@ -1382,7 +1386,7 @@ async function cmdSync(root, { rest, flags }) {
+     const notUnmet = [...unmetOk].filter(id => !unmetNow.includes(id));
+     let reviewLine = null;
+     if (needReview.length) {
+-      const manifest = await securityReviewManifest(root, rest[0], needReview);
++      const manifest = await securityReviewManifest(root, rest[0], needReview, ledger.tickets);
+       const file = `.swarm/security-reviews/${rest[0]}.json`;
+       await fs.mkdir(path.join(root, '.swarm', 'security-reviews'), { recursive: true });
+       await fs.writeFile(path.join(root, file), `${JSON.stringify(manifest, null, 2)}\n`);
+@@ -1790,7 +1794,7 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
+     }
+     const humans = ready.filter(t => t.type === 'human').length;
+     const profile = await readProfile(root);
+-    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile) });
++    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile), laneModels: (() => { try { return loadLocalConfig().lanes; } catch { return undefined; } })() });
+     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
+     const ids = manifest.jobs.map(j => j.id);
+     if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ready tickets');
+diff --git a/tools/security-review.mjs b/tools/security-review.mjs
+index bff3b8e..8e97f0a 100644
+--- a/tools/security-review.mjs
++++ b/tools/security-review.mjs
+@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
+ import fs from 'node:fs/promises';
+ import path from 'node:path';
+ import { isSensitivePath } from './sensitive-paths.mjs';
++import { expandTicketRefs } from './ticket-refs.mjs';
+ 
+ const RECORDS = '.swarm/security-reviews/records.json';
+ const AUTH_PATH = /(^|\/)(auth|authn|authz|session|sessions|login|logout|signup|oauth|middleware|permissions?|policies)(\/|\.|-|_|$)/i;
+@@ -49,9 +50,9 @@ export async function writeReviewRecords(root, data) {
+ }
+ 
+ // One read-only Opus job for the whole run: it sees only the files of the tickets that need it.
+-export async function securityReviewManifest(root, runId, items) {
++export async function securityReviewManifest(root, runId, items, tickets = []) {
+   const context = [];
+-  for (const { ticket } of items) for (const f of [...(ticket.files ?? []), ...(ticket.context ?? [])]) {
++  for (const { ticket } of items) for (const f of expandTicketRefs([...(ticket.files ?? []), ...(ticket.context ?? [])], tickets)) {
+     if (isSensitivePath(f) && /(^|\/)\.project-swarm\.json$/.test(f)) continue;
+     if (/(^|\/)\.env(\.|$)/.test(f) && !/example/i.test(f)) continue;
+     if (!context.includes(f) && await fs.stat(path.join(root, f)).then(s => s.isFile(), () => false)) context.push(f);
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index ea5e653..38fec87 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -60,11 +60,11 @@ import { commandLikeMessage } from './goal-guard.mjs';
+ import { zshCompletion, completeRuns, COMMANDS } from './completion.mjs';
+ import { checkSwarmCommand } from './swarm-bin.mjs';
+ import { autoInit, GOAL_BUDGET, isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, trackedFiles, worktreeDirty, createGoBranch } from './goal.mjs';
+-import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleStub } from './scale.mjs';
++import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, SCALE_MAX_JOBS, prepareScaleRepo, scaleStub, scaleFull } from './scale.mjs';
+ import { routeJob, rentedContractProblem } from './router.mjs';
+ import { anthropicPrice, assertOpusTier as assertAnthropicModel, readAnthropicKey, ANTHROPIC_ENDPOINT } from './anthropic.mjs';
+ import { loadRentedConfig, createRentalMeter, rentalDecision, rentedSensitiveOk, RENTED_DEFAULTS } from './rented.mjs';
+-import { checkProjectCap, noCapWarning } from './project-spend.mjs';
++import { checkProjectCap, noCapWarning, readProjectCap, projectSpend } from './project-spend.mjs';
+ import { isCheckOnlyBlock, allOutputsWritten, deferredCheckWarnings, safeReason } from './central-checks.mjs';
+ import { accrueSpend, resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
+ import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
+@@ -2706,7 +2706,18 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+     // The older global spend guard owns these two settings; the budget resolver owns lanes.
+     const spend = worktreeConfig.spend && typeof worktreeConfig.spend === 'object' ? { ...worktreeConfig.spend } : worktreeConfig.spend;
+     if (spend && typeof spend === 'object') { delete spend.warnUsd; delete spend.dailyCapUsd; }
+-    state.budgetInputs = { config: { spend }, cli: { maxUsd, maxTokens } };
++    // The project-wide cap is hard for this run too: its own cap is never more than what the project has left (spent and still-running runs' caps taken off).
++    let runMaxUsd = maxUsd;
++    try {
++      const info = await readProjectCap(root, { env });
++      if (info) {
++        const sp = await projectSpend(root);
++        const remaining = info.cap - sp.usd - (sp.exposureUsd ?? 0);
++        const own = maxUsd ?? manifest.budget?.maxUsd ?? Infinity;
++        if (remaining > 0 && remaining < own) runMaxUsd = Math.round(remaining * 1e6) / 1e6;
++      }
++    } catch { /* an unreadable project cap was already refused above */ }
++    state.budgetInputs = { config: { spend }, cli: { maxUsd: runMaxUsd, maxTokens } };
+     state.budget = resolveBudget({ ...state.budgetInputs, manifest });
+     state.ledger = await ledgerSettings(root, manifest, worktreeConfig);
+     state.idle = manifest.idle ?? worktreeConfig.idle ?? [];
+@@ -7568,6 +7579,15 @@ async function mainInner() {
+   const args=process.argv.slice(2);let root=resolveDefaultRoot(ownRoot, process.cwd());
+   // swarm --version (also -v, -V) is swarm version.
+   if(['--version','-v','-V'].includes(args[0]))args[0]='version';
++  // A guarded machineConcurrency whose owner is gone (a crash, a kill, a power cut) is put back before anything else runs.
++  try{const {restoreIfStale}=await import('./concurrency-guard.mjs');const {resolveConfigPath}=await import('./local-config.mjs');restoreIfStale(resolveConfigPath({env:process.env}));}catch{/* a bad config is reported by the command that needs it */}
++  if(args[0]==='with-concurrency'){
++    const {runWithConcurrency}=await import('./concurrency-guard.mjs');
++    const res=await runWithConcurrency(args.slice(1));
++    process.stdout.write(res.stdout);
++    if(res.exitCode)process.exitCode=res.exitCode;
++    return;
++  }
+   const testIndex=args.indexOf('--test');
+   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
+   const newCommandIndex = rootIndex === 0 ? 2 : 0;
+@@ -7823,7 +7843,8 @@ async function mainInner() {
+       }});
+     }finally{for(const release of releases.reverse())await release();process.off('SIGINT',onSigint);}
+     process.stdout.write(`${JSON.stringify({status:outcome.status,reason:outcome.reason,summary:outcome.summary,waves:outcome.waves.map(w=>({n:w.n,tickets:w.ids.length,run:w.runId,status:w.status,done:w.done??null,reviews:w.reviews}))})}\n`);
+-    say(`${outcome.status}: ${outcome.reason}`);
++    // (`say` is declared inside the try above and is not visible here: this line used to throw "say is not defined" after every loop, skipping the exit code below.)
++    process.stderr.write(`scope: ${outcome.status}: ${outcome.reason}\n`);
+     const code=loopExitCode(outcome.status);
+     if(code)process.exitCode=code;
+     return;
+@@ -8061,7 +8082,7 @@ async function mainInner() {
+   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
+   // whitespace counts, so a mistyped one-word command never starts a paid run.
+   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
+-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] [--kit NAME --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | time log HOURS [NOTE] | time list | quote SCOPE.md | quote record|list|config | resolve BLOCKER_ID | remote on|off|status|show|rotate | phone setup --repo OWNER/NAME | phone sync [--dry-run] | phone status | phone off | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run] | handoff check --url URL [--propose] | handoff status | handoff final | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
++  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] [--kit NAME --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | time log HOURS [NOTE] | time list | quote SCOPE.md | quote record|list|config | resolve BLOCKER_ID | remote on|off|status|show|rotate | with-concurrency N -- COMMAND... | phone setup --repo OWNER/NAME | phone sync [--dry-run] | phone status | phone off | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run] | handoff check --url URL [--propose] | handoff status | handoff final | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+   if(args[0]==='lesson'){
+     try{
+       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
+@@ -8173,16 +8194,37 @@ async function mainInner() {
+     return;
+   }
+   if(args[0]==='scale'){
+-    let jobs=SCALE_DEFAULT_JOBS,concurrency=SCALE_DEFAULT_CONCURRENCY;
++    let jobs=SCALE_DEFAULT_JOBS,concurrency=SCALE_DEFAULT_CONCURRENCY,full=false;
+     for(let index=1;index<args.length;index++){
+-      const flag=args[index],value=args[++index];
+-      if(flag==='--jobs'){if(!/^\d+$/.test(value??''))fail('--jobs must be an integer 1–500');jobs=Number(value);}
++      const flag=args[index];
++      if(flag==='--full'){full=true;continue;}
++      const value=args[++index];
++      if(flag==='--jobs'){if(!/^\d+$/.test(value??''))fail(`--jobs must be an integer 1–${SCALE_MAX_JOBS}`);jobs=Number(value);}
+       else if(flag==='--concurrency'){if(!/^\d+$/.test(value??''))fail('--concurrency must be an integer 1–2048');concurrency=Number(value);}
+       else fail('Invalid arguments; use --help');
+     }
+     const dir=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-scale-'));
+     try{
+       await prepareScaleRepo(dir);
++      if(full){
++        // The stub run, then Watch, the panic button and a backup at that size, all inside this throwaway repo.
++        const [{createBoardApi},{projectId},{runStopAll,readStopMarker,clearStop},{realStopDeps},{createBackup,verifyBackup},{createLedger,writeLedger}]=await Promise.all([import('./watch-cli.mjs'),import('./projects.mjs'),import('./stop-all.mjs'),import('./safety-commands.mjs'),import('./state-backup.mjs'),import('./tickets.mjs')]);
++        const realDir=await fs.realpath(dir);
++        const stopEnv={PATH:process.env.PATH,HOME:os.tmpdir(),SWARM_CONFIG:path.join(os.tmpdir(),'swarm-scale-missing-config.json')};
++        const result=await scaleFull(realDir,{jobs,concurrency,runManifest,integrateRun,
++          board:{createBoardApi,projectId},
++          stop:{runStopAll,readMarker:readStopMarker,clear:clearStop,deps:{...realStopDeps(realDir,{env:stopEnv,reason:'scale practice'}),pollMs:50,waitMs:30000}},
++          backup:{create:createBackup,verify:verifyBackup},
++          ledger:{write:async(root,count)=>{
++            const tickets=Array.from({length:count},(_,i)=>({id:`T-${String(i+1).padStart(4,'0')}`,title:`Stub ticket ${i+1}`,type:'build',epic:'E',scopeRefs:['R-001'],acceptance:['ok'],files:[`out/${i}.txt`],context:[],contracts:[],dependsOn:[],size:'S',risk:'low',sensitive:false,status:'done',stage:'S1'}));
++            await writeLedger(root,createLedger({scope:{name:'scale',version:1,hash:'a'.repeat(64)},tickets}));
++            await fs.mkdir(path.join(root,'coordination'),{recursive:true});
++            await fs.writeFile(path.join(root,'coordination','journal.ndjson'),Array.from({length:count},(_,i)=>JSON.stringify({kind:'note',text:`line ${i}`,at:new Date().toISOString()})).join('\n')+'\n');
++          }}});
++        process.stdout.write(`${JSON.stringify(result)}\n`);
++        if(!result.ok)process.exitCode=1;
++        return;
++      }
+       const result=await scaleStub(dir,{jobs,concurrency,holdMs:20,runManifest,integrateRun});
+       process.stdout.write(`${JSON.stringify(result)}\n`);
+       if(result.complete!==jobs||result.costUsd!==0)process.exitCode=1;
+diff --git a/tools/ticket-manifest.mjs b/tools/ticket-manifest.mjs
+index 3f028d4..eacb0ac 100644
+--- a/tools/ticket-manifest.mjs
++++ b/tools/ticket-manifest.mjs
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ import { parseLane, laneOkForSensitive, PROPOSAL_ORIGINS } from './tickets.mjs';
+ import { looksLikeTestFile } from './wiring.mjs';
++import { expandTicketRefs } from './ticket-refs.mjs';
+ import * as scopeModule from './scope.mjs';
+ import { queryFromTicket, selectNotes, renderNotes } from './lesson-notes.mjs';
+ import { buildTicketContext } from './ticket-context.mjs';
+@@ -86,7 +87,7 @@ function promptFor(t,reqs,lessons,extra={}){
+ }
+ 
+ export function ticketsToManifest(tickets,opts={}){
+-  const {ledger,scope,ready=true,contract,maxJobs,lessons,verify,packageManager,contextEnv,quality}=opts;
++  const {ledger,scope,ready=true,contract,maxJobs,lessons,verify,packageManager,contextEnv,quality,laneModels}=opts;
+   if(maxJobs!==undefined&&!(Number.isSafeInteger(maxJobs)&&maxJobs>0)){
+     const e=new Error('maxJobs must be a positive safe integer');
+     e.code='ticket-max-jobs';
+@@ -114,13 +115,13 @@ export function ticketsToManifest(tickets,opts={}){
+       if(f.endsWith('/'))warnings.push(t.id+': folder output '+f+' skipped');
+       else outputs.push(f);
+     }
+-    let context=[...new Set([...(t.context||[]),...(t.contracts||[])])];
++    let context=expandTicketRefs([...(t.context||[]),...(t.contracts||[])],[...byId.values()]);
+     if(contract&&!context.includes(contract))context.push(contract);
+     // Automatic context: shared project files first (cached), then the files this kind of ticket needs.
+     let autoShared=[],kind=null,mockupAdded=false;
+     if(contextEnv){
+       const reqText=(t.scopeRefs||[]).map(id=>reqs.get(id)).filter(Boolean).flatMap(r=>[r.text,...(r.acceptance||[])]).join('\n');
+-      const built=buildTicketContext({ticket:{...t,requirements:reqText},scope,exists:contextEnv.exists,sizes:contextEnv.sizes,profileContext:contextEnv.profileContext,listFiles:contextEnv.listFiles,limits:contextEnv.limits});
++      const built=buildTicketContext({ticket:{...t,context:expandTicketRefs(t.context||[],[...byId.values()]),requirements:reqText},scope,exists:contextEnv.exists,sizes:contextEnv.sizes,profileContext:contextEnv.profileContext,listFiles:contextEnv.listFiles,limits:contextEnv.limits});
+       warnings.push(...built.warnings.map(w=>t.id+': '+w));
+       kind=built.kind;autoShared=built.cacheContext;
+       // Only the filtered paths reach the job (the ticket's own context, contracts and tests went through the same filter); the manifest contract only if it passes it.
+@@ -178,7 +179,10 @@ export function ticketsToManifest(tickets,opts={}){
+       else if(!editsInPlace&&(vfields||deletes.length||job.shell))warnings.push(t.id+': lane '+t.lane+' ignored: this ticket needs a worker that runs commands or deletes files');
+       else{
+         job.agent=lane.agent;
+-        if(lane.model)job.model=lane.model;else if(lane.agent!==prev)delete job.model;
++        // Prompt caching belongs to the Anthropic lane: a ticket pinned anywhere else carries its shared files as plain context.
++        if(lane.agent!=='anthropic')delete job.cacheContext;
++        // A pin without a model takes the lane's configured one (a job with a named agent and no model is refused); the claude lane's tiers follow the ticket's risk.
++        if(lane.model)job.model=lane.model;else if(lane.agent!==prev||!job.model){delete job.model;const cfg=laneModels?.[lane.agent];const m=lane.agent==='claude'&&t.risk==='high'&&cfg?.expensiveModel?cfg.expensiveModel:cfg?.model;if(typeof m==='string'&&m)job.model=m;else warnings.push(t.id+': lane '+t.lane+' has no model in the machine config; set lanes.'+lane.agent+'.model');}
+         if(vfields){if(lane.agent==='codex')delete job.after;else if(deps.length)job.after=deps;}
+       }
+     }
+diff --git a/tools/ticket-refs.mjs b/tools/ticket-refs.mjs
+new file mode 100644
+index 0000000..8ba6d5f
+--- /dev/null
++++ b/tools/ticket-refs.mjs
+@@ -0,0 +1,18 @@
++// SPDX-License-Identifier: Apache-2.0
++// A ticket's context may name another ticket ("T-0193") instead of a file. Every place that turns context into paths resolves it to that ticket's files (its tests too); an id that
++// matches no ticket is dropped, never passed on as a path.
++const TICKET_ID = /^T-\d{1,6}$/;
++
++export const isTicketRef = v => typeof v === 'string' && TICKET_ID.test(v.trim());
++
++export function expandTicketRefs(paths, tickets) {
++  const byId = new Map((Array.isArray(tickets) ? tickets : []).map(t => [t.id, t]));
++  const out = [];
++  for (const p of Array.isArray(paths) ? paths : []) {
++    if (!isTicketRef(p)) { out.push(p); continue; }
++    const t = byId.get(p.trim());
++    if (!t) continue;
++    for (const f of [...(t.files ?? []), ...(t.tests ?? [])]) if (typeof f === 'string' && f && !f.endsWith('/')) out.push(f);
++  }
++  return [...new Set(out)];
++}

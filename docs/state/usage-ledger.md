@@ -165,25 +165,49 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-27 | - | d-fix-gc-ledger-autopilot: 37 flagged catches updated; checksRun all passed; gc: 12 narrowed, 3 visi | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-27 | - | ask-1793115390244-d531b567: complete | claude | opus | pass | 25,389 | $0.18 |
-| 2026-10-27 | - | d-fix-board-data-board: checksRun: [{"name":"board tests","status":"passed"}]; board.mjs:72 (a) unli | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-27 | - | d-fix-watch-cli: complete | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-27 | - | d-fix-phone: 20 flagged catch sites fixed; approval gate (`why`, `same(token, rec.word)`) untouched; | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-27 | - | ask-1793118702987-78f7de07: complete | claude | opus | pass | 57,297 | $0.19 |
-| 2026-10-28 | - | bump16723: complete | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | reviewtrain1: complete | claude | opus | pass | 1,097,737 | $1.50 |
-| 2026-10-28 | - | fixapprove: B1: orchestratorWriteAllowedRel denies .swarm/project/{approved-tickets.json,tickets.jso | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | fixguardrace: Added orchestratorManifestGate (async, dynamic imports) vetting parsed manifests via s | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | fixdefaultbranch: Protected branches: main, master, init.defaultBranch, and every branch from refs/r | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | paidkeypause: Hosted lambda only: pause gate runs when SWARM_LAMBDA_URL is unset; self-hosted lambda | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | paidpausevalidate: exit 1: [31m✗ Failed to reach the Cursor API. If you are behind a corporate proxy | cursor | composer-2.5 | failed: exit 1: [31m✗ Failed to reach the Cursor API. If you are beh | - | subscription |
-| 2026-10-28 | - | paidpausevalidate: Imported pausedPaidLaneProblems and isHostedLambdaInference; after the openrouter | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | b13redirect: omWriteTargetRel resolves root, cwd, and target with realpath before path.relative; seg | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | hangguard: Added withHangGuard helper with comment, self-test, and wrapped cancellation cleanup deni | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | hangguard: withHangGuard races runManifest against a timer; denied-kill hang comment; self-test for | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | t2money: status blocked: tests/api-workers.test.mjs must assert day cap $20 (lines 18–22, 24–25); fi | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-28 | - | t2reviewgaps: B16: delete-only branch in cmdSync now uses the same security-review gate as the norma | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-25 | - | split-S11: Split R-081 to R-091 into 31 small build, test, integration and human tickets under the e | anthropic | claude-haiku-5-5 | pass | 49,600 | $0.01 |
+| 2026-10-26 | - | T-0068: complete | claude | composer-2.5 | timeout: exit 143: no stderr output; timeout | - | subscription |
+| 2026-10-26 | - | T-0068: complete | claude | composer-2.5 | timeout: exit 143: no stderr output; timeout | - | subscription |
+| 2026-10-26 | - | T-0068: complete | claude | sonnet | pass | 131,318 | $0.12 |
+| 2026-10-26 | - | acc-review-1793030244978-7e1c7464: T-0068 passes. The CLI wiring is visible in tools/swarm.mjs and c | claude | sonnet | pass | 24,947 | $0.03 |
+| 2026-10-26 | - | T-0288: Created contracts/command-center.json as an OpenAPI 3.1 contract for ticket T-0288. It defin | anthropic | claude-haiku-5-5 | pass | 22,423 | $0.01 |
+| 2026-10-26 | - | T-0291: Adds tools/watch-assets/classic-tab.js, a dependency-free ES module with two helpers: wrapCl | anthropic | claude-haiku-5-5 | pass | 4,443 | $0.00 |
+| 2026-10-26 | - | T-0307: Ticket T-0307: added tools/watch-assets/cc-glitch.js, a self-contained glitch wrapper that c | anthropic | claude-haiku-5-5 | pass | 4,480 | $0.00 |
+| 2026-10-26 | - | T-0311: Ticket T-0311: created tools/watch-assets/cc-tour.js as a complete new file with a skippable | anthropic | claude-haiku-5-5 | pass | 7,346 | $0.00 |
+| 2026-10-26 | - | T-0073: Wrote tests/wave-quarantine.test.mjs covering AC1 (quarantine moves and retry read-only cont | anthropic | claude-haiku-5-5 | pass | 29,789 | $0.01 |
+| 2026-10-26 | - | T-0073: Ticket T-0073, test job only. I added one AC2 test to tests/wave-quarantine.test.mjs showing | anthropic | claude-haiku-5-5 | pass | 28,509 | $0.01 |
+| 2026-10-26 | - | T-0452: Adds tools/self-manage/lane-monitor.mjs for ticket T-0452: discovers lanes from the config ( | anthropic | claude-haiku-5-5 | pass | 33,310 | $0.01 |
+| 2026-10-26 | - | acc-review-1793044990797-6052b64b: complete | claude | sonnet | pass | 16,365 | $0.03 |
+| 2026-10-26 | - | T-0455: Created tools/self-manage/reroute.mjs, the only declared output, as a pure routing helper fo | anthropic | claude-haiku-5-5 | pass | 25,444 | $0.00 |
+| 2026-10-26 | - | acc-review-1793045797928-57d828e4: T-0455 acceptance line 1 passes: down lanes get zero share and ze | claude | sonnet | pass | 35,754 | $0.11 |
+| 2026-10-26 | - | T-0319: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-26 | - | T-0456: Adds tools/self-manage/job-retry.mjs for T-0456 (R-083, AC1). It exports retryJobsFromDownLa | anthropic | claude-haiku-5-5 | pass | 7,644 | $0.00 |
+| 2026-10-26 | - | T-0457: Added a lane recovery tracker in tools/self-manage/recovery.mjs. A down lane is re-added onl | anthropic | claude-haiku-5-5 | failed: Worker must return every declared output exactly once | - | unknown |
+| 2026-10-26 | - | T-0457: Added a lane recovery tracker in tools/self-manage/recovery.mjs. A down lane is re-added onl | anthropic | claude-sonnet-5-5 | pass | 3,980 | $0.02 |
+| 2026-10-26 | - | acc-review-1793047539747-39aedb76: Reviewed tools/self-manage/recovery.mjs for T-0457; the single ac | claude | sonnet | pass | 14,259 | $0.02 |
+| 2026-10-26 | - | T-0458: Implemented tools/self-manage/lane-events.mjs for T-0458 (AC1). It builds one single-line JS | anthropic | claude-haiku-5-5 | pass | 4,496 | $0.00 |
+| 2026-10-26 | - | sec-review-1793048317850-d2e5c631: T-0458 security review of tools/self-manage/lane-events.mjs: pass | claude | opus | pass | 14,404 | $0.05 |
+| 2026-10-26 | - | acc-review-1793048317850-d2e5c631: complete | claude | sonnet | pass | 13,699 | $0.02 |
+| 2026-10-26 | - | T-0121: Ticket T-0121: Render the Split quality panel with green, amber and red metrics per project | cursor | composer-2.5 | timeout: exit 143: no stderr output; timeout | - | subscription |
+| 2026-10-26 | - | T-0121: T-0121: SplitQualityPanel.render(host, splitQuality) draws all seven R-027 metrics with grad | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-26 | - | sec-review-rev-s10b: Reviewed 4 tickets from rev-s10b. T-0461 fails: the watchdog's leak check (pare | claude | opus | pass | 32,915 | $0.23 |
+| 2026-10-27 | - | T-0320: complete | cursor | claude-haiku-5-5 | failed: Worker must return every declared output exactly once | - | subscription |
+| 2026-10-27 | - | T-0320: complete | cursor | claude-sonnet-5-5 | failed: Worker must return every declared output exactly once | - | subscription |
+| 2026-10-27 | - | T-0320: complete | cursor | composer-2.5 | failed: exit 1: RetriableError: [resource_exhausted] Error; Cursor e | - | subscription |
+| 2026-10-27 | - | T-0320: complete | cursor | composer-2.5 | pass | - | $0.01 |
+| 2026-10-27 | - | T-0074: complete | claude | composer-2.5 | timeout: exit 143: no stderr output; timeout | - | subscription |
+| 2026-10-27 | - | T-0074: complete | claude | composer-2.5 | timeout: exit null: no stderr output; timeout | - | subscription |
+| 2026-10-27 | - | T-0074: complete | claude | sonnet | pass | 79,950 | $0.13 |
+| 2026-10-27 | - | T-0082: Ticket T-0082: Per-checkout lock so only one base check runs per worktree at a time | cursor | composer-2.5 | cancelled: exit 143: no stderr output; cancelled | - | subscription |
+| 2026-11-09 | - | reviewtrain938: complete | claude | opus | pass | 1,883,088 | $3.49 |
+| 2026-11-09 | - | reviewtrain938: complete | claude | opus | pass | 2,076,351 | $3.60 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 1,947,615 | $3.49 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 1,372,216 | $3.56 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 2,010,080 | $3.81 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 2,156,554 | $3.85 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 3,247,466 | $4.60 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 1,473,438 | $3.56 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 2,166,863 | $3.87 |
 
 ## Daily summary
 
@@ -201,8 +225,12 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| 2026-10-27 | claude | 2 | 2 | 0 | 82,686 | $0.37 |
-| 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
-| 2026-10-28 | claude | 1 | 1 | 0 | 1,097,737 | $1.50 |
-| 2026-10-28 | cursor | 12 | 11 | 1 | 0 | subscription |
-| **total** | all | 180 | 164 | 16 | 15,891,798 | $28.54 (incl. estimates) |
+| 2026-10-25 | anthropic | 1 | 1 | 0 | 49,600 | $0.01 |
+| 2026-10-26 | anthropic | 12 | 11 | 1 | 171,864 | $0.06 |
+| 2026-10-26 | claude | 10 | 8 | 2 | 283,661 | $0.61 |
+| 2026-10-26 | cursor | 3 | 2 | 1 | 0 | subscription |
+| 2026-10-27 | claude | 3 | 1 | 2 | 79,950 | $0.13 |
+| 2026-10-27 | cursor | 5 | 1 | 4 | 0 | $0.01 |
+| 2026-11-09 | claude | 2 | 2 | 0 | 3,959,439 | $7.09 |
+| 2026-11-10 | claude | 7 | 7 | 0 | 14,374,232 | $26.74 |
+| **total** | all | 204 | 179 | 25 | 33,630,121 | $61.32 (incl. estimates) |

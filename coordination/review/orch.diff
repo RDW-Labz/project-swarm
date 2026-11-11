@@ -1,0 +1,765 @@
+diff --git a/tools/board-data.mjs b/tools/board-data.mjs
+index 56c3cbe..1a35440 100644
+--- a/tools/board-data.mjs
++++ b/tools/board-data.mjs
+@@ -10,6 +10,7 @@ import { projectSummary } from './project-spend.mjs';
+ import { listLessons } from './lesson-store.mjs';
+ import { sanitizeWorkerText } from './worker-text.mjs';
+ import os from 'node:os';
++import { projectOrchestrator } from './board-orchestrator.mjs';
+ 
+ const DAY = 86400000;
+ const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
+@@ -157,6 +158,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
+     stage: tickets.stage, tickets,
+     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
+     agents, cost,
++    orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
+     spend: { usd: cost.allUsd, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached) },
+     recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
+     lastRunAt: lastRun?.startedAt ?? null,
+@@ -184,7 +186,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
+     overviews.push(await projectOverview(project, mine, { now, summary }));
+   }
+   for (const o of overviews) { const warn = underfilledWaves(o.recentJobCounts, workers?.max); o.warnings = warn ? [{ code: 'waves-underfilled', text: warn }] : []; }
+-  const machine = { agents: { total: 0, byLane: dict(), byProject: dict(), list: [] }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0 };
++  const machine = { agents: { total: 0, byLane: dict(), byProject: dict(), list: [] }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0, orchestrator: { sessions: [], todayListUsd: 0, allListUsd: 0, handBuiltFiles: 0, swarmBuiltFiles: 0 } };
+   for (const o of overviews) {
+     machine.agents.total += o.agents.total;
+     machine.agents.byProject[o.id] = o.agents.total;
+@@ -195,8 +197,14 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
+     for (const [agent, n] of Object.entries(o.cost.laneJobsToday ?? {})) (machine.cost.laneJobsToday ??= dict())[agent] = (machine.cost.laneJobsToday[agent] ?? 0) + n;
+     machine.cost.byProject[o.id] = { name: o.name, ...o.cost };
+     machine.liveRuns += o.live.length;
++    machine.orchestrator.sessions.push(...(o.orchestrator?.sessions ?? []));
++    machine.orchestrator.todayListUsd += o.orchestrator?.cost.todayListUsd ?? 0; machine.orchestrator.allListUsd += o.orchestrator?.cost.allListUsd ?? 0;
++    machine.orchestrator.handBuiltFiles += o.orchestrator?.handBuilt.files ?? 0; machine.orchestrator.swarmBuiltFiles += o.orchestrator?.swarmBuilt.files ?? 0;
+   }
+   for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
++  machine.orchestrator.todayListUsd = Math.round(machine.orchestrator.todayListUsd * 1e6) / 1e6; machine.orchestrator.allListUsd = Math.round(machine.orchestrator.allListUsd * 1e6) / 1e6;
++  { const t = machine.orchestrator.handBuiltFiles + machine.orchestrator.swarmBuiltFiles; machine.orchestrator.swarmPct = t ? Math.round(machine.orchestrator.swarmBuiltFiles * 100 / t) : null; machine.orchestrator.handPct = t ? Math.round(machine.orchestrator.handBuiltFiles * 100 / t) : null; }
++  machine.orchestrator.sessions.sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt));
+   machine.agents.byLane = plain(machine.agents.byLane);
+   machine.agents.byProject = plain(machine.agents.byProject);
+   if (machine.cost.laneToday) machine.cost.laneToday = plain(machine.cost.laneToday);
+diff --git a/tools/board-live.mjs b/tools/board-live.mjs
+index 5bef5bd..6195173 100644
+--- a/tools/board-live.mjs
++++ b/tools/board-live.mjs
+@@ -8,6 +8,7 @@ import { runTotals } from './spend.mjs';
+ import { readLedger } from './tickets.mjs';
+ import { projectSummary } from './project-spend.mjs';
+ import { sanitizeWorkerText } from './worker-text.mjs';
++import { projectOrchestrator } from './board-orchestrator.mjs';
+ 
+ const txt = (v, n = 160) => (v === null || v === undefined ? null : sanitizeWorkerText(v, n));
+ const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+@@ -118,8 +119,10 @@ export async function liveOverview(project, liveRuns, { now = Date.now(), summar
+   const ledger = await readLedger(project.root).catch(() => null);
+   const spend = await summary(project.root).catch(error => ({ capUsd: null, capError: String(error.message).slice(0, 120) }));
+   const lastMs = Math.max(0, ...all.map(r => r.mtimeMs), Date.parse(ledger?.updatedAt ?? '') || 0);
+-  return combineLive({
++  const orchestrator = (() => { try { return projectOrchestrator(project, { runs: all, now }); } catch { return null; } })();
++  const combined = combineLive({
+     project, runs: live, finishedToday, tickets: (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 2000),
+     cost: costOf(all, now), capUsd: spend.capUsd ?? null, capError: spend.capError ?? null, lastActivityAt: lastMs ? new Date(lastMs).toISOString() : null, now,
+   });
++  return { ...combined, orchestrator };
+ }
+diff --git a/tools/board-orchestrator.mjs b/tools/board-orchestrator.mjs
+new file mode 100644
+index 0000000..044c7bd
+--- /dev/null
++++ b/tools/board-orchestrator.mjs
+@@ -0,0 +1,52 @@
++// SPDX-License-Identifier: Apache-2.0
++// The Orchestrator lane on the board: the Claude Code sessions driving each project, built from the hook events (tools/orchestrator-events.mjs) and the session transcripts
++// (tools/orchestrator-usage.mjs). Read-only. A subscription session is shown at list value and marked so; it is never added to what was billed.
++import path from 'node:path';
++import { readEvents, sessionsOf, handBuiltOf } from './orchestrator-events.mjs';
++import { sessionUsage } from './orchestrator-usage.mjs';
++import { sanitizeWorkerText } from './worker-text.mjs';
++
++const txt = (v, n) => (v === null || v === undefined ? null : sanitizeWorkerText(v, n));
++
++/** Distinct files the swarm's finished jobs wrote in this project. */
++export function swarmBuiltFiles(runs) {
++  const files = new Set();
++  for (const { state } of runs ?? []) for (const job of state?.jobs ?? []) {
++    if (!job || job.status !== 'complete') continue;
++    for (const f of Array.isArray(job.outputs) ? job.outputs : Array.isArray(job.files) ? job.files : []) if (typeof f === 'string' && f && !f.endsWith('/')) files.add(f);
++  }
++  return files;
++}
++
++/** { sessions, handBuilt, swarmBuilt, swarmPct, listUsd } for one project; `runs` are its run states (swarmBuiltFiles). */
++export function projectOrchestrator(project, { runs = [], now = Date.now(), usage = sessionUsage } = {}) {
++  const events = readEvents(project.root);
++  const all = sessionsOf(events, now);
++  const sessions = all.filter(s => s.shown).slice(0, 8).map(s => {
++    const u = s.transcript ? usage(s.transcript, { now }) : null;
++    return {
++      id: String(s.id).replace(/[^A-Za-z0-9-]/g, '').slice(0, 8), project: txt(project.name, 80), projectId: project.id, state: s.state, lastAt: s.lastAt, since: s.since,
++      doing: s.doing ? { tool: txt(s.doing.tool, 40), file: s.doing.file ? txt(s.doing.file, 120) : null, command: s.doing.command ? txt(s.doing.command, 80) : null, startedAt: s.doing.startedAt } : null,
++      edits: s.edits, handBuilt: s.handBuilt,
++      tokensToday: u?.todayTokens ?? null, listUsdToday: u?.todayListUsd ?? null, tokensAll: u?.allTokens ?? null, listUsdAll: u?.allListUsd ?? null, unpriced: Boolean(u?.unpricedTokens), models: u?.models ?? [],
++    };
++  });
++  // Cost counts every session the log knows (also ones no longer shown), once each.
++  let todayUsd = 0, allUsd = 0, todayTokens = 0, allTokens = 0;
++  for (const s of all) {
++    const u = s.transcript ? usage(s.transcript, { now }) : null;
++    if (!u) continue;
++    todayUsd += u.todayListUsd; allUsd += u.allListUsd; todayTokens += u.todayTokens; allTokens += u.allTokens;
++  }
++  const hand = handBuiltOf(events);
++  const swarm = swarmBuiltFiles(runs).size;
++  const total = swarm + hand.files;
++  return {
++    sessions,
++    handBuilt: { files: hand.files, edits: hand.edits, list: hand.list.map(f => txt(f, 120)) },
++    swarmBuilt: { files: swarm },
++    swarmPct: total ? Math.round((swarm * 100) / total) : null,
++    handPct: total ? Math.round((hand.files * 100) / total) : null,
++    cost: { todayListUsd: Math.round(todayUsd * 1e6) / 1e6, allListUsd: Math.round(allUsd * 1e6) / 1e6, todayTokens, allTokens, kind: 'list value (subscription: not billed)' },
++  };
++}
+diff --git a/tools/board-run.mjs b/tools/board-run.mjs
+index ec1ed4a..8a4ef01 100644
+--- a/tools/board-run.mjs
++++ b/tools/board-run.mjs
+@@ -8,6 +8,7 @@ import { sanitizeWorkerText } from './worker-text.mjs';
+ import { laneLabel } from './board-data.mjs';
+ import { jobSpend } from './spend.mjs';
+ import { sanitizeText } from './journal.mjs';
++import { projectOrchestrator } from './board-orchestrator.mjs';
+ 
+ export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
+ // Secrets redacted, control characters removed, length bounded: job text came from a worker.
+@@ -95,7 +96,10 @@ export async function runDetail(project, runId) {
+   const totalUsd = jobs.reduce((s, j) => s + (j.costUsd ?? 0), 0);
+   const lanes = dict();
+   for (const j of jobs) { const l = lanes[j.lane] ??= { jobs: 0, usd: 0 }; l.jobs += 1; l.usd += j.costUsd ?? 0; }
++  // The Claude Code sessions driving this project (the Orchestrator lane), so a run page shows everything working in one place.
++  const orchestrator = (() => { try { return projectOrchestrator(project, { runs: [] }).sessions; } catch { return []; } })();
+   return {
++    orchestrator,
+     runId: txt(runId, 120), projectId: project.id, project: txt(project.name, 80), status: txt(state.status, 30),
+     startedAt: iso(state.startedAt), finishedAt: iso(state.finishedAt),
+     durationMs: iso(state.startedAt) && iso(state.finishedAt) ? Date.parse(state.finishedAt) - Date.parse(state.startedAt) : null,
+diff --git a/tools/install.mjs b/tools/install.mjs
+index 792200f..3f7d6fd 100644
+--- a/tools/install.mjs
++++ b/tools/install.mjs
+@@ -224,6 +224,43 @@ async function ensureCheckpointHook(root){
+  return {status:before.trim()?'updated':'created'};
+ }
+ 
++// The Orchestrator lane's hooks (PreToolUse, PostToolUse, Stop, UserPromptSubmit) go in the same personal settings file: each runs tools/orchestrator-hook.mjs, which appends one small event
++// (session, tool, a path inside the project) to .swarm/orchestrator/events.ndjson and prints nothing. The command points at the install's `current` folder, so it keeps working after
++// `swarm update`; an entry from an older install is replaced, anything else in the file is kept, and an unreadable settings file is left alone.
++export const ORCHESTRATOR_HOOK_EVENTS=Object.freeze({PreToolUse:'pre',PostToolUse:'post',Stop:'stop',UserPromptSubmit:'prompt'});
++const isOrchestratorHook=hook=>typeof hook?.command==='string'&&hook.command.includes('orchestrator-hook.mjs');
++export function stableInstallDir(installRoot){
++ const parent=path.dirname(installRoot);
++ return path.basename(parent)==='versions'?path.join(path.dirname(parent),'current'):installRoot;
++}
++export async function ensureOrchestratorHooks(root,installRoot){
++ const script=path.join(stableInstallDir(installRoot),'tools','orchestrator-hook.mjs');
++ const destination=await safeTarget(root,'.claude/settings.local.json',{createParents:true});
++ const before=await readOptional(destination);
++ let settings={};
++ if(before.trim()){
++  try{settings=JSON.parse(before);}catch{return {status:'skipped',reason:'settings.local.json is not valid JSON'};}
++  if(!settings||typeof settings!=='object'||Array.isArray(settings))return {status:'skipped',reason:'settings.local.json is not an object'};
++ }
++ if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {status:'skipped',reason:'hooks is not an object'};
++ settings.hooks??={};
++ let changed=false;
++ for(const [name,kind] of Object.entries(ORCHESTRATOR_HOOK_EVENTS)){
++  if(settings.hooks[name]!==undefined&&!Array.isArray(settings.hooks[name]))return {status:'skipped',reason:`hooks.${name} is not a list`};
++  const command=`node ${JSON.stringify(script)} ${kind}`;
++  const list=settings.hooks[name]??=[];
++  let found=false;
++  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(isOrchestratorHook(hook)){found=true;if(hook.command!==command){hook.command=command;changed=true;}}
++  if(!found){list.push({...(name==='PreToolUse'||name==='PostToolUse'?{matcher:'*'}:{}),hooks:[{type:'command',command}]});changed=true;}
++ }
++ if(!changed)return {status:'unchanged'};
++ const temp=`${destination}.swarm-tmp`;
++ await fs.writeFile(temp,`${JSON.stringify(settings,null,2)}\n`);
++ await fs.rename(temp,destination);
++ await ensureLocalSettingsIgnored(root);
++ return {status:before.trim()?'updated':'created'};
++}
++
+ async function ensureLocalSettingsIgnored(root){
+  const destination=await safeTarget(root,'.gitignore');
+  const before=await readOptional(destination);
+@@ -317,8 +354,9 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
+   agentPaths.push(to);
+  }
+  const claudeHook=agentFiles?await ensureCheckpointHook(root):null;
++ const orchestratorHooks=agentFiles?await ensureOrchestratorHooks(root,installRoot):null;
+  const gitignoreAdded=await ensureSwarmIgnore(root);
+- return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,gitignoreAdded};
++ return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,gitignoreAdded};
+ }
+ 
+ if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){
+diff --git a/tools/orchestrator-events.mjs b/tools/orchestrator-events.mjs
+new file mode 100644
+index 0000000..30ea7f5
+--- /dev/null
++++ b/tools/orchestrator-events.mjs
+@@ -0,0 +1,153 @@
++// SPDX-License-Identifier: Apache-2.0
++// The Orchestrator lane: what the Claude Code sessions that drive a project are doing. A hook (tools/orchestrator-hook.mjs) appends one small event per prompt, tool call and stop to
++// <project>/.swarm/orchestrator/events.ndjson: session id, event, tool, file path (inside the project) or the start of a shell command with secrets masked, time. Never file contents,
++// never prompt text, never tool output. This module is the pure part: building an event, masking, classifying hand-built edits, and turning the log into session states.
++// It imports nothing heavy: the hook runs on every tool call.
++import fs from 'node:fs';
++import path from 'node:path';
++
++export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt']);
++export const WRITE_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
++// Paths an orchestrator may write without the swarm having built them: tickets and plans.
++export const ORCHESTRATOR_OWN = Object.freeze(['.swarm/', 'docs/plans/']);
++export const EVENTS_FILE = '.swarm/orchestrator/events.ndjson';
++const MAX_BYTES = 1500000;
++
++// Session states. `working`: a tool is running. `thinking`: a prompt or a tool result is being worked on. `waiting`: the turn ended, the session waits for the owner. `idle`: nothing for a while.
++export const WORKING_STALE_MS = 10 * 60 * 1000;
++export const THINKING_STALE_MS = 3 * 60 * 1000;
++export const WAITING_SHOWN_MS = 30 * 60 * 1000;
++export const SESSION_SHOWN_MS = 60 * 60 * 1000;
++
++// A shell command can carry a token or a key: anything key-like, any NAME=value assignment and any long opaque string is replaced before the command is stored at all.
++export function maskCommand(command, max = 80) {
++  let text = String(command ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
++  text = text
++    .replace(/\b(?:sk|pk|rk|ghp|gho|ghs|github_pat|xox[abprs]|AKIA|AIza|ya29)[-_A-Za-z0-9]{8,}/g, '[secret]')
++    .replace(/\b([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)/g, '$1=[value]')
++    .replace(/(--?(?:token|key|password|secret|auth|authorization|bearer)[-\w]*)(?:=|\s+)\S+/gi, '$1 [value]')
++    .replace(/\b[A-Za-z0-9+/_-]{32,}\b/g, '[secret]')
++    .replace(/(Bearer|Basic)\s+\S+/gi, '$1 [value]');
++  return text.slice(0, max);
++}
++
++const norm = p => String(p).replace(/\\/g, '/');
++/** The path relative to the project when it is inside it; null when it is outside (or not a path). */
++export function insideProject(root, file) {
++  if (typeof file !== 'string' || !file) return null;
++  const abs = path.isAbsolute(file) ? path.resolve(file) : path.resolve(root, file);
++  const rel = norm(path.relative(root, abs));
++  return rel && !rel.startsWith('../') && rel !== '..' && !path.isAbsolute(rel) ? rel : null;
++}
++
++/** True when an edit lands in the project outside .swarm/ and docs/plans/: the orchestrator built it by hand. */
++export function isHandBuilt(tool, relPath) {
++  if (!WRITE_TOOLS.includes(tool) || typeof relPath !== 'string') return false;
++  return !ORCHESTRATOR_OWN.some(prefix => relPath === prefix.slice(0, -1) || relPath.startsWith(prefix));
++}
++
++// A session that runs inside a swarm worker workspace is a worker, not an orchestrator.
++export const isWorkerCwd = cwd => /[\\/]\.swarm[\\/](workspaces|worktrees)[\\/]/.test(String(cwd ?? '')) || /[\\/]\.swarm-tmp[\\/]/.test(String(cwd ?? ''));
++
++/** Nearest folder at or above `cwd` that holds .project-swarm.json (or .git); null when there is none. */
++export function projectRootOf(cwd, exists = file => fs.existsSync(file)) {
++  let dir = path.resolve(String(cwd ?? ''));
++  for (let i = 0; i < 40; i += 1) {
++    if (exists(path.join(dir, '.project-swarm.json')) || exists(path.join(dir, '.git'))) return dir;
++    const up = path.dirname(dir);
++    if (up === dir) return null;
++    dir = up;
++  }
++  return null;
++}
++
++/** One log line for a hook input, or null when the input is not a session event of an orchestrator. `kind` is pre | post | stop | prompt. */
++export function buildEvent(kind, input, { root, now = Date.now } = {}) {
++  if (!EVENT_KINDS.includes(kind) || !input || typeof input !== 'object' || typeof input.session_id !== 'string' || !input.session_id) return null;
++  if (isWorkerCwd(input.cwd)) return null;
++  const event = { at: new Date(now()).toISOString(), s: input.session_id.slice(0, 80), e: kind };
++  if (kind === 'pre' || kind === 'post') {
++    const tool = typeof input.tool_name === 'string' ? input.tool_name.slice(0, 60) : null;
++    if (!tool) return null;
++    event.t = tool;
++    const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
++    if (tool === 'Bash') event.c = maskCommand(ti.command);
++    else {
++      const rel = insideProject(root, ti.file_path ?? ti.notebook_path ?? ti.path);
++      if (rel) { event.f = rel.slice(0, 200); if (isHandBuilt(tool, rel)) event.hb = 1; }
++      else if (typeof (ti.file_path ?? ti.notebook_path ?? ti.path) === 'string') event.out = 1;   // a path outside the project: noted, never stored
++    }
++    if (kind === 'post' && input.tool_response && typeof input.tool_response === 'object' && (input.tool_response.is_error === true || input.tool_response.success === false)) event.err = 1;
++  }
++  if ((kind === 'prompt' || kind === 'stop') && typeof input.transcript_path === 'string') event.tp = input.transcript_path.slice(0, 300);
++  return event;
++}
++
++/** Appends one event; the file is rotated once it passes 1.5 MB (the previous one is kept as events.1.ndjson). Never throws. */
++export function appendEvent(root, event) {
++  try {
++    const file = path.join(root, EVENTS_FILE);
++    fs.mkdirSync(path.dirname(file), { recursive: true });
++    try { if (fs.statSync(file).size > MAX_BYTES) fs.renameSync(file, path.join(path.dirname(file), 'events.1.ndjson')); } catch { /* no file yet */ }
++    fs.appendFileSync(file, `${JSON.stringify(event)}\n`);
++    return true;
++  } catch { return false; }
++}
++
++/** The last `limit` events of a project (oldest first). Reads only the tail of the file. */
++export function readEvents(root, { limit = 4000 } = {}) {
++  const file = path.join(root, EVENTS_FILE);
++  let text = '';
++  try {
++    const size = fs.statSync(file).size;
++    const take = Math.min(size, 1200000);
++    const fd = fs.openSync(file, 'r');
++    try { const buffer = Buffer.alloc(take); fs.readSync(fd, buffer, 0, take, size - take); text = buffer.toString('utf8'); } finally { fs.closeSync(fd); }
++    if (size > take) text = text.slice(text.indexOf('\n') + 1);
++  } catch { return []; }
++  const out = [];
++  for (const line of text.split('\n')) {
++    if (!line) continue;
++    try { const e = JSON.parse(line); if (e && typeof e === 'object' && EVENT_KINDS.includes(e.e) && typeof e.s === 'string' && Number.isFinite(Date.parse(e.at))) out.push(e); } catch { /* a torn line is skipped */ }
++  }
++  return out.slice(-limit);
++}
++
++/** Sessions seen in the events: state now, what it is doing, since when, edits by hand. `now` decides staleness. */
++export function sessionsOf(events, now = Date.now()) {
++  const bySession = new Map();
++  for (const e of events) {
++    let s = bySession.get(e.s);
++    if (!s) { s = { id: e.s, firstAt: e.at, lastAt: e.at, last: e, tool: null, transcript: null, handBuilt: 0, edits: 0, turnStartedAt: null, toolStartedAt: null }; bySession.set(e.s, s); }
++    s.lastAt = e.at; s.last = e;
++    if (e.tp) s.transcript = e.tp;
++    if (e.e === 'prompt') { s.turnStartedAt = e.at; s.tool = null; s.toolStartedAt = null; }
++    if (e.e === 'pre') { s.tool = { name: e.t, file: e.f ?? null, command: e.c ?? null }; s.toolStartedAt = e.at; }
++    if (e.e === 'post') { s.toolStartedAt = null; s.tool = null; }
++    if (e.e === 'stop') { s.tool = null; s.toolStartedAt = null; s.turnStartedAt = null; }
++    if (e.e === 'post' && WRITE_TOOLS.includes(e.t) && e.f) { s.edits += 1; if (e.hb) s.handBuilt += 1; }
++  }
++  const out = [];
++  for (const s of bySession.values()) {
++    const age = now - Date.parse(s.lastAt);
++    let state;
++    if (s.last.e === 'pre') state = age <= WORKING_STALE_MS ? 'working' : 'idle';
++    else if (s.last.e === 'post' || s.last.e === 'prompt') state = age <= (s.last.e === 'prompt' ? WORKING_STALE_MS : THINKING_STALE_MS) ? 'thinking' : 'idle';
++    else state = age <= WAITING_SHOWN_MS ? 'waiting' : 'idle';
++    if (age > SESSION_SHOWN_MS * 24) continue;
++    out.push({
++      id: s.id, state, lastAt: s.lastAt, since: state === 'working' ? s.toolStartedAt : state === 'thinking' ? (s.turnStartedAt ?? s.lastAt) : s.lastAt,
++      doing: state === 'working' && s.tool ? { tool: s.tool.name, file: s.tool.file, command: s.tool.command, startedAt: s.toolStartedAt } : null,
++      transcript: s.transcript, edits: s.edits, handBuilt: s.handBuilt, shown: age <= SESSION_SHOWN_MS,
++    });
++  }
++  return out.sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt));
++}
++
++/** Distinct files edited by hand (outside .swarm/ and docs/plans/) and how many edits in all, from the events. */
++export function handBuiltOf(events) {
++  const files = new Set();
++  let edits = 0;
++  for (const e of events) if (e.e === 'post' && e.hb && e.f) { files.add(e.f); edits += 1; }
++  return { files: files.size, edits, list: [...files].slice(0, 50) };
++}
+diff --git a/tools/orchestrator-hook.mjs b/tools/orchestrator-hook.mjs
+new file mode 100644
+index 0000000..8b57264
+--- /dev/null
++++ b/tools/orchestrator-hook.mjs
+@@ -0,0 +1,23 @@
++#!/usr/bin/env node
++// SPDX-License-Identifier: Apache-2.0
++// Claude Code hook for the Orchestrator lane: `node orchestrator-hook.mjs pre|post|stop|prompt`, the hook input as JSON on stdin. Writes one small event to the project's
++// .swarm/orchestrator/events.ndjson and prints nothing. It never blocks or changes anything: whatever goes wrong, it exits 0 so a tool call is never held up by it.
++import { buildEvent, appendEvent, projectRootOf } from './orchestrator-events.mjs';
++
++const kind = process.argv[2];
++let raw = '';
++process.stdin.setEncoding('utf8');
++process.stdin.on('data', chunk => { if (raw.length < 2000000) raw += chunk; });
++process.stdin.on('end', () => {
++  try {
++    const input = JSON.parse(raw);
++    const root = projectRootOf(input.cwd);
++    if (root) {
++      const event = buildEvent(kind, input, { root });
++      if (event) appendEvent(root, event);
++    }
++  } catch { /* an unreadable input is dropped */ }
++  process.exit(0);
++});
++process.stdin.on('error', () => process.exit(0));
++setTimeout(() => process.exit(0), 4000).unref();
+diff --git a/tools/orchestrator-usage.mjs b/tools/orchestrator-usage.mjs
+new file mode 100644
+index 0000000..97ae755
+--- /dev/null
++++ b/tools/orchestrator-usage.mjs
+@@ -0,0 +1,72 @@
++// SPDX-License-Identifier: Apache-2.0
++// Tokens and list cost of an orchestrator session, read from its Claude Code transcript (the jsonl file whose path the hooks record). A subscription session costs nothing extra: the
++// dollars here are what the same tokens would cost at list price, and the board marks them that way. Read-only; the file is read once and then only what was appended.
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { MODEL_RATES } from './rates.mjs';
++
++const familyOf = model => { const m = String(model ?? '').toLowerCase(); return m.includes('opus') ? 'opus' : m.includes('sonnet') ? 'sonnet' : m.includes('haiku') ? 'haiku' : null; };
++const cache = new Map();   // path -> { offset, tail, messages: Map(id -> entry) }
++
++function priceOf(entry) {
++  const rate = MODEL_RATES[entry.family];
++  if (!rate) return null;
++  return (entry.input / 1e6) * rate.in + (entry.output / 1e6) * rate.out + (entry.cacheWrite / 1e6) * rate.cacheWrite + (entry.cacheRead / 1e6) * rate.cacheRead;
++}
++
++// The transcript path comes from an events file inside the project, which anything could write: only files under Claude Code's own folder (~/.claude, or the folders named in
++// SWARM_TRANSCRIPT_ROOTS, for tests) are ever read, by their real path.
++function allowed(file) {
++  const roots = (process.env.SWARM_TRANSCRIPT_ROOTS ? process.env.SWARM_TRANSCRIPT_ROOTS.split(path.delimiter) : [path.join(os.homedir(), '.claude')]).filter(Boolean);
++  let real;
++  try { real = fs.realpathSync(file); } catch { return false; }
++  return roots.some(root => { try { const r = fs.realpathSync(root); return real === r || real.startsWith(r + path.sep); } catch { return false; } });
++}
++
++/** { todayTokens, todayListUsd, allTokens, allListUsd, unpricedTokens, models } for one transcript; null when it cannot be read. `now` fixes the UTC day. */
++export function sessionUsage(file, { now = Date.now() } = {}) {
++  if (typeof file !== 'string' || !file || !allowed(file)) return null;
++  let stat;
++  try { stat = fs.statSync(file); } catch { return null; }
++  if (!stat.isFile()) return null;
++  let hit = cache.get(file);
++  if (!hit || stat.size < hit.offset) { hit = { offset: 0, tail: '', messages: new Map() }; cache.set(file, hit); if (cache.size > 200) cache.delete(cache.keys().next().value); }
++  if (stat.size > hit.offset) {
++    const fd = fs.openSync(file, 'r');
++    try {
++      const want = stat.size - hit.offset;
++      const buffer = Buffer.alloc(want);
++      fs.readSync(fd, buffer, 0, want, hit.offset);
++      const text = hit.tail + buffer.toString('utf8');
++      const lines = text.split('\n');
++      hit.tail = lines.pop() ?? '';
++      hit.offset = stat.size;
++      for (const line of lines) {
++        if (!line || !line.includes('"usage"')) continue;
++        let e; try { e = JSON.parse(line); } catch { continue; }
++        if (e?.type !== 'assistant' || !e.message?.usage) continue;
++        const id = e.message.id ?? `line-${hit.messages.size}`;
++        const u = e.message.usage;
++        const prev = hit.messages.get(id) ?? { at: e.timestamp, family: familyOf(e.message.model), model: e.message.model ?? null, input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
++        prev.input = Math.max(prev.input, u.input_tokens ?? 0); prev.output = Math.max(prev.output, u.output_tokens ?? 0);
++        prev.cacheWrite = Math.max(prev.cacheWrite, u.cache_creation_input_tokens ?? 0); prev.cacheRead = Math.max(prev.cacheRead, u.cache_read_input_tokens ?? 0);
++        hit.messages.set(id, prev);
++      }
++    } finally { fs.closeSync(fd); }
++  }
++  const dayStart = new Date(now); dayStart.setUTCHours(0, 0, 0, 0);
++  const out = { todayTokens: 0, todayListUsd: 0, allTokens: 0, allListUsd: 0, unpricedTokens: 0, models: [] };
++  const models = new Set();
++  for (const m of hit.messages.values()) {
++    const tokens = m.input + m.output + m.cacheWrite + m.cacheRead;
++    const usd = priceOf(m);
++    if (m.model) models.add(m.model);
++    out.allTokens += tokens;
++    if (usd === null) out.unpricedTokens += tokens; else out.allListUsd += usd;
++    if (Date.parse(m.at) >= dayStart.getTime()) { out.todayTokens += tokens; if (usd !== null) out.todayListUsd += usd; }
++  }
++  out.todayListUsd = Math.round(out.todayListUsd * 1e6) / 1e6; out.allListUsd = Math.round(out.allListUsd * 1e6) / 1e6;
++  out.models = [...models].slice(0, 5);
++  return out;
++}
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 73ecaa4..43966dc 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -6848,18 +6848,21 @@ export async function updateProjects(root,{projects,yes=false}={}){
+ export async function bumpPointers(root){
+   root=await fs.realpath(root);
+   const version=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8')).version;
+-  const bumped=[],failed=[];
++  const bumped=[],failed=[],hooksSet=[];
+   for(const projectDir of await readProjectsRegistry(root)){
+     let project;
+     try{project=await fs.realpath(projectDir);}catch{continue;}
+     if(project===root)continue;
+     let pointer;
+     try{pointer=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8'));}catch(error){if(error.code==='ENOENT')continue;failed.push({project,error:'the pointer file is not valid JSON; not changed'});continue;}
+-    if(!pointer||typeof pointer!=='object'||pointer.version===version)continue;
++    if(!pointer||typeof pointer!=='object')continue;
++    // The Orchestrator lane's hooks are put (back) in place for every linked project on each update, whatever the pointer says.
++    try{const {ensureOrchestratorHooks}=await import('./install.mjs');const hooks=await ensureOrchestratorHooks(project,root);if(hooks.status==='created'||hooks.status==='updated')hooksSet.push(project);else if(hooks.status==='skipped')failed.push({project,error:`orchestrator hooks not installed: ${hooks.reason}`});}catch(error){failed.push({project,error:`orchestrator hooks: ${String(error.message).slice(0,160)}`});}
++    if(pointer.version===version)continue;
+     try{const {writePointer}=await import('./install.mjs');const written=await writePointer(project,{install:root,version});if(written.changed)bumped.push({project,from:pointer.version??null,to:version});}
+     catch(error){failed.push({project,error:String(error.message).slice(0,200)});}
+   }
+-  return {bumped,failed};
++  return {bumped,failed,hooks:hooksSet};
+ }
+ 
+ function agentReadiness(agent,result){
+diff --git a/tools/watch-assets/board-lib.js b/tools/watch-assets/board-lib.js
+index da41426..91db76d 100644
+--- a/tools/watch-assets/board-lib.js
++++ b/tools/watch-assets/board-lib.js
+@@ -4,7 +4,7 @@
+   if (typeof module === 'object' && module.exports) { module.exports = factory(); } else { root.BoardLib = factory(); }
+ }(typeof self !== 'undefined' ? self : this, function () {
+   'use strict';
+-  var LANE_COLORS = { Haiku: '#34d399', Sonnet: '#60a5fa', Opus: '#fbbf24', Codex: '#f472b6', Cursor: '#a3e635', GPU: '#fb923c', Claude: '#94a3b8' };
++  var LANE_COLORS = { Orchestrator: '#c084fc', Haiku: '#34d399', Sonnet: '#60a5fa', Opus: '#fbbf24', Codex: '#f472b6', Cursor: '#a3e635', GPU: '#fb923c', Claude: '#94a3b8' };
+   var KNOWN_LANES = ['Haiku', 'Sonnet', 'Opus', 'Codex', 'Cursor', 'GPU'];
+   var LIVE_MS = 6000;
+ 
+diff --git a/tools/watch-assets/board.html b/tools/watch-assets/board.html
+index c41f187..629e00b 100644
+--- a/tools/watch-assets/board.html
++++ b/tools/watch-assets/board.html
+@@ -36,6 +36,7 @@
+       <div class="layout">
+         <div class="stack">
+           <section class="card" aria-label="Agents by lane"><h2>Agents now</h2><div class="bays" id="bays"></div></section>
++          <section class="card" aria-label="Orchestrator"><h2>Orchestrator <span class="badge quiet" id="orchCount">0</span></h2><div class="orch-grid" id="orchBay"></div><p class="board-note" id="orchNote"></p></section>
+           <section class="card" aria-label="Projects"><h2>Projects</h2>
+             <div class="tablewrap collapse"><table id="projTable"></table></div><div class="cards" id="projCards"></div>
+             <p class="board-note">Open a project for its tickets, runs, spend and lessons. A run opens in the run inspector (graph, journal, compare).</p></section>
+@@ -49,6 +50,7 @@
+     </section>
+     <section id="tab-cost" role="tabpanel" aria-labelledby="tab-cost-btn" class="stack" hidden>
+       <div class="kpis" id="costKpis"></div>
++      <section class="card" aria-label="Orchestrator cost"><h2>Orchestrator sessions</h2><div class="tablewrap"><table id="orchTable"></table></div><p class="board-note">Claude Code sessions run on a subscription: nothing is billed. The dollars are what the same tokens would cost at list price, read from each session's own transcript, and are not part of the billed totals.</p></section>
+       <section class="card"><h2>Lanes today</h2><div class="tablewrap"><table id="laneTable"></table></div><p class="board-note" id="laneNote"></p></section>
+       <section class="card"><h2>Projects: spend against cap</h2><div class="tablewrap"><table id="spendTable"></table></div></section>
+     </section>
+diff --git a/tools/watch-assets/board.js b/tools/watch-assets/board.js
+index 35e699f..876ec65 100644
+--- a/tools/watch-assets/board.js
++++ b/tools/watch-assets/board.js
+@@ -2,6 +2,7 @@
+ // The board (swarm watch --all): Overview, Cost, Agents, Events. Read-only; every number and every agent state comes from /api/board and /api/history.
+ // Text is always set with textContent (never as HTML). Nothing here invents progress: an empty list says so.
+ import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
++import { renderOrchestrator, buildMixText, doingText } from './orchestrator-view.js';
+ 
+ var L = self.BoardLib;
+ var TOKEN = new URLSearchParams(location.search).get('t') || '';
+@@ -163,6 +164,13 @@ function renderKpis(m) {
+     box.appendChild(tile('Workers held', limit, w.invalid ? 'fix machineConcurrency: runs will not start' : w.max ? 'machine limit ' + w.max + ', shared fairly between active projects, ' + (w.free === null ? 0 : w.free) + ' free' : 'no machine limit', bar));
+   }
+ }
++function renderOrch(m) {
++  var o = m.orchestrator || { sessions: [] };
++  $('orchCount').textContent = String(o.sessions.filter(function (x) { return x.state !== 'idle'; }).length);
++  renderOrchestrator($('orchBay'), o.sessions, { now: Date.now() });
++  var mix = o.swarmPct === null || o.swarmPct === undefined ? '' : 'All projects: swarm-built ' + o.swarmPct + '%, hand-built ' + o.handPct + '% (' + o.handBuiltFiles + ' file' + (o.handBuiltFiles === 1 ? '' : 's') + ' edited by hand).';
++  $('orchNote').textContent = mix;
++}
+ function renderBays(m) {
+   var host = $('bays');
+   var bays = L.bays(m.agents.list, Object.keys(m.agents.byLane));
+@@ -236,6 +244,7 @@ function renderProjects(projects) {
+     var tr = el('tr');
+     var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage'));
+     (p.warnings || []).forEach(function (w) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(w.text, 'warn')); });
++    var mixText = buildMixText(p.orchestrator); if (mixText) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(mixText, p.orchestrator.handPct > 0 ? 'warn' : 'good')); }
+     tr.appendChild(td(name)); tr.appendChild(td(liveCell(p), 'wrap'));
+     tr.appendChild(td(p.agents.jobs.running + ' run, ' + p.agents.jobs.queued + ' q, ' + p.agents.jobs.blocked + ' blk', 'mono'));
+     tr.appendChild(td(p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''), 'mono'));
+@@ -244,6 +253,7 @@ function renderProjects(projects) {
+     var c = el('div', 'pcard');
+     var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); head.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage')); c.appendChild(head);
+     (p.warnings || []).forEach(function (w) { var wl = el('div', 'sub'); wl.appendChild(pill(w.text, 'warn')); c.appendChild(wl); });
++    var mixCard = buildMixText(p.orchestrator); if (mixCard) { var ml = el('div', 'sub'); ml.appendChild(pill(mixCard, p.orchestrator.handPct > 0 ? 'warn' : 'good')); c.appendChild(ml); }
+     c.appendChild(liveCell(p));
+     var meta = el('div', 'row'); meta.appendChild(el('span', 'mono', p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''))); meta.appendChild(el('span', 'mono', ago(p.lastActivityAt))); c.appendChild(meta);
+     c.appendChild(capCell(p));
+@@ -348,7 +358,24 @@ function renderCost(data) {
+   k.appendChild(tile('Last 7 days', usd(c.weekUsd), 'billed'));
+   k.appendChild(tile('Billed, all time', usd(c.paidUsd), 'estimated part ' + usd(c.paidEstimatedUsd)));
+   k.appendChild(tile('Flat-rate list value', usd(c.flatRateListUsd), 'Codex, Cursor, Claude subscription: not billed'));
++  var oc = data.machine.orchestrator || { todayListUsd: 0, allListUsd: 0 };
++  k.appendChild(tile('Orchestrator, list value', usd(oc.todayListUsd), 'today; ' + usd(oc.allListUsd) + ' all time. Subscription: not billed, not in the totals above'));
+   k.appendChild(tile('Estimated full cost', usd(c.paidUsd + c.flatRateListUsd), 'billed plus list value: what the work would cost at list prices'));
++  var ot = $('orchTable'); ot.textContent = '';
++  var os = (data.machine.orchestrator && data.machine.orchestrator.sessions) || [];
++  if (!os.length) { ot.appendChild(el('caption', 'empty', 'No orchestrator session has been seen yet.')); }
++  else {
++    ot.appendChild(th(['Project', 'Session', 'State', 'Tokens today', 'List value today', 'List value all time', 'Hand-built edits']));
++    var obody = el('tbody');
++    os.forEach(function (x) {
++      var tr = el('tr');
++      tr.appendChild(td(x.project)); tr.appendChild(td(x.id, 'mono')); tr.appendChild(td(doingText(x, Date.now()), 'mono'));
++      tr.appendChild(td(typeof x.tokensToday === 'number' ? String(x.tokensToday) : '-', 'mono'));
++      tr.appendChild(td(usd(x.listUsdToday) + ' (list value)', 'mono')); tr.appendChild(td(usd(x.listUsdAll) + ' (list value)', 'mono')); tr.appendChild(td(String(x.handBuilt || 0), 'mono'));
++      obody.appendChild(tr);
++    });
++    ot.appendChild(obody);
++  }
+   var t = $('laneTable'); t.textContent = '';
+   var lanes = data.machine.lanes || [];
+   if (!lanes.length) { t.appendChild(el('caption', 'empty', 'No lane is configured and none ran a job today.')); }
+@@ -483,7 +510,7 @@ $('filters').addEventListener('submit', function (e) { e.preventDefault(); loadH
+ function renderTab() {
+   var d = state.data;
+   if (!d) { return; }
+-  if (state.tab === 'overview') { renderKpis(d.machine); renderBays(d.machine); renderProjects(d.projects); }
++  if (state.tab === 'overview') { renderKpis(d.machine); renderBays(d.machine); renderOrch(d.machine); renderProjects(d.projects); }
+   else if (state.tab === 'cost') { renderCost(d); }
+   else if (state.tab === 'agents') { renderAgents(d); }
+   tickCountdowns();
+diff --git a/tools/watch-assets/orchestrator-view.js b/tools/watch-assets/orchestrator-view.js
+new file mode 100644
+index 0000000..5570da6
+--- /dev/null
++++ b/tools/watch-assets/orchestrator-view.js
+@@ -0,0 +1,61 @@
++// SPDX-License-Identifier: Apache-2.0
++// The Orchestrator lane: one robot head per Claude Code session that drives a project, labelled by project, with what it is doing now, how long, its tokens and list cost (a subscription
++// session is shown at list value, never as billed), and how much of the project it built by hand. Shared by the board, the project page, the Live tab and the run page.
++// Text is always set with textContent. Read-only: everything comes from the board data.
++import { mountRobotHead } from './robot-head.js';
++
++var HEAD = { working: 'working', thinking: 'thinking', waiting: 'idle', idle: 'sleeping' };
++var COLOR = '#c084fc';
++function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
++function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
++function tokens(n) { return typeof n !== 'number' ? '-' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n); }
++function span(ms) { var s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm'; }
++
++export var STATE_TEXT = { working: 'working', thinking: 'thinking', waiting: 'waiting on you', idle: 'idle' };
++
++/** What the session is doing now, short: "Edit src/a.ts, 12s", "Bash npm test, 4s", "thinking, 8s", "waiting on you, 4m". */
++export function doingText(s, now) {
++  var since = s.since ? now - Date.parse(s.since) : null;
++  var tail = since === null ? '' : ', ' + span(since);
++  if (s.state === 'working' && s.doing) { return s.doing.tool + ' ' + (s.doing.file || s.doing.command || '') + tail; }
++  return STATE_TEXT[s.state] + tail;
++}
++
++/** "swarm-built 83%, hand-built 17% (12 files)"; null when nothing was built yet. */
++export function buildMixText(o) {
++  if (!o || o.swarmPct === null || o.swarmPct === undefined) { return null; }
++  return 'swarm-built ' + o.swarmPct + '%, hand-built ' + o.handPct + '% (' + o.handBuilt.files + ' file' + (o.handBuilt.files === 1 ? '' : 's') + ')';
++}
++
++export function renderOrchestrator(host, sessions, opts) {
++  var now = (opts && opts.now) || Date.now();
++  var size = (opts && opts.size) || 44;
++  var map = host.__orch || (host.__orch = new Map());
++  var keep = {};
++  var list = sessions || [];
++  if (!list.length) {
++    if (!host.__empty) { host.__empty = el('p', 'board-note', 'No Claude Code session is driving a project right now. Sessions appear once the swarm hooks are installed (swarm init or swarm update) and a session in that project does something.'); host.appendChild(host.__empty); }
++    host.__empty.hidden = false;
++  } else if (host.__empty) { host.__empty.hidden = true; }
++  list.forEach(function (s) {
++    var key = s.projectId + '|' + s.id;
++    keep[key] = true;
++    var hit = map.get(key);
++    if (!hit) {
++      var card = el('div', 'orch-card'); var holder = el('div', 'orch-head');
++      var handle = mountRobotHead(holder, { state: HEAD[s.state] || 'idle', size: size, color: COLOR, screenColor: '#efe4ff', id: 'orch|' + key, label: 'orchestrator session in ' + s.project + ', ' + (STATE_TEXT[s.state] || s.state) });
++      var text = el('div', 'orch-text');
++      hit = { card: card, handle: handle, name: el('div', 'orch-name'), doing: el('div', 'orch-doing mono'), cost: el('div', 'orch-cost sub'), hand: el('div', 'orch-hand') };
++      card.appendChild(holder); text.appendChild(hit.name); text.appendChild(hit.doing); text.appendChild(hit.cost); text.appendChild(hit.hand); card.appendChild(text);
++      host.appendChild(card); map.set(key, hit);
++    }
++    hit.handle.setState(HEAD[s.state] || 'idle');
++    hit.card.dataset.state = s.state;
++    hit.name.textContent = s.project + '  ' + s.id;
++    hit.doing.textContent = doingText(s, now);
++    hit.cost.textContent = (typeof s.tokensToday === 'number' ? tokens(s.tokensToday) + ' tokens, ' + usd(s.listUsdToday) + ' today' : 'tokens not read yet') + (typeof s.listUsdAll === 'number' ? '; ' + usd(s.listUsdAll) + ' all time' : '') + ' (list value, not billed' + (s.unpriced ? '; some model is unpriced' : '') + ')';
++    hit.hand.textContent = s.handBuilt ? s.handBuilt + ' hand-built edit' + (s.handBuilt === 1 ? '' : 's') + ' by this session' : '';
++    hit.hand.hidden = !s.handBuilt;
++  });
++  map.forEach(function (v, k) { if (!keep[k]) { v.handle.destroy(); v.card.remove(); map.delete(k); } });
++}
+diff --git a/tools/watch-assets/project-live.js b/tools/watch-assets/project-live.js
+index 723ca03..e265419 100644
+--- a/tools/watch-assets/project-live.js
++++ b/tools/watch-assets/project-live.js
+@@ -2,6 +2,7 @@
+ // The project page's Live tab: every run that is alive in this project, combined (data: /api/live, the same run files the run pages read).
+ // Every state shown is one a run recorded: nothing is animated for show, a sleeping head means no agent is running in that lane.
+ import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
++import { renderOrchestrator, buildMixText } from './orchestrator-view.js';
+ 
+ var L = self.BoardLib;
+ var params = new URLSearchParams(location.search);
+@@ -199,7 +200,14 @@ function renderEmpty(d) {
+   if (d.finishedCount) { box.appendChild(el('div', 'sub', 'Finished today: ' + d.finishedCount + (d.finishedCount === 1 ? ' run' : ' runs') + (d.finishedCount === d.recent.length ? ', ' + usd(d.recent.reduce(function (n, r) { return n + (r.costUsd || 0); }, 0)) : ' (the latest ' + d.recent.length + ' are listed)') + '.')); }
+ }
+ 
++function renderOrch(d) {
++  var o = d.orchestrator || { sessions: [] };
++  $('orchCount').textContent = String(o.sessions.filter(function (x) { return x.state !== 'idle'; }).length);
++  renderOrchestrator($('orchBay'), o.sessions, { now: Date.now() });
++  $('orchNote').textContent = buildMixText(o) || '';
++}
+ function render(d) {
++  renderOrch(d);
+   var empty = Boolean(d.empty);
+   $('liveEmpty').hidden = !empty; $('liveBody').hidden = empty;
+   if (empty) { renderEmpty(d); }
+diff --git a/tools/watch-assets/project.html b/tools/watch-assets/project.html
+index 27a9692..8a88614 100644
+--- a/tools/watch-assets/project.html
++++ b/tools/watch-assets/project.html
+@@ -22,6 +22,7 @@
+   </nav>
+   <main>
+     <section id="pane-live" role="tabpanel" aria-labelledby="tab-live-btn" class="stack">
++      <section class="card" aria-label="Orchestrator"><h2>Orchestrator <span class="badge quiet" id="orchCount">0</span></h2><div class="orch-grid" id="orchBay"></div><p class="board-note" id="orchNote"></p></section>
+       <div id="liveEmpty" class="card empty-live" hidden></div>
+       <div id="liveBody" class="stack">
+         <div class="kpis" id="liveKpis"></div>
+diff --git a/tools/watch-assets/run.html b/tools/watch-assets/run.html
+index 4a38472..1d04586 100644
+--- a/tools/watch-assets/run.html
++++ b/tools/watch-assets/run.html
+@@ -14,6 +14,7 @@
+     <div class="chips"><a class="chip btn" id="watchLink" href="#">Open the live Watch page</a></div></header>
+   <main class="stack">
+     <div class="kpis" id="kpis"></div>
++    <section class="card" aria-label="Orchestrator" id="orchCard" hidden><h2>Orchestrator</h2><div class="orch-grid" id="orchBay"></div></section>
+     <section class="card"><h2>Job graph</h2><div id="graphNote" class="note"></div><div class="graph" id="graph" tabindex="0" aria-label="Job graph, scrollable"></div>
+       <div class="legend"><span><i class="dot" style="animation:none;background:var(--accent)"></i> running</span><span><i class="dot bad"></i> failed</span><span>dashed amber outline: tried more than once (a retry, or sent up to another lane)</span></div>
+       <div id="detail" class="note" role="status"></div></section>
+diff --git a/tools/watch-assets/run.js b/tools/watch-assets/run.js
+index 1ce8ebd..2656470 100644
+--- a/tools/watch-assets/run.js
++++ b/tools/watch-assets/run.js
+@@ -1,5 +1,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // Run inspector: one run's job graph, a replayable journal with the cost of each job, and a side-by-side compare. Read-only; all data from /api/run.
++import { renderOrchestrator } from './orchestrator-view.js';
++
+ var L = self.BoardLib;
+ var params = new URLSearchParams(location.search);
+ var TOKEN = params.get('t') || '';
+@@ -141,6 +143,9 @@ api().then(function (r) {
+   if (!r) { $('title').textContent = 'Run not found'; $('subtitle').textContent = 'No run ' + RUN + ' in this project.'; return; }
+   run = r;
+   renderSummary(r); renderGraph(r);
++  var orch = r.orchestrator || []; $('orchCard').hidden = !orch.length; if (orch.length) { renderOrchestrator($('orchBay'), orch, { now: Date.now() }); }
++  // The remote board never starts a run's own page on the computer: no link to it there.
++  $('watchLink').hidden = r.openRun === false;
+   $('scrub').max = String(r.journal.length);
+   setPos(r.journal.length);
+ });
+diff --git a/tools/watch-server.mjs b/tools/watch-server.mjs
+index 9efb3a5..c883502 100644
+--- a/tools/watch-server.mjs
++++ b/tools/watch-server.mjs
+@@ -228,7 +228,7 @@ export function createWatchServer(opts) {
+       const q = Object.fromEntries(u.searchParams);
+       if (pathname === '/project') return sendAsset(res, method, 'project.html');
+       if (pathname === '/run') return sendAsset(res, method, 'run.html');
+-      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
++      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, { ...detail, openRun: !remote }) : sendText(res, method, 404, 'not found'); }
+       // `openRun`: the "Watch" links start a run's own page on this computer, which the remote board never does (it links to the run inspector instead). `server`: the version this
+       // process runs, the one now installed, and whether they differ (it was started before the last swarm update).
+       if (pathname === '/api/board') return sendJson(res, method, { ...(await board.snapshot(q)), openRun: !remote, server: await versionInfo() });

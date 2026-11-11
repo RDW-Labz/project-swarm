@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "T-0452",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0452: Lane monitor timer inside autopilot probing every discovered lane about every 2 minutes\nR-081 Every lane is health-monitored automatically from the config and the adapter registry, with no hardcoded lane list.\n  - A monitor inside autopilot probes every lane found in the config (every lanes key and every local endpoint) and in the adapter registry on a timer of about 2 minutes, and records healthy, degraded, down or paused with a reason and a last-checked time.\n  - A test config that adds a fake new lane shows it monitored, on probation, then routed, with zero manual setup; removing a lane from the config removes it from monitoring and routing and leaves nothing pointing at it.\n  - Probes are free checks only (tunnel or port reachable, a models-list GET, a CLI version or status call, rate-limit records, spend-cap records); a test asserts no model call and no POST is made by any probe.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Each discovered lane gets a status with reason and lastChecked after one timer tick\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- An updater must run the installer of the version it installs, in a fresh process, not the code already loaded. [build, installer, release, tool, updater]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/autopilot.mjs"
+      ],
+      "outputs": [
+        "tools/self-manage/lane-monitor.mjs"
+      ],
+      "acceptance": [
+        "Each discovered lane gets a status with reason and lastChecked after one timer tick"
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "--test-concurrency=4",
+        "--test-timeout=600000",
+        "tests/*.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}
