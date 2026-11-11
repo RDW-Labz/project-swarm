@@ -166,6 +166,24 @@ function snapshotTotals(cards) {
   };
 }
 
+function applyMachineFields(card, p, prefix) {
+  if (typeof p.machine === 'string' && p.machine.length) {
+    card.machine = textField('Machine', p.machine, `${prefix}.machine`, 'Host name where this project root lives.');
+  }
+  if (typeof p.version === 'string' && p.version.length) {
+    card.machineVersion = textField('Version', p.version, `${prefix}.version`, 'Swarm server version on the host serving this project.');
+  }
+  if (p.remote === true) card.remote = true;
+  if (p.versionDrift === true) card.versionDrift = true;
+}
+
+function projectEventMachine(p) {
+  const tags = {};
+  if (typeof p?.machine === 'string' && p.machine.length) tags.machine = p.machine;
+  if (typeof p?.version === 'string' && p.version.length) tags.machineVersion = p.version;
+  return tags;
+}
+
 function buildProjectCard(p, index) {
   const prefix = `projects[${index}]`;
   const card = {
@@ -177,9 +195,7 @@ function buildProjectCard(p, index) {
     card.directBuild = true;
     const live = field('Live agents', p.agents?.total, 'count', `${prefix}.agents.total`, 'Running agent jobs in live runs for this project.');
     if (live) card.liveAgents = live;
-    if (typeof p.machine === 'string' && p.machine.length) {
-      card.machine = textField('Machine', p.machine, `${prefix}.machine`, 'Host name where this project root lives.');
-    }
+    applyMachineFields(card, p, prefix);
     const out = p.agents?.jobs?.running;
     if (typeof out === 'number' && Number.isFinite(out)) {
       card.out = textField('Out', String(out), `${prefix}.agents.jobs.running`, 'Agent jobs currently running for this project.');
@@ -206,9 +222,7 @@ function buildProjectCard(p, index) {
   if (typeof building === 'number' && Number.isFinite(building)) {
     card.ticketsBuilding = textField('Building', String(building), `${prefix}.card.now.buildingTickets`, 'Tickets currently marked running across the project family.');
   }
-  if (typeof p.machine === 'string' && p.machine.length) {
-    card.machine = textField('Machine', p.machine, `${prefix}.machine`, 'Host name where this project root lives.');
-  }
+  applyMachineFields(card, p, prefix);
   const asks = p.card?.next?.ready;
   if (typeof asks === 'number' && Number.isFinite(asks)) {
     card.asks = textField('Asks', String(asks), `${prefix}.card.next.ready`, 'Tickets ready to run next on this project.');
@@ -273,13 +287,16 @@ function hiveEvents(projects, prs, nowMs) {
   const events = [];
   for (const p of projects) {
     const name = p?.name ?? p?.id ?? '';
+    const machineTags = projectEventMachine(p);
     for (const t of p?.ledger?.tickets ?? []) {
       if (!t?.id) continue;
-      if (t.status === 'review') events.push({ kind: 'review', id: t.id, title: t.title ?? t.id, project: name });
-      else if (t.status === 'blocked') events.push({ kind: 'blocked', id: t.id, title: t.title ?? t.id, project: name });
+      if (t.status === 'review') events.push({ kind: 'review', id: t.id, title: t.title ?? t.id, project: name, ...machineTags });
+      else if (t.status === 'blocked') events.push({ kind: 'blocked', id: t.id, title: t.title ?? t.id, project: name, ...machineTags });
       else if (t.status === 'done') {
         const ms = doneAtMs(t);
-        if (Number.isFinite(ms) && nowMs - ms < 24 * HOUR_MS) events.push({ kind: 'done', id: t.id, title: t.title ?? t.id, project: name, at: new Date(ms).toISOString() });
+        if (Number.isFinite(ms) && nowMs - ms < 24 * HOUR_MS) {
+          events.push({ kind: 'done', id: t.id, title: t.title ?? t.id, project: name, at: new Date(ms).toISOString(), ...machineTags });
+        }
       }
     }
   }
@@ -343,7 +360,10 @@ export function buildCommandCenterSnapshot(board, options = {}) {
   }
   const totals = snapshotTotals(cards);
   const nowMs = Number.isFinite(Date.parse(at)) ? Date.parse(at) : (options.now ?? Date.now());
-  return { at, stats, projects: cards, totals, hive: buildHiveExtras(board, projects, nowMs) };
+  const machines = Array.isArray(board?.machines) ? board.machines : null;
+  const drift = board?.drift && typeof board.drift === 'object' && !Array.isArray(board.drift) ? board.drift : null;
+  const machineRegistry = board?.machineRegistry && typeof board.machineRegistry === 'object' && !Array.isArray(board.machineRegistry) ? board.machineRegistry : null;
+  return { at, stats, projects: cards, totals, machines, machineRegistry, drift, hive: buildHiveExtras(board, projects, nowMs) };
 }
 
 /** Update only changed cards; aggregates are cheap reductions over the cached rows. */
@@ -458,6 +478,10 @@ export function buildProjectCockpit(board, projectId) {
       project: project.name ?? project.id,
       lane: project.stage ?? project.tickets?.stage ?? null,
       owner: project.machine ?? null,
+      machine: typeof project.machine === 'string' && project.machine.length ? project.machine : null,
+      ...(typeof project.version === 'string' && project.version.length ? { machineVersion: project.version } : {}),
+      ...(project.remote === true ? { remote: true } : {}),
+      ...(project.versionDrift === true ? { versionDrift: true } : {}),
     },
     progress: project.progress ?? null,
     stageRings: project.progress ?? null,

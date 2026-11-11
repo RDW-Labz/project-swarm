@@ -1,0 +1,24 @@
+{
+  "brainName": "brain",
+  "brainHostHint": "brain-host",
+  "failoverOrder": [
+    "brain",
+    "laptop-a",
+    "laptop-b"
+  ],
+  "laptops": [
+    "laptop-a",
+    "laptop-b"
+  ],
+  "fileVaultWarn": [
+    "laptop-a",
+    "worker-a"
+  ],
+  "backupWorker": "worker-a",
+  "sessionDefaults": {
+    "example-repo": "worker-a"
+  },
+  "sessionModels": {
+    "example-repo": "provider/model-name"
+  }
+}

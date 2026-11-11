@@ -43,6 +43,7 @@ import { remoteFile } from './remote.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
 import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents, readRunStates, readProjectRunStates, projectFamilyRoots, isTestOrTempProject } from './board-data.mjs';
 import { createPeerCache, listPeers, mergeMachines, publicPeers } from './board-peers.mjs';
+import { readMachineView } from './machine-view.mjs';
 import { versionInfo } from './server-version.mjs';
 import { boardPools } from './pools-board.mjs';
 import { resolveBudget, spendDir } from './spend.mjs';
@@ -798,6 +799,13 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         snapshot.machine.runningVersion = runningVersion;
         snapshot.machines = merged.machines;
         snapshot.drift = merged.drift;
+        const runningByMachine = {};
+        for (const project of snapshot.projects ?? []) {
+          if (!project?.machine) continue;
+          const live = Number(project.agents?.total ?? project.agents?.jobs?.running ?? 0);
+          if (live > 0) runningByMachine[project.machine] = (runningByMachine[project.machine] ?? 0) + live;
+        }
+        snapshot.machineRegistry = await readMachineView({ env, runningByMachine, now: () => snapshotNow }).catch(() => null);
         snapshot.peers = publicPeers(peers);
         try {
           const hosts = Array.isArray(config.hosts) ? config.hosts.filter(host => host && typeof host === 'object' && host.enabled !== false) : [];

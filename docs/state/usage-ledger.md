@@ -199,6 +199,15 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-27 | - | T-0074: complete | claude | composer-2.5 | timeout: exit null: no stderr output; timeout | - | subscription |
 | 2026-10-27 | - | T-0074: complete | claude | sonnet | pass | 79,950 | $0.13 |
 | 2026-10-27 | - | T-0082: Ticket T-0082: Per-checkout lock so only one base check runs per worktree at a time | cursor | composer-2.5 | cancelled: exit 143: no stderr output; cancelled | - | subscription |
+| 2026-11-09 | - | reviewtrain938: complete | claude | opus | pass | 1,883,088 | $3.49 |
+| 2026-11-09 | - | reviewtrain938: complete | claude | opus | pass | 2,076,351 | $3.60 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 1,947,615 | $3.49 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 1,372,216 | $3.56 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 2,010,080 | $3.81 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 2,156,554 | $3.85 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 3,247,466 | $4.60 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 1,473,438 | $3.56 |
+| 2026-11-10 | - | reviewtrain938: complete | claude | opus | pass | 2,166,863 | $3.87 |
 
 ## Daily summary
 
@@ -222,4 +231,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-26 | cursor | 3 | 2 | 1 | 0 | subscription |
 | 2026-10-27 | claude | 3 | 1 | 2 | 79,950 | $0.13 |
 | 2026-10-27 | cursor | 5 | 1 | 4 | 0 | $0.01 |
-| **total** | all | 195 | 170 | 25 | 15,296,450 | $27.49 (incl. estimates) |
+| 2026-11-09 | claude | 2 | 2 | 0 | 3,959,439 | $7.09 |
+| 2026-11-10 | claude | 7 | 7 | 0 | 14,374,232 | $26.74 |
+| **total** | all | 204 | 179 | 25 | 33,630,121 | $61.32 (incl. estimates) |
