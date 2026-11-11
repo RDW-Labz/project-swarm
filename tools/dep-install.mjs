@@ -13,6 +13,21 @@ export const validDependencySpec = spec => typeof spec === 'string' && spec.leng
 const CLEAN_ENV = () => ({ PATH: process.env.PATH ?? '', HOME: os.tmpdir(), npm_config_ignore_scripts: 'true' });
 const FLAGS = ['--ignore-scripts', '--no-audit', '--no-fund', '--registry=https://registry.npmjs.org/'];
 
+// Download batching (perf, fetch mechanics only — see docs/download-batching.md): npm tarballs and registry
+// metadata land in ONE shared, persistent cache per machine instead of a fresh cache inside each ticket's
+// scratch folder (which was deleted with the scratch, so every ticket re-downloaded every byte — the same
+// fresh-per-run-cache bug as field lesson #278, on the npm side). The cache never changes what npm resolves:
+// same registry, same flags, same lockfile output; it only changes whether the bytes are already on disk.
+// Resolution and the post-gate install deliberately share the one cache, so the install reuses the tarballs
+// the resolve already fetched. Override with SWARM_NPM_CACHE_DIR (an absolute path); SWARM_NPM_CACHE_DIR=off
+// restores the legacy per-run scratch cache exactly (the revert switch).
+export function resolveSharedNpmCacheDir({ env = process.env, home = os.homedir() } = {}) {
+  const override = env.SWARM_NPM_CACHE_DIR;
+  if (override === 'off') return null;
+  if (override) return override;
+  return path.join(home, '.npm');
+}
+
 // exec(argv, {cwd, env, timeoutMs}) -> {exitCode, stdout, stderr}. Returns changes: [{file, bytes, previous, mode, fromDependencies: true}].
 export async function dependencyWrites({ root, specs, exec }) {
   const list = [...new Set(specs)];
@@ -30,7 +45,7 @@ export async function dependencyWrites({ root, specs, exec }) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-deps-'));
   try {
     for (const [file, bytes] of Object.entries(before)) if (bytes) await fs.writeFile(path.join(tmp, file), bytes);
-    const res = await exec(['npm', 'install', '--package-lock-only', ...FLAGS, ...list], { cwd: tmp, env: { ...CLEAN_ENV(), npm_config_cache: path.join(tmp, '.npm-cache') }, timeoutMs: 300000 });
+    const res = await exec(['npm', 'install', '--package-lock-only', ...FLAGS, ...list], { cwd: tmp, env: { ...CLEAN_ENV(), npm_config_cache: resolveSharedNpmCacheDir() ?? path.join(tmp, '.npm-cache') }, timeoutMs: 300000 });
     if ((res.exitCode ?? res.code) !== 0) throw Object.assign(new Error(`npm could not resolve ${list.join(', ')}: ${String(res.stderr || res.stdout).trim().slice(-300)}`), { code: 'dependency-resolve' });
     // Only the named packages may be added to package.json (the lockfile follows from them): nothing else in the manifest may change.
     const pkgAfter = JSON.parse(await fs.readFile(path.join(tmp, 'package.json'), 'utf8'));
@@ -53,8 +68,10 @@ export async function dependencyWrites({ root, specs, exec }) {
 }
 
 // After the gate passed and the files are written: add the new packages to node_modules from the approved lockfile (npm install only adds what is missing, so
-// existing packages and their built output stay; scripts never run).
+// existing packages and their built output stay; scripts never run). The install reads the same shared cache the
+// resolve warmed (resolveSharedNpmCacheDir), so its tarballs are local hits instead of a second download.
 export async function installDependencies({ root, exec }) {
-  const res = await exec(['npm', 'install', ...FLAGS], { cwd: root, env: { ...CLEAN_ENV(), HOME: process.env.HOME ?? os.tmpdir() }, timeoutMs: 600000 });
+  const sharedCache = resolveSharedNpmCacheDir();
+  const res = await exec(['npm', 'install', ...FLAGS], { cwd: root, env: { ...CLEAN_ENV(), HOME: process.env.HOME ?? os.tmpdir(), ...(sharedCache ? { npm_config_cache: sharedCache } : {}) }, timeoutMs: 600000 });
   return { ok: (res.exitCode ?? res.code) === 0, tail: String(res.stderr || res.stdout).trim().slice(-300) };
 }
