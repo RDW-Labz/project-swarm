@@ -1,6 +1,9 @@
 name: "Local validation \u2014 z13 local (swarm)"
 'on':
   workflow_dispatch: {}
+  push:
+    branches:
+    - z13-local-ci-test
 permissions:
   contents: read
 jobs:
