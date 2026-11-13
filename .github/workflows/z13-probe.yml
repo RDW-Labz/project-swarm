@@ -1,0 +1,12 @@
+name: z13 probe
+on:
+  push:
+    branches: [z13-local-ci-test]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: [self-hosted, z13]
+    steps:
+      - run: echo "probe on $(hostname) at $(date -Is)"
