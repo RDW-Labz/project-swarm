@@ -1,11 +1,15 @@
 name: Local validation
 on:
-  push:
-    branches:
-      - main
   pull_request:
 permissions:
   contents: read
+
+# Spending control (2026-11-13): one run per branch; a new push cancels the
+# in-flight run instead of letting both bill to completion.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     timeout-minutes: 30
