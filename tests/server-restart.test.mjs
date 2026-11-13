@@ -107,8 +107,15 @@ setTimeout(shutdown, 120_000).unref();
 setInterval(async () => {
   try { if (await fs.stat(stopFile)) shutdown(); } catch { /* missing */ }
 }, 500).unref();
+const parentPid = process.env.TEST_PARENT_PID ? Number(process.env.TEST_PARENT_PID) : null;
 if (parentPollMs != null && parentPollMs > 0) {
-  setInterval(() => { if (process.ppid === 1) shutdown(); }, parentPollMs).unref();
+  // Portability: on a systemd --user host an orphaned child is reparented to
+  // the user manager (a subreaper), not to PID 1, so "ppid === 1" never fires
+  // there. Compare against the spawning pid instead; the meaning is the same
+  // (my parent is gone), and it holds on both reparenting models.
+  setInterval(() => {
+    if (parentPid ? process.ppid !== parentPid : process.ppid === 1) shutdown();
+  }, parentPollMs).unref();
 }
 `;
 
@@ -362,6 +369,7 @@ const child = spawn(process.execPath, [${JSON.stringify(script)}], {
     TEST_PORT: '${port}',
     TEST_RECORD_FILE: ${JSON.stringify(recordFile)},
     TEST_PARENT_POLL_MS: '50',
+    TEST_PARENT_PID: String(process.pid),
   },
 });
 child.unref();
